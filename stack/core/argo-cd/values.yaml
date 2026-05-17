@@ -1,0 +1,48 @@
+# argo-cd for kx — installed but idle.
+# No App-of-Apps Application is created by kx. Use the UI / CLI to drive it per-project when you want GitOps.
+#
+# Access:
+#   task port-forward:argocd       # https://localhost:30080
+#   task argocd:initial-password   # admin password from the initial secret
+
+global:
+  domain: argocd.localhost
+
+configs:
+  params:
+    server.insecure: true   # kx is local-only; ALB/ingress TLS isn't doing anything for us
+  cm:
+    timeout.reconciliation: 60s
+
+server:
+  replicas: 1
+  service:
+    type: NodePort
+    nodePortHttp: 30080
+  ingress:
+    enabled: false   # we use NodePort; flip on and add the cluster-issuer when you want a hostname
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+repoServer:
+  replicas: 1
+
+applicationSet:
+  replicas: 1
+
+dex:
+  enabled: false   # no SSO locally
+
+notifications:
+  enabled: false
+
+redis-ha:
+  enabled: false
+
+redis:
+  enabled: true

@@ -1,0 +1,30 @@
+# Creates the three S3 buckets Druid expects (deep storage, index logs, MSQ intermediate)
+# inside the kx MinIO. Idempotent — `mc mb --ignore-existing`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: druid-minio-buckets
+  namespace: druid
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -euo pipefail
+              mc alias set kx http://minio.minio.svc.cluster.local:9000 minioadmin minioadmin
+              mc mb --ignore-existing kx/druid-deep-storage
+              mc mb --ignore-existing kx/druid-index-logs
+              mc mb --ignore-existing kx/druid-msq
+              echo "buckets ready"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi

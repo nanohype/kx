@@ -1,0 +1,66 @@
+# kube-prometheus-stack for kx
+#
+# Lean default — single-replica everything, no PDBs, no alertmanager-by-default-ingress,
+# and skip CRDs because core/prometheus-operator-crds installs them out-of-band so workloads
+# that reference ServiceMonitor/PrometheusRule still apply when this slice is disabled.
+
+crds:
+  enabled: false   # core/prometheus-operator-crds owns these
+
+defaultRules:
+  create: true
+
+alertmanager:
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+grafana:
+  replicas: 1
+  defaultDashboardsTimezone: utc
+  service:
+    type: NodePort
+    nodePort: 30030
+  persistence:
+    enabled: false
+  adminPassword: admin
+
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    retention: 24h
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+# kind doesn't expose etcd/controller-manager/scheduler the same way kubeadm production does;
+# skip these scrapers to avoid noisy "down" alerts.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false   # cilium kube-proxy replacement

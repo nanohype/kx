@@ -1,0 +1,14 @@
+# argo-rollouts — progressive delivery (canary, blue/green, analysis)
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+dashboard:
+  enabled: true
+  replicas: 1
+  service:
+    type: ClusterIP

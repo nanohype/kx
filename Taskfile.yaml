@@ -1,0 +1,75 @@
+version: '3'
+
+# kx — top-level Taskfile
+#
+# Daily-driver entry points:
+#   task up                          create cluster + install core stack
+#   task down                        delete cluster
+#   task reset                       down + up
+#   task status                      nodes + pods + slice install status
+#   task stack:enable <slice>        install an opt-in slice (or use task stack:enable:<slice>)
+#   task stack:disable <slice>       uninstall an opt-in slice
+#   task port-forward:argocd         expose ArgoCD UI on localhost:30080
+#   task port-forward:grafana        expose Grafana UI on localhost:30030 (after observability is enabled)
+
+includes:
+  cluster:
+    taskfile: ./cluster/Taskfile.yaml
+    dir: ./cluster
+  stack:
+    taskfile: ./stack/Taskfile.yaml
+    dir: ./stack
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  up:
+    desc: Create cluster + install core stack
+    cmds:
+      - task: cluster:up
+      - task: stack:core
+
+  down:
+    desc: Delete the cluster
+    cmds:
+      - task: cluster:down
+
+  reset:
+    desc: Delete + recreate cluster, then reinstall core stack
+    cmds:
+      - task: cluster:reset
+      - task: stack:core
+
+  status:
+    desc: Cluster + stack status
+    cmds:
+      - task: cluster:status
+      - task: stack:status
+
+  port-forward:argocd:
+    desc: ArgoCD UI on https://localhost:30080
+    cmds:
+      - kubectl -n argocd port-forward svc/argocd-server 30080:443
+
+  port-forward:grafana:
+    desc: Grafana UI on http://localhost:30030 (requires observability slice)
+    cmds:
+      - kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 30030:80
+
+  port-forward:kagent-ui:
+    desc: kagent UI on http://localhost:8082 (requires ai-platform slice)
+    cmds:
+      - kubectl -n kagent port-forward svc/kagent-ui 8082:80
+
+  port-forward:agentgateway:
+    desc: agentgateway control plane on http://localhost:9978 (requires ai-platform slice)
+    cmds:
+      - kubectl -n agentgateway port-forward svc/agentgateway 9978:9978
+
+  argocd:initial-password:
+    desc: Print the ArgoCD admin password
+    cmds:
+      - kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+      - echo

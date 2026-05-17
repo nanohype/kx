@@ -1,0 +1,13 @@
+# grafana-operator for kx
+# Lets you author Grafana Dashboards / Datasources as CRs and have the operator reconcile them
+# into the grafana from kube-prometheus-stack.
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+
+# Watch all namespaces so per-project Dashboard CRs work.
+namespaceScope: false

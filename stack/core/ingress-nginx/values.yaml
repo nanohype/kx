@@ -1,0 +1,34 @@
+# ingress-nginx for kx
+#
+# Production-side: aws-load-balancer-controller (NLB/ALB). Not portable to a laptop.
+# Here: ingress-nginx scheduled onto the control-plane node which has ingress-ready=true
+# and hostPort 80/443 mapped to the host. Services exposed at http://localhost / https://localhost.
+
+controller:
+  kind: DaemonSet
+  hostPort:
+    enabled: true
+  service:
+    type: NodePort
+  nodeSelector:
+    ingress-ready: "true"
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  publishService:
+    enabled: false
+  watchIngressWithoutClass: true
+  extraArgs:
+    enable-ssl-passthrough: "true"
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false  # flip to true after observability slice is enabled
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi

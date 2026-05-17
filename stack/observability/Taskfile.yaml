@@ -1,0 +1,23 @@
+version: '3'
+
+# observability slice — kube-prometheus-stack, loki, tempo, grafana-operator, opencost
+
+tasks:
+  enable:
+    desc: Install observability slice
+    cmds:
+      - bash {{.TASKFILE_DIR}}/kube-prometheus-stack/install.sh
+      - bash {{.TASKFILE_DIR}}/loki/install.sh
+      - bash {{.TASKFILE_DIR}}/tempo/install.sh
+      - bash {{.TASKFILE_DIR}}/grafana-operator/install.sh
+      - bash {{.TASKFILE_DIR}}/opencost/install.sh
+
+  disable:
+    desc: Uninstall observability slice
+    cmds:
+      - helm uninstall -n monitoring opencost            || true
+      - helm uninstall -n monitoring grafana-operator    || true
+      - helm uninstall -n monitoring tempo               || true
+      - helm uninstall -n monitoring loki                || true
+      - helm uninstall -n monitoring kube-prometheus-stack || true
+      - kubectl delete ns monitoring --ignore-not-found

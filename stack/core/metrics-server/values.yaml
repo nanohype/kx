@@ -1,0 +1,15 @@
+# metrics-server for kx (kind)
+#
+# kind uses self-signed kubelet certs; without --kubelet-insecure-tls metrics-server can't scrape.
+# This is the standard kind tweak; production EKS does not need it.
+
+replicas: 1
+
+args:
+  - --kubelet-insecure-tls
+  - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi

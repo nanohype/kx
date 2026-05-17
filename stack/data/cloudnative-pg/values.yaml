@@ -1,0 +1,22 @@
+# CloudNativePG operator for kx
+# Postgres operator. Per-project clusters are created via Cluster CR after install.
+# Example:
+#   apiVersion: postgresql.cnpg.io/v1
+#   kind: Cluster
+#   metadata: { name: app-db, namespace: my-project }
+#   spec:
+#     instances: 1
+#     storage: { size: 1Gi }
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+# Run nothing fancy — single operator pod, default leader election.
+monitoring:
+  podMonitorEnabled: true
+  grafanaDashboard:
+    create: false   # add later if you want one

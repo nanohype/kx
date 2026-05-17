@@ -1,0 +1,73 @@
+# loki for kx — single-binary mode with filesystem storage
+# Production eks-gitops uses S3 (gp3-backed); locally we keep it in-pod for simplicity.
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  persistence:
+    enabled: false   # kx is ephemeral by design
+  # With persistence disabled the chart provides no volume at /var/loki, but loki still tries
+  # to mkdir the storage + ruler dirs on its read-only rootfs and crashes. Provide an emptyDir.
+  extraVolumes:
+    - name: data
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: data
+      mountPath: /var/loki
+
+# Disable the chart's bundled gateway/loki-canary/test components.
+gateway:
+  enabled: false
+test:
+  enabled: false
+lokiCanary:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Run nothing in the scalable/distributed modes.
+backend: { replicas: 0 }
+read: { replicas: 0 }
+write: { replicas: 0 }
+ingester: { replicas: 0 }
+querier: { replicas: 0 }
+queryFrontend: { replicas: 0 }
+queryScheduler: { replicas: 0 }
+distributor: { replicas: 0 }
+compactor: { replicas: 0 }
+indexGateway: { replicas: 0 }
+bloomCompactor: { replicas: 0 }
+bloomGateway: { replicas: 0 }
+
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false

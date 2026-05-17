@@ -1,0 +1,27 @@
+# minio for kx
+# S3-compatible object storage. Used as the velero backend, and available to any project that
+# needs S3 semantics locally (replaces what S3 buckets do in eks-gitops).
+#
+# Default credentials (local-only): minioadmin / minioadmin
+# Console: http://minio.kx.local (or kubectl port-forward svc/minio-console 9001:9001)
+
+mode: standalone
+
+replicas: 1
+
+persistence:
+  enabled: false   # kx is ephemeral; flip on with a PVC if you want survival across reset
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+
+rootUser: minioadmin
+rootPassword: minioadmin
+
+# Pre-create the bucket velero expects.
+buckets:
+  - name: velero
+    policy: none
+    purge: false

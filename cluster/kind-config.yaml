@@ -1,0 +1,66 @@
+# kx — kind cluster config
+#
+# 1 control plane + 2 workers — enough to feel scheduling, anti-affinity, PDBs.
+# Default CNI/kube-proxy disabled because we install cilium with kubeProxyReplacement.
+# Nodes will be NotReady until cilium is installed (cluster/registry.sh handles that as part of `kx up`).
+# Host ports 80/443 land on the control-plane node where ingress-nginx schedules.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: kx
+
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: none
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
+
+# Tell containerd where to look for per-registry hosts.toml files. The actual mirror
+# config for the local registry is written by cluster/registry.sh into /etc/containerd/certs.d/
+# on each node, per the modern kind+registry pattern (containerd 1.5+; required for 2.x where
+# the older registry.mirrors schema was removed).
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+
+nodes:
+  - role: control-plane
+    # ingress-ready is consumed by ingress-nginx's nodeSelector so the controller
+    # schedules on the control-plane node where hostPort 80/443 lands.
+    labels:
+      workload: system
+      ingress-ready: "true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+      - containerPort: 30030
+        hostPort: 30030
+        protocol: TCP
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+
+  - role: worker
+    # `node-role.kubernetes.io/worker` would be the conventional label but kubelet
+    # refuses to self-apply labels in the `kubernetes.io/` namespace beyond a small
+    # allowlist — that prefix is for server-side application post-registration.
+    # If you want the role label, run after `task up`:
+    #   kubectl label node kx-worker  node-role.kubernetes.io/worker=true
+    #   kubectl label node kx-worker2 node-role.kubernetes.io/worker=true
+    labels:
+      workload: general
+
+  - role: worker
+    # `node-role.kubernetes.io/worker` would be the conventional label but kubelet
+    # refuses to self-apply labels in the `kubernetes.io/` namespace beyond a small
+    # allowlist — that prefix is for server-side application post-registration.
+    # If you want the role label, run after `task up`:
+    #   kubectl label node kx-worker  node-role.kubernetes.io/worker=true
+    #   kubectl label node kx-worker2 node-role.kubernetes.io/worker=true
+    labels:
+      workload: general

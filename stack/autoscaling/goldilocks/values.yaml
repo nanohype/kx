@@ -1,0 +1,19 @@
+# goldilocks — dashboard for VPA recommendations. Requires VPA recommender running.
+# Opt namespaces in by labeling: kubectl label ns <ns> goldilocks.fairwinds.com/enabled=true
+
+controller:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+dashboard:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi

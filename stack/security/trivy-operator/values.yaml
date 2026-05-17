@@ -1,0 +1,39 @@
+# trivy-operator for kx
+# Scans workloads for vulnerabilities, configuration issues, and exposed secrets.
+
+operator:
+  replicas: 1
+  # Throttle scan parallelism — kx is a laptop, don't fan out
+  scanJobsConcurrentLimit: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+trivy:
+  # Trivy scan pods need real memory; defaults OOM-kill while scanning the trivy-operator
+  # image itself. 768Mi request / 1Gi limit is the smallest combo that consistently passes.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 768Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  ignoreUnfixed: true
+  severity: HIGH,CRITICAL
+
+# node-collector runs as a Job on every node to inspect kubelet/etcd config — it targets
+# the control-plane first, which has the standard NoSchedule taint that the default chart
+# pod doesn't tolerate. Tolerate the taint so it can run.
+nodeCollector:
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+
+serviceMonitor:
+  enabled: false   # flip after observability slice

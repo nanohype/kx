@@ -1,0 +1,22 @@
+# argo-workflows — workflow / CI-style execution as DAGs of pods.
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+  workflowNamespaces:
+    - argo
+
+server:
+  enabled: true
+  replicas: 1
+  authModes:
+    - server   # no SSO locally; UI open
+  service:
+    type: ClusterIP
+
+# Use the cluster-default storageClass for artifact PVCs if needed.
+artifactRepository:
+  archiveLogs: false

@@ -1,0 +1,25 @@
+# opencost for kx
+# Cost allocation against your local cluster — useful for previewing what eks-gitops opencost shows.
+# Prometheus is reached via the kube-prometheus-stack in-cluster service.
+
+opencost:
+  prometheus:
+    external:
+      enabled: false
+    internal:
+      enabled: true
+      serviceName: kube-prometheus-stack-prometheus
+      namespaceName: monitoring
+      port: 9090
+  exporter:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+  ui:
+    enabled: true
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+  cloudIntegrationSecret: ""   # no cloud integration locally

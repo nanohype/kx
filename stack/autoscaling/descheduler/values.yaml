@@ -1,0 +1,39 @@
+# descheduler for kx — rebalances pods (e.g. evict pods violating new affinity rules)
+# Runs as a Deployment with the default strategies enabled.
+
+kind: Deployment
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+
+deschedulerPolicy:
+  profiles:
+    - name: ProfileWithBalancingAndEvictionStrategies
+      pluginConfig:
+        - name: DefaultEvictor
+          args:
+            evictLocalStoragePods: true
+            evictSystemCriticalPods: false
+        - name: RemovePodsViolatingNodeAffinity
+          args:
+            nodeAffinityType:
+              - requiredDuringSchedulingIgnoredDuringExecution
+        - name: RemovePodsViolatingInterPodAntiAffinity
+        - name: RemoveDuplicates
+        - name: RemovePodsHavingTooManyRestarts
+          args:
+            podRestartThreshold: 100
+            includingInitContainers: true
+      plugins:
+        balance:
+          enabled:
+            - RemoveDuplicates
+        deschedule:
+          enabled:
+            - RemovePodsViolatingNodeAffinity
+            - RemovePodsViolatingInterPodAntiAffinity
+            - RemovePodsHavingTooManyRestarts

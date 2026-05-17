@@ -1,0 +1,40 @@
+# velero for kx
+# Same Velero CLI/CRDs eks-gitops uses; locally the backup target is minio rather than S3.
+# Run `velero backup create test --include-namespaces my-project` after install.
+
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.11.0
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: velero
+      config:
+        region: us-east-1
+        s3ForcePathStyle: "true"
+        s3Url: http://minio.minio.svc.cluster.local:9000
+  volumeSnapshotLocation:
+    - name: default
+      provider: aws
+      config:
+        region: us-east-1
+
+credentials:
+  useSecret: true
+  secretContents:
+    cloud: |
+      [default]
+      aws_access_key_id = minioadmin
+      aws_secret_access_key = minioadmin
+
+deployNodeAgent: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi

@@ -1,0 +1,15 @@
+# trust-manager for kx
+# Companion to cert-manager — distributes CA bundles into namespaces via Bundle CRs.
+# Lives in the cert-manager namespace so the chart's defaults around cert-manager service discovery just work.
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+
+# trust-manager defaults to trust-manager ns; explicitly point at cert-manager.
+app:
+  trust:
+    namespace: cert-manager

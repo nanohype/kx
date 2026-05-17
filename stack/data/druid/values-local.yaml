@@ -1,0 +1,250 @@
+# kx overrides for the eks-gitops Druid chart.
+# Merged ON TOP OF /Users/bs/codes/eks-gitops/catalog/druid/values.yaml at install time.
+# Only the local-friendly deltas live here — pull request to the upstream chart not required.
+
+# Naming — release "ds", hostedId "kx" → resources like `kx-ds-druid-{component}`.
+# (helpers concat `hostedId-Release.Name` for the name root.)
+hostedId: "kx"
+region: "us-east-1"
+environment: "local"
+account: "000000000000"
+alias: "local"
+
+# Pin the chart's appVersion to Druid 36 (matches the production image).
+image:
+  uri: apache/druid:36.0.0
+  pullPolicy: IfNotPresent
+
+# Empty roleArns — chart's serviceaccount.yaml has an `if .roleArn` guard so SAs render
+# without the IRSA annotation. Local SAs are good enough.
+serviceAccounts:
+  druid-historical: { roleArn: "" }
+  druid-overlord:   { roleArn: "" }
+  druid-broker:     { roleArn: "" }
+  druid-msk-client: { roleArn: "" }
+
+# S3 bucket names point at the buckets the install.sh script provisions inside kx MinIO.
+s3:
+  indexLogsBucket:   "druid-index-logs"
+  deepStorageBucket: "druid-deep-storage"
+  msqBucket:         "druid-msq"
+
+# Inject AWS SDK env vars so the druid-s3-extensions picks up MinIO creds via the default
+# credential chain. AWS_REGION is already set by the chart's helper from .Values.region.
+extraEnv:
+  - name: AWS_ACCESS_KEY_ID
+    value: minioadmin
+  - name: AWS_SECRET_ACCESS_KEY
+    value: minioadmin
+
+# Full runtime.properties — preserves the production config, adds the MinIO S3 endpoint block
+# at the bottom (signed URLs, path-style addressing, http, signing region).
+runtime: |-
+  # ---- production-faithful config (mirrors eks-gitops/catalog/druid/values.yaml) ----
+  druid.startup.logging.logProperties=true
+  druid.server.hiddenProperties=["druid.s3.accessKey","druid.s3.secretKey","druid.metadata.storage.connector.password","password","key","token","pwd"]
+
+  druid.extensions.loadList=["simple-client-sslcontext","druid-basic-security","druid-s3-extensions","postgresql-metadata-storage","druid-kafka-indexing-service","prometheus-emitter","druid-kubernetes-extensions","druid-kubernetes-overlord-extensions"]
+
+  druid.auth.authenticatorChain=["authn-druid-v1"]
+  druid.auth.authenticator.authn-druid-v1.type=basic
+  druid.auth.authorizer.authz-druid-v1.type=basic
+  druid.auth.authenticator.authn-druid-v1.skipOnFailure=false
+  druid.auth.authenticator.authn-druid-v1.credentialsValidator.type=metadata
+  druid.auth.authenticator.authn-druid-v1.authorizerName=authz-druid-v1
+  druid.escalator.type=basic
+  druid.escalator.authorizerName=authz-druid-v1
+  druid.auth.authorizers=["authz-druid-v1"]
+  druid.auth.authenticator.authn-druid-v1.initialAdminPassword=${env:DRUID_ADMIN_PASSWORD}
+  druid.escalator.internalClientUsername=${env:DRUID_SYSTEM_USERNAME}
+  druid.escalator.internalClientPassword=${env:DRUID_SYSTEM_PASSWORD}
+  druid.auth.authenticator.authn-druid-v1.initialInternalClientPassword=${env:DRUID_SYSTEM_PASSWORD}
+
+  druid.enableTlsPort=true
+  druid.enablePlaintextPort=false
+  druid.server.https.keyStorePath=/opt/druid/conf/druid/cluster/tls/server-keystore.p12
+  druid.server.https.keyStoreType=pkcs12
+  druid.server.https.keyManagerPassword=changeit
+  druid.server.https.keyStorePassword=changeit
+  druid.server.https.reloadSslContext=true
+  druid.server.https.reloadSslContextSeconds=180
+  druid.server.https.requestClientCertificate=true
+  druid.server.https.trustStoreType=pkcs12
+  druid.server.https.trustStorePath=/opt/druid/conf/druid/cluster/tls/server-truststore.p12
+  druid.server.https.trustStorePassword=changeit
+  druid.server.https.validateHostnames=false
+  druid.server.https.sniHostCheck=false
+  druid.server.http.sniHostCheck=false
+  druid.server.http.sniRequired=false
+  druid.client.https.keyStorePath=/opt/druid/conf/druid/cluster/tls/client-keystore.p12
+  druid.client.https.keyStoreType=pkcs12
+  druid.client.https.keyStorePassword=changeit
+  druid.client.https.keyManagerPassword=changeit
+  druid.client.https.validateHostnames=false
+  druid.client.https.protocol=TLSv1.2
+  druid.client.https.trustStoreType=pkcs12
+  druid.client.https.trustStorePath=/opt/druid/conf/druid/cluster/tls/client-truststore.p12
+  druid.client.https.trustStorePassword=changeit
+
+  druid.discovery.type=k8s
+  druid.zk.service.enabled=false
+  druid.discovery.k8s.clusterIdentifier=${env:DRUID_CLUSTER_ID}
+  druid.serverview.type=http
+  druid.indexer.runner.type=httpRemote
+
+  druid.indexer.logs.type=s3
+  druid.indexer.logs.disableAcl=true
+  druid.indexer.logs.s3Prefix=druid/indexing-logs
+  druid.indexer.logs.s3Bucket=${env:DRUID_S3_INDEXLOGS_BUCKET}
+
+  druid.metadata.storage.type=postgresql
+  druid.metadata.storage.connector.user=${env:DRUID_METADATA_STORAGE_USERNAME}
+  druid.metadata.storage.connector.password=${env:DRUID_METADATA_STORAGE_PASSWORD}
+  druid.metadata.storage.connector.connectURI=${env:DRUID_METADATA_STORAGE_CONNECT_URI}
+  druid.metadata.storage.connector.createTables=true
+  druid.metadata.storage.tables.base=druid
+  druid.metadata.storage.tables.audit=druid_audit
+  druid.metadata.storage.tables.dataSource=druid_data_source
+  druid.metadata.storage.tables.pendingSegments=druid_pending_segments
+  druid.metadata.storage.tables.segments=druid_segments
+  druid.metadata.storage.tables.rules=druid_rules
+  druid.metadata.storage.tables.config=druid_config
+  druid.metadata.storage.tables.tasks=druid_tasks
+  druid.metadata.storage.tables.taskLog=druid_task_logs
+  druid.metadata.storage.tables.taskLock=druid_task_locks
+  druid.metadata.storage.tables.supervisors=druid_supervisors
+
+  druid.storage.type=s3
+  druid.storage.disableAcl=true
+  druid.storage.baseKey=druid/segments
+  druid.storage.bucket=${env:DRUID_S3_DEEPSTORAGE_BUCKET}
+
+  druid.msq.intermediate.storage.enable=true
+  druid.msq.intermediate.storage.tempDir=/var/druid/msq
+  druid.msq.intermediate.storage.cleaner.enabled=true
+  druid.msq.intermediate.storage.type=s3
+  druid.msq.intermediate.storage.prefix=druid/msq
+  druid.msq.intermediate.storage.bucket=${env:DRUID_S3_MSQ_BUCKET}
+
+  druid.emitter=composing
+  druid.emitter.logging.logLevel=debug
+  druid.emitter.composing.emitters=["logging","prometheus"]
+  druid.emitter.prometheus.port=9000
+  druid.emitter.prometheus.strategy=exporter
+  druid.emitter.prometheus.addHostAsLabel=true
+  druid.emitter.prometheus.addServiceAsLabel=true
+  druid.monitoring.monitors=["org.apache.druid.java.util.metrics.JvmMonitor","org.apache.druid.server.metrics.ServiceStatusMonitor"]
+
+  # ---- kx-local additions: MinIO S3 endpoint ----
+  druid.s3.endpoint.url=http://minio.minio.svc.cluster.local:9000
+  druid.s3.endpoint.signingRegion=us-east-1
+  druid.s3.enablePathStyleAccess=true
+  druid.s3.protocol=http
+  druid.s3.disableChunkedEncoding=true
+
+# --- Component sizing — laptop-friendly. JVM heaps cut ~10x, resource requests cut similarly. ---
+
+router:
+  replicas: 1
+  resources:
+    # Bumped from 50m/500m — Druid sizes Jetty pools from "available processors". At low
+    # cpu limits the JVM sees 1 CPU and computes a 2-thread pool, which is below the minimum
+    # the management proxy servlet needs (3). 2 CPUs is the floor.
+    requests: { cpu: 200m,  memory: 384Mi }
+    limits:   { cpu: 2000m, memory: 512Mi }
+  jvm: |-
+    -Xms256m
+    -Xmx256m
+    -XX:MaxDirectMemorySize=64m
+    -XX:ActiveProcessorCount=2
+  # Override production router runtime to drop the heavy http thread config that the chart
+  # tunes for production load and force Jetty defaults to a small-but-functional baseline.
+  runtime: |-
+    druid.bindOnHost=false
+    druid.tlsPort=9088
+    druid.service=druid/router
+    druid.router.defaultBrokerServiceName=druid/broker
+    druid.router.managementProxy.enabled=true
+    druid.global.http.numMaxThreads=10
+    druid.monitoring.monitors=["org.apache.druid.java.util.metrics.JvmMonitor"]
+
+broker:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 768Mi }
+    limits:   { cpu: 1000m, memory: 1536Mi }
+  jvm: |-
+    -Xms640m
+    -Xmx640m
+    -XX:MaxDirectMemorySize=512m
+  # Replaces the production broker runtime. The production config sets buffer.sizeBytes=125MB
+  # and numMergeBuffers=8 which needs 125MB×(8+1) = 1.125GB of direct memory — Druid refuses
+  # to start with MaxDirectMemorySize=512m. Laptop-shrink to 10MB×3 = 30MB.
+  # Other production tunings (SQL planner config, cache settings, etc.) fall back to Druid
+  # defaults which are reasonable for a dev cluster.
+  runtime: |-
+    druid.bindOnHost=false
+    druid.tlsPort=8282
+    druid.service=druid/broker
+    druid.processing.buffer.sizeBytes=10000000
+    druid.processing.numMergeBuffers=2
+    druid.processing.numThreads=2
+    druid.processing.tmpDir=/var/druid/query/tmp
+    druid.sql.enable=true
+    druid.sql.http.enable=true
+    druid.broker.cache.useCache=false
+    druid.broker.cache.populateCache=false
+    druid.monitoring.monitors=["org.apache.druid.java.util.metrics.JvmMonitor"]
+
+coordinator:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits:   { cpu: 500m, memory: 1024Mi }
+  jvm: |-
+    -Xms384m
+    -Xmx384m
+
+overlord:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits:   { cpu: 500m, memory: 1024Mi }
+  jvm: |-
+    -Xms384m
+    -Xmx384m
+
+historical:
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 1Gi }
+    limits:   { cpu: 1500m, memory: 2Gi }
+  jvm: |-
+    -Xms640m
+    -Xmx640m
+    -XX:MaxDirectMemorySize=512m
+  # Replaces production historical runtime. Production sets buffer=125MB × (numThreads=12 +
+  # numMergeBuffers=3 + 1) = 2GB of direct memory. Laptop: 10MB × (2 + 2 + 1) = 50MB.
+  # Also drops segmentCache.maxSize from 120g (prod node disk) to 10g (kind worker).
+  runtime: |-
+    druid.bindOnHost=false
+    druid.tlsPort=8283
+    druid.service=druid/historical
+    druid.server.maxSize=10000000000
+    druid.server.tier=_default_tier
+    druid.server.priority=0
+    druid.segmentCache.locations=[{"path":"/var/druid/segment-cache","maxSize":"10g"}]
+    druid.segmentCache.deleteOnRemove=true
+    druid.processing.buffer.sizeBytes=10000000
+    druid.processing.numMergeBuffers=2
+    druid.processing.numThreads=2
+    druid.processing.tmpDir=/var/druid/query/tmp
+    druid.historical.cache.useCache=false
+    druid.historical.cache.populateCache=false
+    druid.monitoring.monitors=["org.apache.druid.java.util.metrics.JvmMonitor"]
+
+task:
+  base:
+    resources:
+      requests: { cpu: 100m, memory: 512Mi }
+      limits:   { cpu: 1000m, memory: 1Gi }

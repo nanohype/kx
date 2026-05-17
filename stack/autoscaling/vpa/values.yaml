@@ -1,0 +1,16 @@
+# vertical-pod-autoscaler for kx (fairwinds chart)
+# recommenderOnly mode by default — VPA observes and reports, doesn't mutate pods.
+# Flip updater/admissionController on per-project when you want auto-resize.
+
+recommender:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+updater:
+  enabled: false
+
+admissionController:
+  enabled: false

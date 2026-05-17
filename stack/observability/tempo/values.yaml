@@ -1,0 +1,31 @@
+# tempo for kx — single-binary mode with local storage
+# Receivers enabled: OTLP (grpc + http), jaeger thrift http, zipkin.
+
+tempo:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+
+  receivers:
+    jaeger:
+      protocols:
+        thrift_http: {}
+        grpc: {}
+    zipkin: {}
+    otlp:
+      protocols:
+        http: {}
+        grpc: {}
+
+persistence:
+  enabled: false
+
+service:
+  type: ClusterIP

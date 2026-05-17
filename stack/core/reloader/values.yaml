@@ -1,0 +1,14 @@
+# reloader for kx
+#
+# Watches ConfigMaps and Secrets, rolls deployments/daemonsets/statefulsets when they change.
+# Annotate workloads with: reloader.stakater.com/auto: "true"
+
+reloader:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+  watchGlobally: true
+  logFormat: json

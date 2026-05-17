@@ -1,0 +1,33 @@
+version: '3'
+
+tasks:
+  enable:
+    desc: Install data slice (minio + velero + cloudnative-pg + nats). Does NOT include druid (heavy).
+    cmds:
+      - bash {{.TASKFILE_DIR}}/minio/install.sh
+      - bash {{.TASKFILE_DIR}}/velero/install.sh
+      - bash {{.TASKFILE_DIR}}/cloudnative-pg/install.sh
+      - bash {{.TASKFILE_DIR}}/nats/install.sh
+
+  disable:
+    desc: Uninstall data slice (also uninstalls druid if present)
+    cmds:
+      - task: druid:disable
+      - helm uninstall -n nats nats                       || true
+      - helm uninstall -n cnpg-system cloudnative-pg      || true
+      - helm uninstall -n velero velero                   || true
+      - helm uninstall -n minio minio                     || true
+      - kubectl delete ns nats --ignore-not-found
+      - kubectl delete ns cnpg-system --ignore-not-found
+      - kubectl delete ns velero --ignore-not-found
+      - kubectl delete ns minio --ignore-not-found
+
+  "druid:enable":
+    desc: Install Apache Druid (uses eks-gitops chart + kx-local overrides; ~4.5GB resident)
+    cmds:
+      - bash {{.TASKFILE_DIR}}/druid/install.sh
+
+  "druid:disable":
+    desc: Uninstall Druid + its CNPG metadata cluster (just nukes the namespace — Druid is applied via kubectl, not a helm release)
+    cmds:
+      - kubectl delete ns druid --ignore-not-found

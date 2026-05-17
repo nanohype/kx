@@ -1,0 +1,25 @@
+# NATS for kx — single-node, JetStream-disabled by default
+# Modern message broker. Useful for event-driven web apps and agent-to-agent messaging.
+# Enable JetStream per-project if you want streams/KV/object-store semantics.
+
+config:
+  cluster:
+    enabled: false
+    replicas: 1
+  jetstream:
+    enabled: false   # opt in per-project when persistence is needed
+
+container:
+  image:
+    pullPolicy: IfNotPresent
+  merge:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+podTemplate:
+  topologySpreadConstraints: {}
+
+natsBox:
+  enabled: true   # gives you a `nats` CLI pod in the namespace for quick experiments

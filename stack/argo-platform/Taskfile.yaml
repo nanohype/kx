@@ -1,0 +1,17 @@
+version: '3'
+
+tasks:
+  enable:
+    desc: Install argo-platform slice (events, rollouts, workflows)
+    cmds:
+      - bash {{.TASKFILE_DIR}}/argo-events/install.sh
+      - bash {{.TASKFILE_DIR}}/argo-rollouts/install.sh
+      - bash {{.TASKFILE_DIR}}/argo-workflows/install.sh
+
+  disable:
+    desc: Uninstall argo-platform slice
+    cmds:
+      - helm uninstall -n argo argo-workflows || true
+      - helm uninstall -n argo argo-rollouts  || true
+      - helm uninstall -n argo argo-events    || true
+      - kubectl delete ns argo --ignore-not-found

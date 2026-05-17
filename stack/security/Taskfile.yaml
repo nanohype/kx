@@ -1,0 +1,19 @@
+version: '3'
+
+tasks:
+  enable:
+    desc: Install security slice
+    cmds:
+      - bash {{.TASKFILE_DIR}}/kyverno/install.sh
+      - bash {{.TASKFILE_DIR}}/trivy-operator/install.sh
+      - bash {{.TASKFILE_DIR}}/falco/install.sh
+
+  disable:
+    desc: Uninstall security slice
+    cmds:
+      - helm uninstall -n falco falco                   || true
+      - helm uninstall -n trivy-system trivy-operator   || true
+      - helm uninstall -n kyverno kyverno               || true
+      - kubectl delete ns falco --ignore-not-found
+      - kubectl delete ns trivy-system --ignore-not-found
+      - kubectl delete ns kyverno --ignore-not-found

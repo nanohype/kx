@@ -1,0 +1,21 @@
+# falco for kx
+# Runtime security via eBPF (modern_ebpf driver — works on macOS Docker Desktop / OrbStack with linux kernels).
+# Output goes to stdout; falcosidekick disabled.
+
+driver:
+  kind: modern_ebpf
+
+falco:
+  json_output: true
+  log_level: info
+  priority: notice
+
+falcosidekick:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+tty: true

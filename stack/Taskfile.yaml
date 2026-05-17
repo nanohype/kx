@@ -1,0 +1,87 @@
+version: '3'
+
+# stack/Taskfile.yaml — orchestrates core install + opt-in slice enable/disable.
+# Each slice has its own Taskfile.yaml that knows the order to install its addons.
+#
+# Slice operations naturally surface as:
+#   task stack:observability:enable    task stack:observability:disable
+#   task stack:security:enable         task stack:security:disable
+#   task stack:autoscaling:enable      task stack:autoscaling:disable
+#   task stack:argo-platform:enable    task stack:argo-platform:disable
+#   task stack:secrets:enable          task stack:secrets:disable
+#   task stack:data:enable             task stack:data:disable
+#   task stack:ai-platform:enable      task stack:ai-platform:disable
+#
+# Or all at once (does not include the heavy opt-ins like druid):
+#   task stack:all:enable              task stack:all:disable
+
+includes:
+  observability:
+    taskfile: ./observability/Taskfile.yaml
+    dir: ./observability
+  security:
+    taskfile: ./security/Taskfile.yaml
+    dir: ./security
+  autoscaling:
+    taskfile: ./autoscaling/Taskfile.yaml
+    dir: ./autoscaling
+  argo-platform:
+    taskfile: ./argo-platform/Taskfile.yaml
+    dir: ./argo-platform
+  secrets:
+    taskfile: ./secrets/Taskfile.yaml
+    dir: ./secrets
+  data:
+    taskfile: ./data/Taskfile.yaml
+    dir: ./data
+  ai-platform:
+    taskfile: ./ai-platform/Taskfile.yaml
+    dir: ./ai-platform
+
+tasks:
+  core:
+    desc: Install the always-on core stack. Idempotent.
+    cmds:
+      # Order matters:
+      #   1. Gateway API CRDs first — cilium's gatewayAPI controller registers against them at startup
+      #   2. CNI (cilium) — nodes go from NotReady to Ready
+      #   3. prometheus-operator-crds — any chart that creates ServiceMonitor/PodMonitor relies on these
+      #   4. cert-manager + trust-manager — TLS issuance + CA bundle distribution
+      #   5. metrics-server — kubectl top, HPA inputs
+      #   6. ingress-nginx + reloader + argocd
+      - bash {{.TASKFILE_DIR}}/core/gateway-api-crds/install.sh
+      - bash {{.TASKFILE_DIR}}/core/cilium/install.sh
+      - bash {{.TASKFILE_DIR}}/core/prometheus-operator-crds/install.sh
+      - bash {{.TASKFILE_DIR}}/core/cert-manager/install.sh
+      - bash {{.TASKFILE_DIR}}/core/trust-manager/install.sh
+      - bash {{.TASKFILE_DIR}}/core/metrics-server/install.sh
+      - bash {{.TASKFILE_DIR}}/core/ingress-nginx/install.sh
+      - bash {{.TASKFILE_DIR}}/core/reloader/install.sh
+      - bash {{.TASKFILE_DIR}}/core/argo-cd/install.sh
+
+  status:
+    desc: Show helm releases across all namespaces
+    cmds:
+      - helm list -A
+
+  "all:enable":
+    desc: Enable every opt-in slice (skips heavyweight intra-slice opt-ins like druid)
+    cmds:
+      - task: 'secrets:enable'
+      - task: 'autoscaling:enable'
+      - task: 'argo-platform:enable'
+      - task: 'security:enable'
+      - task: 'observability:enable'
+      - task: 'data:enable'
+      - task: 'ai-platform:enable'
+
+  "all:disable":
+    desc: Disable every opt-in slice (also tears down druid via data:disable)
+    cmds:
+      - task: 'ai-platform:disable'
+      - task: 'data:disable'
+      - task: 'observability:disable'
+      - task: 'security:disable'
+      - task: 'argo-platform:disable'
+      - task: 'autoscaling:disable'
+      - task: 'secrets:disable'

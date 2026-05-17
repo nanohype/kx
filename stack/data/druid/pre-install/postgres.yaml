@@ -1,0 +1,28 @@
+# CNPG Postgres cluster backing Druid metadata storage.
+# Single instance — kx-only. CNPG generates a Secret named `druid-metadata-app` with
+# username/password/host/dbname keys; install.sh translates it into the chart-expected
+# `kx-ds-druid-metadata` Secret.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: druid-metadata
+  namespace: druid
+spec:
+  instances: 1
+  storage:
+    size: 2Gi
+  bootstrap:
+    initdb:
+      database: druid
+      owner: druid
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: "64MB"

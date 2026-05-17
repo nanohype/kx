@@ -1,0 +1,23 @@
+version: '3'
+
+# ai-platform slice — agent plane mirroring eks-agent-platform
+# kagent (CRDs out-of-band, then chart) + agentgateway
+
+tasks:
+  enable:
+    desc: Install ai-platform slice (kagent + agentgateway)
+    cmds:
+      - bash {{.TASKFILE_DIR}}/kagent-crds/install.sh
+      - bash {{.TASKFILE_DIR}}/kagent/install.sh
+      - bash {{.TASKFILE_DIR}}/agentgateway-crds/install.sh
+      - bash {{.TASKFILE_DIR}}/agentgateway/install.sh
+
+  disable:
+    desc: Uninstall ai-platform slice
+    cmds:
+      - helm uninstall -n agentgateway agentgateway      || true
+      - helm uninstall -n agentgateway agentgateway-crds || true
+      - helm uninstall -n kagent kagent                  || true
+      - helm uninstall -n kagent kagent-crds             || true
+      - kubectl delete ns agentgateway --ignore-not-found
+      - kubectl delete ns kagent --ignore-not-found

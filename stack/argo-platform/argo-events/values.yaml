@@ -1,0 +1,8 @@
+# argo-events — event-driven workflow execution (event sources, sensors, eventbus)
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi

@@ -1,0 +1,20 @@
+version: '3'
+
+tasks:
+  enable:
+    desc: Install autoscaling slice
+    cmds:
+      - bash {{.TASKFILE_DIR}}/vpa/install.sh
+      - bash {{.TASKFILE_DIR}}/goldilocks/install.sh
+      - bash {{.TASKFILE_DIR}}/keda/install.sh
+      - bash {{.TASKFILE_DIR}}/descheduler/install.sh
+
+  disable:
+    desc: Uninstall autoscaling slice
+    cmds:
+      - helm uninstall -n kube-system descheduler  || true
+      - helm uninstall -n keda keda                || true
+      - helm uninstall -n vpa goldilocks           || true
+      - helm uninstall -n vpa vpa                  || true
+      - kubectl delete ns keda --ignore-not-found
+      - kubectl delete ns vpa --ignore-not-found

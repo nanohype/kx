@@ -1,0 +1,18 @@
+# keda for kx — event-driven autoscaling (ScaledObject, ScaledJob)
+
+operator:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+metricsServer:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+webhooks:
+  enabled: true

@@ -1,0 +1,31 @@
+# kyverno for kx
+# Admission policy engine. eks-gitops has a full policy library — kx installs the engine and
+# leaves policy authoring to per-project needs.
+
+admissionController:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+backgroundController:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+cleanupController:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+reportsController:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi

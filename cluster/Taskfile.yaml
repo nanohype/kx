@@ -1,0 +1,40 @@
+version: '3'
+
+# Cluster lifecycle. Invoked via top-level `kx up | down | reset | status`.
+
+vars:
+  CLUSTER_NAME: kx
+  KIND_CONFIG: '{{.TASKFILE_DIR}}/kind-config.yaml'
+
+tasks:
+  up:
+    desc: Create the kind cluster + attach local registry. Does NOT install stack.
+    cmds:
+      - |
+        if kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
+          echo "cluster {{.CLUSTER_NAME}} already exists"
+        else
+          kind create cluster --name {{.CLUSTER_NAME}} --config {{.KIND_CONFIG}}
+        fi
+      - kubectl config use-context kind-{{.CLUSTER_NAME}}
+      - bash {{.TASKFILE_DIR}}/registry.sh
+      - bash {{.TASKFILE_DIR}}/coredns-patch.sh
+
+  down:
+    desc: Delete the cluster and the local registry.
+    cmds:
+      - kind delete cluster --name {{.CLUSTER_NAME}}
+      - docker rm -f kx-registry 2>/dev/null || true
+
+  reset:
+    desc: Delete + recreate the cluster from scratch.
+    cmds:
+      - task: down
+      - task: up
+
+  status:
+    desc: Nodes + pods across all namespaces.
+    cmds:
+      - kubectl --context kind-{{.CLUSTER_NAME}} get nodes -o wide
+      - echo
+      - kubectl --context kind-{{.CLUSTER_NAME}} get pods -A
