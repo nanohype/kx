@@ -1,6 +1,6 @@
 # kx
 
-A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [eks-gitops](https://github.com/stxkxs/eks-gitops). The chart shapes match production EKS so workloads developed against kx deploy unchanged.
+A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [eks-gitops](https://github.com/nanohype/eks-gitops). The chart shapes match production EKS so workloads developed against kx deploy unchanged.
 
 ## Prerequisites
 
