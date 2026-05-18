@@ -1,6 +1,6 @@
 # kx
 
-Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https://github.com/stxkxs/eks-gitops). Daily-driver for any build that targets the same stack in production.
+Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https://github.com/nanohype/eks-gitops). Daily-driver for any build that targets the same stack in production.
 
 ## Operating model
 
@@ -65,5 +65,5 @@ The exception is `prometheus-operator-crds` which has no values.
 
 ## Related repos
 
-- [`landing-zone`](https://github.com/stxkxs/landing-zone) — Tofu/Terragrunt cloud infra (the cloud-side of "task up")
-- [`eks-gitops`](https://github.com/stxkxs/eks-gitops) — production ArgoCD/Helm config kx mirrors
+- [`landing-zone`](https://github.com/nanohype/landing-zone) — Tofu/Terragrunt cloud infra (the cloud-side of "task up")
+- [`eks-gitops`](https://github.com/nanohype/eks-gitops) — production ArgoCD/Helm config kx mirrors
