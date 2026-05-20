@@ -2,6 +2,8 @@
 
 A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [eks-gitops](https://github.com/nanohype/eks-gitops). The chart shapes match production EKS so workloads developed against kx deploy unchanged.
 
+**AI clients / agents start here:** [`AGENTS.md`](AGENTS.md). For the stack-wide view, see the [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md).
+
 ## Prerequisites
 
 ```
