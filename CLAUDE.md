@@ -30,6 +30,7 @@ eks-agent-platform mirror (these are direct mirrors, not substitutes):
 |---|---|---|
 | kagent (ns kagent) | stack/ai-platform/kagent | Same OCI chart, kagent-tools + kmcp sub-charts disabled by default locally |
 | agentgateway (ns agentgateway) | stack/ai-platform/agentgateway | Same OCI chart, single replica, no Bedrock PrivateLink config |
+| operator (ns eks-agent-platform) | stack/ai-platform/operator | Built from the sibling eks-agent-platform checkout + kind-loaded (image isn't published); `--disable-aws`, self-signed webhook issuer, cilium netpol. Override the repo path with `KX_EKS_AGENT_PLATFORM_DIR` |
 | nvidia-gpu-operator / nvidia-dra-driver / aws-neuron-device-plugin | (not applicable) | No GPUs on kind |
 
 eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) **unmodified** via a post-renderer that strips EKS-only resources:
