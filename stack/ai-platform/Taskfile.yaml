@@ -1,20 +1,27 @@
 version: '3'
 
 # ai-platform slice — agent plane mirroring eks-agent-platform
-# kagent (CRDs out-of-band, then chart) + agentgateway
+# kagent (CRDs out-of-band, then chart) + agentgateway + the operator.
+# The operator installs last so its agent-plane CRDs (kagent/agentgateway)
+# are present when it reconciles. It's built from the sibling
+# eks-agent-platform checkout (image isn't published) — override the path with
+# KX_EKS_AGENT_PLATFORM_DIR if your repos don't sit side by side.
 
 tasks:
   enable:
-    desc: Install ai-platform slice (kagent + agentgateway)
+    desc: Install ai-platform slice (kagent + agentgateway + operator)
     cmds:
       - bash {{.TASKFILE_DIR}}/kagent-crds/install.sh
       - bash {{.TASKFILE_DIR}}/kagent/install.sh
       - bash {{.TASKFILE_DIR}}/agentgateway-crds/install.sh
       - bash {{.TASKFILE_DIR}}/agentgateway/install.sh
+      - bash {{.TASKFILE_DIR}}/operator/install.sh
 
   disable:
     desc: Uninstall ai-platform slice
     cmds:
+      - helm uninstall -n eks-agent-platform eks-agent-platform || true
+      - kubectl delete ns eks-agent-platform --ignore-not-found
       - helm uninstall -n agentgateway agentgateway      || true
       - helm uninstall -n agentgateway agentgateway-crds || true
       - helm uninstall -n kagent kagent                  || true

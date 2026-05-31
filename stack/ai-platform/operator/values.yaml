@@ -1,0 +1,22 @@
+# eks-agent-platform operator — kx local profile (deltas from chart defaults).
+# Image is built + kind-loaded by install.sh (tag dev, never pushed).
+image:
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# No AWS locally — skip the IRSA/KMS/SSM reconcile. Platform CRs still produce
+# the full k8s tenant boundary (namespace, quota, netpol, SA, AppProject).
+extraArgs:
+  - --disable-aws
+
+# kx core runs cert-manager; provision a self-signed ClusterIssuer for the
+# webhook cert rather than expecting a production issuer.
+webhooks:
+  certManager:
+    installSelfSignedIssuer: true
+
+# kx uses cilium — a vanilla NetworkPolicy can't allow kube-apiserver egress
+# under it, so use the CiliumNetworkPolicy engine.
+networkPolicy:
+  enabled: true
+  engine: cilium
