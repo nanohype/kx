@@ -9,5 +9,5 @@ helm repo update prometheus-community >/dev/null
 
 helm upgrade --install prometheus-operator-crds prometheus-community/prometheus-operator-crds \
   --namespace kube-system \
-  --version 29.0.0 \
+  --version 19.1.0 \
   --wait

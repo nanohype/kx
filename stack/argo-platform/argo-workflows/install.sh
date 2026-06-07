@@ -9,6 +9,6 @@ kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install argo-workflows argo/argo-workflows \
   --namespace argo \
-  --version 1.0.14 \
+  --version 0.45.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait

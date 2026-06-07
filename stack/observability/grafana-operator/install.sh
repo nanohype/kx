@@ -10,6 +10,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install grafana-operator grafana/grafana-operator \
   --namespace monitoring \
-  --version 5.22.2 \
+  --version 5.21.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
