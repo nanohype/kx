@@ -9,6 +9,6 @@ kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install argo-events argo/argo-events \
   --namespace argo \
-  --version 2.4.11 \
+  --version 2.4.21 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait

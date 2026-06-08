@@ -11,6 +11,6 @@ kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl app
 
 helm upgrade --install external-secrets external-secrets/external-secrets \
   --namespace external-secrets \
-  --version 2.5.0 \
+  --version 2.6.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
