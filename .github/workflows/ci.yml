@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: yamllint
+        run: |
+          pip install --quiet yamllint
+          yamllint .
+
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          shellcheck scripts/*.sh cluster/*.sh stack/*/*/install.sh
+
+  render:
+    name: Render every helm slice
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The operator slice installs the sibling eks-agent-platform checkout's
+      # chart against kx's values — give it one to render from.
+      - uses: actions/checkout@v4
+        with:
+          repository: nanohype/eks-agent-platform
+          path: .sibling/eks-agent-platform
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm template each slice at its pinned version
+        env:
+          KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
+        run: ./scripts/render-check.sh
