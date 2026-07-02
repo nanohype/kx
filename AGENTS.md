@@ -33,19 +33,19 @@ helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/v
 
 ## Contract surface
 
-kx is the **mirror** of `eks-gitops`. Every addon installed by `task up` matches its eks-gitops counterpart by chart name + version. Two differences:
+kx is the **mirror** of `eks-gitops`. Cloud-portable addons install from the same chart under the same name; AWS-specific addons have local equivalents behind the same operational surface. Two differences to know about:
 
 - **Identity**: kx doesn't run IRSA. Pods that expect AWS credentials get them via mounted env vars or `~/.aws/credentials` — `aws.platformRoleArn` is set to `""` in local dev values, omitting the SA annotation entirely.
-- **Post-renderer**: a kx-specific post-renderer strips EKS-only bits (the IRSA SA annotation, NodeAffinity on managed-node-group labels, etc.) so the chart renders cleanly without modification.
+- **Druid post-renderer**: `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) unmodified through a post-renderer that strips EKS-only resources (Karpenter `NodePool`/`EC2NodeClass`, `ExternalSecret`) and EKS node-selector labels.
 
 If a chart works under kx, it should work on a real EKS cluster after the IRSA annotation is plumbed in.
 
 ## Add an addon to the local stack
 
-1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — kx tracks it 1:1.
-2. Add the addon to `kx/stack/<category>/` mirroring the shape. Use `values.yaml` (matching the base) plus a `values-local.yaml` if local-specific overrides are needed.
-3. Wire it into `kx/Taskfile.yaml` under the appropriate `stack:<category>:enable` task.
-4. Run `task stack:<category>:enable` to apply.
+1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
+2. Add `kx/stack/<slice>/<name>/` with exactly two files: `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time) and `values.yaml` (local-only deltas from chart defaults — don't copy eks-gitops values; those assume IRSA, ENI, NLB).
+3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
+4. Run `task stack:<slice>:enable` to apply.
 
 ## Run an app's chart locally
 
