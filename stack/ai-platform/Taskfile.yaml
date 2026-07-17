@@ -20,7 +20,7 @@ tasks:
   disable:
     desc: Uninstall ai-platform slice
     cmds:
-      - helm uninstall -n eks-agent-platform eks-agent-platform || true
+      - helm uninstall -n eks-agent-platform eks-agent-platform-operator || true
       - kubectl delete ns eks-agent-platform --ignore-not-found
       - helm uninstall -n agentgateway agentgateway      || true
       - helm uninstall -n agentgateway agentgateway-crds || true

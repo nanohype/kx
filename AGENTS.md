@@ -28,7 +28,7 @@ Target the local cluster:
 ```sh
 export KUBECONFIG=$(kind get kubeconfig --name kx --internal=false | psub)
 kubectl create namespace my-project
-helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/values-dev.yaml
+helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/values-development.yaml
 ```
 
 ## Contract surface
@@ -52,11 +52,11 @@ If a chart works under kx, it should work on a real EKS cluster after the IRSA a
 ```sh
 cd /path/to/<app>/
 # Pre-flight: ensure the chart's local-dev values omit AWS-only annotations
-helm template my-app chart -f chart/values-dev.yaml | kubectl apply -f -
+helm template my-app chart -f chart/values-development.yaml | kubectl apply -f -
 
 # Or via helm install once the namespace exists
 kubectl create namespace tenants-my-team
-helm install my-app chart -n tenants-my-team -f chart/values-dev.yaml
+helm install my-app chart -n tenants-my-team -f chart/values-development.yaml
 ```
 
 The chart's `aws.platformRoleArn: ""` in local-dev values means the conditional in `serviceaccount.yaml` skips the `eks.amazonaws.com/role-arn` annotation. Pods run as the SA without IRSA — which is fine for everything that doesn't actually need to hit AWS.

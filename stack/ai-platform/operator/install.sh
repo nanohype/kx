@@ -32,7 +32,7 @@ kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 
 kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl apply -f -
 
-helm upgrade --install eks-agent-platform "${OPERATOR_REPO}/charts/operator" \
+helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
   --namespace eks-agent-platform \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 180s
