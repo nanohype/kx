@@ -1,5 +1,6 @@
 # kx overrides for the eks-gitops Druid chart.
-# Merged ON TOP OF /Users/bs/codes/eks-gitops/catalog/druid/values.yaml at install time.
+# Merged ON TOP OF the sibling checkout's eks-gitops/catalog/druid/values.yaml at install
+# time (see install.sh; override the path via KX_DRUID_CHART_VALUES).
 # Only the local-friendly deltas live here — pull request to the upstream chart not required.
 
 # Naming — release "ds", hostedId "kx" → resources like `kx-ds-druid-{component}`.

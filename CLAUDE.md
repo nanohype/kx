@@ -60,11 +60,11 @@ The exception is `prometheus-operator-crds` which has no values.
 - Don't add helmfile, helm-secrets, helm wrappers, or "easier" automation — explicit install scripts are the point
 - Don't copy eks-gitops values wholesale into a `values-local.yaml` — extract only what makes sense locally, into `values.yaml`
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
-- Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — see [[feedback-workspace-not-curriculum]]
-- Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — see [[feedback-no-substitutes-surface]]
-- Don't add CI workflows — this is a personal cluster, not a product
+- Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
+- Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
+- Don't add CI that needs a live cluster or cloud credentials. CI is lint (yamllint, shellcheck) plus a clusterless `helm template` render gate over every slice (`scripts/render-check.sh`) — anything that requires a running kind cluster stays a local `task` target
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
-- Don't speculatively add charts. The conscious-omissions list is in `/Users/bs/.claude/plans/greedy-herding-umbrella.md` — these are NOT missing, they were intentionally excluded for a web/AI/infra/devops focus (not ML). Items to skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
+- Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 
 ## Related repos
 
