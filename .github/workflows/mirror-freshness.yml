@@ -1,0 +1,41 @@
+name: mirror freshness
+# Asks whether the eks-gitops catalog has moved past the pin in
+# stack/upstream.json.
+#
+# Deliberately not part of ci.yml. That workflow compares kx against the
+# catalog AT THE PINNED REF, so its verdict is a fact about the commit under
+# test. Whether the pin is also the newest thing eks-gitops has is a different
+# question with a different answer every day — Renovate watches every chart
+# pin over there, so asking it on the blocking path would turn a required check
+# red because a bump merged in another repository.
+#
+# A red run here means: `python3 scripts/mirror-check.py sync`, then
+# ./scripts/render-check.sh, and ship whatever the values files need.
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: Is the catalog pin behind?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the catalog at its default branch
+        uses: actions/checkout@v4
+        with:
+          repository: nanohype/eks-gitops
+          path: .sibling/eks-gitops
+
+      - name: Compare against the current catalog
+        env:
+          EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/mirror-check.py freshness

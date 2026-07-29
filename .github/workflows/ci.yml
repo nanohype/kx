@@ -22,6 +22,35 @@ jobs:
           sudo apt-get install -y -qq shellcheck >/dev/null
           shellcheck scripts/*.sh cluster/*.sh stack/*/*/install.sh
 
+  mirror:
+    name: Mirror the eks-gitops catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # At the pinned ref, never at eks-gitops' default branch. The verdict has
+      # to be a function of the commit under test — reading upstream's head
+      # would turn this check red the moment Renovate merges a chart bump over
+      # there, which is a fact about that repository and not about this PR.
+      # `mirror-freshness.yml` asks that question on its own schedule.
+      # Full history, because the ref to compare against lives in
+      # stack/upstream.json and is read after the checkout, not before it.
+      - name: Check out the catalog
+        uses: actions/checkout@v4
+        with:
+          repository: nanohype/eks-gitops
+          path: .sibling/eks-gitops
+          fetch-depth: 0
+
+      - name: Compare every chart pin against the catalog
+        env:
+          EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
+        run: |
+          pip install --quiet pyyaml
+          ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
+          git -C "$EKS_GITOPS_DIR" checkout -q "$ref"
+          python3 scripts/mirror-check.py check
+
   render:
     name: Render every helm slice
     runs-on: ubuntu-latest

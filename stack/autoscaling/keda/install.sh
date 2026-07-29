@@ -10,6 +10,6 @@ kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install keda kedacore/keda \
   --namespace keda \
-  --version 2.20.0 \
+  --version 2.20.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
