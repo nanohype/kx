@@ -1,6 +1,7 @@
 version: '3'
 
-# observability slice — kube-prometheus-stack, loki, tempo, grafana-operator, opencost
+# observability slice — kube-prometheus-stack, loki, tempo, otel-collector,
+# grafana-operator, opencost
 
 tasks:
   enable:
@@ -9,6 +10,9 @@ tasks:
       - bash {{.TASKFILE_DIR}}/kube-prometheus-stack/install.sh
       - bash {{.TASKFILE_DIR}}/loki/install.sh
       - bash {{.TASKFILE_DIR}}/tempo/install.sh
+      # After its three export targets — the collector would retry into them
+      # anyway, but there is no reason to make it.
+      - bash {{.TASKFILE_DIR}}/otel-collector/install.sh
       - bash {{.TASKFILE_DIR}}/grafana-operator/install.sh
       - bash {{.TASKFILE_DIR}}/opencost/install.sh
 
@@ -17,6 +21,7 @@ tasks:
     cmds:
       - helm uninstall -n monitoring opencost            || true
       - helm uninstall -n monitoring grafana-operator    || true
+      - helm uninstall -n monitoring otel-collector      || true
       - helm uninstall -n monitoring tempo               || true
       - helm uninstall -n monitoring loki                || true
       - helm uninstall -n monitoring kube-prometheus-stack || true

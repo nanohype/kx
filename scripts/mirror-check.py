@@ -156,8 +156,31 @@ def kx_pins():
 # ── the gate ────────────────────────────────────────────────────────────────
 
 
+def stale_divergences(declared, upstream, local):
+    """Declared divergences whose reason no longer holds.
+
+    A divergence is a written-down decision, and the value of writing one down is
+    that it can be reviewed later. That only works if the list describes the
+    present: an entry that outlives its cause reads as a live decision while
+    silently exempting the chart from the check it was carved out of. Closing a
+    gap and leaving its entry behind would re-permit the gap.
+    """
+    stale = []
+    for chart, entry in sorted(declared.items()):
+        kind = entry.get("kind")
+        if kind == "gitops-only" and chart in local:
+            stale.append((chart, "declared gitops-only, but kx has a slice for it now"))
+        elif kind == "kx-only" and chart in upstream:
+            stale.append((chart, "declared kx-only, but eks-gitops pins it now"))
+        elif kind == "version" and upstream.get(chart) == local.get(chart, (None,))[0]:
+            stale.append((chart, "declared a version divergence, but the pins agree now"))
+        elif chart not in upstream and chart not in local:
+            stale.append((chart, "names a chart neither side pins"))
+    return stale
+
+
 def compare(manifest, gitops):
-    """(mismatched, missing_here, extra_here) after applying declared divergences."""
+    """(mismatched, missing_here, extra_here, stale) after applying declared divergences."""
     declared = {d["chart"]: d for d in manifest.get("divergences", [])}
     upstream = upstream_pins(gitops)
     local = kx_pins()
@@ -180,11 +203,11 @@ def compare(manifest, gitops):
         if chart not in local and declared.get(chart, {}).get("kind") != "gitops-only":
             missing_here.append((chart, version))
 
-    return mismatched, missing_here, extra_here
+    return mismatched, missing_here, extra_here, stale_divergences(declared, upstream, local)
 
 
 def report(manifest, gitops):
-    mismatched, missing_here, extra_here = compare(manifest, gitops)
+    mismatched, missing_here, extra_here, stale = compare(manifest, gitops)
 
     for chart, mine, theirs, script in mismatched:
         rel = script.relative_to(ROOT)
@@ -194,8 +217,10 @@ def report(manifest, gitops):
     for chart, version, script in extra_here:
         rel = script.relative_to(ROOT)
         print(f"  ✗ {chart}: kx pins {version}, eks-gitops has no entry for it  ({rel})")
+    for chart, why in stale:
+        print(f"  ✗ {chart}: stale divergence in stack/upstream.json — {why}")
 
-    return mismatched, missing_here, extra_here
+    return mismatched, missing_here, extra_here, stale
 
 
 def cmd_check(manifest):
@@ -204,8 +229,8 @@ def cmd_check(manifest):
         die(f"upstream.ref is {ref}, which is not a commit sha")
 
     gitops = upstream_dir(manifest, ref)
-    mismatched, missing_here, extra_here = report(manifest, gitops)
-    total = len(mismatched) + len(missing_here) + len(extra_here)
+    mismatched, missing_here, extra_here, stale = report(manifest, gitops)
+    total = len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
 
     if total:
         print()
@@ -225,8 +250,8 @@ def cmd_check(manifest):
 def cmd_freshness(manifest):
     """Compare against whatever upstream is now, not against the pin."""
     gitops = upstream_dir(manifest, None)
-    mismatched, missing_here, extra_here = report(manifest, gitops)
-    total = len(mismatched) + len(missing_here) + len(extra_here)
+    mismatched, missing_here, extra_here, stale = report(manifest, gitops)
+    total = len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
 
     if not total:
         print("mirror-check: kx matches the eks-gitops catalog at its default branch")

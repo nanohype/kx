@@ -1,5 +1,5 @@
 {
-  "_README": "kx mirrors the eks-gitops addon catalog. `scripts/mirror-check.py check` compares every chart pinned here against eks-gitops at `upstream.ref`, in both directions, and fails on any undeclared difference. Move the pin with `sync`; ask whether it has fallen behind with `freshness` (scheduled, never a merge gate). Divergence is fine and must be declared below with a reason — an entry here is a decision on the record, an omission is not. `kind` is one of: gitops-only (upstream pins it, kx deliberately does not), kx-only (kx pins it, upstream deliberately does not), version (both pin it, at deliberately different versions).",
+  "_README": "kx mirrors the eks-gitops addon catalog. `scripts/mirror-check.py check` compares every chart pinned here against eks-gitops at `upstream.ref`, in both directions, and fails on any undeclared difference. Move the pin with `sync`; ask whether it has fallen behind with `freshness` (scheduled, never a merge gate). Divergence is fine and must be declared below with a reason \u2014 an entry here is a decision on the record, an omission is not. `kind` is one of: gitops-only (upstream pins it, kx deliberately does not), kx-only (kx pins it, upstream deliberately does not), version (both pin it, at deliberately different versions).",
   "upstream": {
     "repository": "nanohype/eks-gitops",
     "path": "applicationsets",
@@ -24,7 +24,7 @@
     {
       "chart": "karpenter",
       "kind": "gitops-only",
-      "reason": "Provisions EC2 capacity in response to pending pods. kind nodes are containers on one host — there is nothing to provision."
+      "reason": "Provisions EC2 capacity in response to pending pods. kind nodes are containers on one host \u2014 there is nothing to provision."
     },
     {
       "chart": "gpu-operator",
@@ -47,14 +47,9 @@
       "reason": "In-cluster Prometheus, Alertmanager, and Grafana standing in for Amazon Managed Prometheus and Amazon Managed Grafana. Upstream reaches those as external services, so it pins the pieces separately instead of the bundle."
     },
     {
-      "chart": "opentelemetry-collector",
-      "kind": "gitops-only",
-      "reason": "An unclosed gap, not a substitution. Upstream routes all tenant telemetry through an OTLP collector gateway, and every tenant chart now writes to telemetry.monitoring.svc.cluster.local:4318. kx has no collector, so the local workspace cannot exercise the path production depends on — a tenant app runs here with its telemetry going nowhere. Closing it means a real otel-collector slice, not a pin."
-    },
-    {
       "chart": "argo-cd",
       "kind": "kx-only",
-      "reason": "eks-gitops is ArgoCD's configuration, so it assumes an ArgoCD that already exists — the cluster factory installs it during bootstrap. kx has no bootstrap, so it installs ArgoCD itself and leaves it idle: present to work against, not owning the addon lifecycle."
+      "reason": "eks-gitops is ArgoCD's configuration, so it assumes an ArgoCD that already exists \u2014 the cluster factory installs it during bootstrap. kx has no bootstrap, so it installs ArgoCD itself and leaves it idle: present to work against, not owning the addon lifecycle."
     },
     {
       "chart": "trust-manager",
@@ -69,7 +64,7 @@
     {
       "chart": "minio",
       "kind": "kx-only",
-      "reason": "S3-compatible object storage standing in for S3, including as velero's backup target — same Velero chart on both sides, different backend."
+      "reason": "S3-compatible object storage standing in for S3, including as velero's backup target \u2014 same Velero chart on both sides, different backend."
     },
     {
       "chart": "nats",
