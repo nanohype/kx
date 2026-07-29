@@ -1,0 +1,80 @@
+{
+  "_README": "kx mirrors the eks-gitops addon catalog. `scripts/mirror-check.py check` compares every chart pinned here against eks-gitops at `upstream.ref`, in both directions, and fails on any undeclared difference. Move the pin with `sync`; ask whether it has fallen behind with `freshness` (scheduled, never a merge gate). Divergence is fine and must be declared below with a reason — an entry here is a decision on the record, an omission is not. `kind` is one of: gitops-only (upstream pins it, kx deliberately does not), kx-only (kx pins it, upstream deliberately does not), version (both pin it, at deliberately different versions).",
+  "upstream": {
+    "repository": "nanohype/eks-gitops",
+    "path": "applicationsets",
+    "ref": "96e2d15bdb8d7b9a71c7a8fae2e7fc651d67fdeb"
+  },
+  "divergences": [
+    {
+      "chart": "aws-load-balancer-controller",
+      "kind": "gitops-only",
+      "reason": "Provisions AWS ALBs from Ingress objects. kind has no ELB to provision; ingress-nginx plus Cilium's Gateway API fill the same role locally."
+    },
+    {
+      "chart": "ingress-nginx",
+      "kind": "kx-only",
+      "reason": "The local stand-in for aws-load-balancer-controller. Different product, same role: something has to terminate Ingress on a cluster with no cloud load balancer."
+    },
+    {
+      "chart": "external-dns",
+      "kind": "gitops-only",
+      "reason": "Writes Route53 records. There is no zone to write to on kind; a project that needs local DNS records adds coredns RFC2136 to the data slice."
+    },
+    {
+      "chart": "karpenter",
+      "kind": "gitops-only",
+      "reason": "Provisions EC2 capacity in response to pending pods. kind nodes are containers on one host — there is nothing to provision."
+    },
+    {
+      "chart": "gpu-operator",
+      "kind": "gitops-only",
+      "reason": "Drivers and device plugins for GPU nodes. kind has no GPUs."
+    },
+    {
+      "chart": "k8s-dra-driver-gpu",
+      "kind": "gitops-only",
+      "reason": "Dynamic Resource Allocation driver for GPUs, paired with gpu-operator. Same reason: no GPUs on kind."
+    },
+    {
+      "chart": "kube-state-metrics",
+      "kind": "gitops-only",
+      "reason": "Present locally, not as its own chart: kube-prometheus-stack bundles kube-state-metrics and node-exporter as subcharts. Upstream runs it standalone because it has no in-cluster Prometheus to bundle it into."
+    },
+    {
+      "chart": "kube-prometheus-stack",
+      "kind": "kx-only",
+      "reason": "In-cluster Prometheus, Alertmanager, and Grafana standing in for Amazon Managed Prometheus and Amazon Managed Grafana. Upstream reaches those as external services, so it pins the pieces separately instead of the bundle."
+    },
+    {
+      "chart": "opentelemetry-collector",
+      "kind": "gitops-only",
+      "reason": "An unclosed gap, not a substitution. Upstream routes all tenant telemetry through an OTLP collector gateway, and every tenant chart now writes to telemetry.monitoring.svc.cluster.local:4318. kx has no collector, so the local workspace cannot exercise the path production depends on — a tenant app runs here with its telemetry going nowhere. Closing it means a real otel-collector slice, not a pin."
+    },
+    {
+      "chart": "argo-cd",
+      "kind": "kx-only",
+      "reason": "eks-gitops is ArgoCD's configuration, so it assumes an ArgoCD that already exists — the cluster factory installs it during bootstrap. kx has no bootstrap, so it installs ArgoCD itself and leaves it idle: present to work against, not owning the addon lifecycle."
+    },
+    {
+      "chart": "trust-manager",
+      "kind": "kx-only",
+      "reason": "Distributes the self-signed CA bundle that local webhooks are issued from. Upstream issues from ACM and cert-manager against a real DNS zone, so it has no bundle to distribute."
+    },
+    {
+      "chart": "cloudnative-pg",
+      "kind": "kx-only",
+      "reason": "In-cluster Postgres standing in for the Aurora clusters the tenant-substrate module provisions. A tenant declaring a relational datastore gets RDS upstream and a CNPG cluster here."
+    },
+    {
+      "chart": "minio",
+      "kind": "kx-only",
+      "reason": "S3-compatible object storage standing in for S3, including as velero's backup target — same Velero chart on both sides, different backend."
+    },
+    {
+      "chart": "nats",
+      "kind": "kx-only",
+      "reason": "Local queue and stream substrate standing in for SQS and Kinesis, so a tenant declaring a queue datastore has something to bind to."
+    }
+  ]
+}

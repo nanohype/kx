@@ -10,6 +10,6 @@ kubectl create namespace kagent --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
   --namespace kagent \
-  --version 0.9.6 \
+  --version 0.9.11 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait

@@ -23,7 +23,8 @@ Local mappings (kept here for future Claude, not surfaced to user):
 | external-dns (Route53) | (not installed by default; coredns RFC2136 if needed) | Add to data/ slice if a project requires it |
 | velero (S3) | velero + minio | Same Velero, S3-compatible backend |
 | karpenter / karpenter-resources | (not applicable on kind) | No EC2 to provision |
-| grafana-agent (remote-write → Amazon Managed Prometheus) + kube-state-metrics | kube-prometheus-stack | In-cluster Prometheus/Alertmanager/Grafana replace AMP + Amazon Managed Grafana; kube-state-metrics and node-exporter ship bundled in the stack instead of as standalone charts |
+| kube-state-metrics (standalone) | kube-prometheus-stack | In-cluster Prometheus/Alertmanager/Grafana replace AMP + Amazon Managed Grafana; kube-state-metrics and node-exporter ship bundled in the stack instead of as standalone charts |
+| opentelemetry-collector (the OTLP gateway) | (nothing) | **Open gap, not a substitution.** Upstream routes all tenant telemetry through a collector gateway and every tenant chart writes to `telemetry.monitoring.svc.cluster.local:4318`. kx has no collector, so a tenant app runs here with its telemetry going nowhere — the local workspace cannot exercise the path production depends on. Closing it means a real otel-collector slice |
 | grafana-operator (reconciles into external Amazon Managed Grafana) | grafana-operator | Same chart; dashboards/datasources reconcile into the kube-prometheus-stack Grafana instead of an external instance |
 
 eks-agent-platform mirror (these are direct mirrors, not substitutes):

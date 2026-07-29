@@ -11,6 +11,6 @@ kubectl create namespace velero --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install velero vmware-tanzu/velero \
   --namespace velero \
-  --version 12.0.2 \
+  --version 12.1.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
