@@ -32,6 +32,11 @@ prometheus:
   prometheusSpec:
     replicas: 1
     retention: 24h
+    # The otel-collector slice exports metrics with the same
+    # `prometheus_remote_write` exporter eks-gitops points at Amazon Managed
+    # Prometheus. Locally the write lands here instead, and Prometheus 404s
+    # remote-write until this receiver is on.
+    enableRemoteWriteReceiver: true
     resources:
       requests:
         cpu: 100m

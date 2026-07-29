@@ -1,0 +1,144 @@
+# OpenTelemetry Collector — gateway (Deployment), the kx mirror of eks-gitops'
+# otel-gateway.
+#
+# This is the piece that makes local telemetry real. Every tenant chart writes
+# OTLP to `telemetry.monitoring.svc.cluster.local:4318`, so without a collector
+# behind that name an app runs in kx with its traces, metrics and logs going
+# nowhere — and the one path production depends on is the one path the local
+# workspace cannot exercise.
+#
+# The tenant-facing contract is identical to upstream: same Service name, same
+# ports, same OTLP receivers. What differs is the far side of the collector,
+# because kx has no AWS:
+#
+#   metrics → the in-cluster Prometheus, via the same `prometheus_remote_write`
+#             exporter upstream uses. Only the endpoint changes, and the SigV4
+#             authenticator drops out — there is no IAM to sign against. The
+#             kube-prometheus-stack slice enables the remote-write receiver for
+#             this.
+#   logs    → Loki, at the single-binary Service. Upstream goes through
+#             `loki-gateway`, which the kx Loki slice disables, so the endpoint
+#             is `loki:3100` rather than the gateway's port 80.
+#   traces  → Tempo, byte-for-byte the same as upstream.
+#
+# Pinned to the chart version eks-gitops pins; `scripts/mirror-check.py` holds
+# the two together.
+
+mode: deployment
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.157.0"
+
+# Stable object name, matching upstream — the `telemetry` Service alias below
+# selects on it, and a rename would break the tenant contract silently.
+fullnameOverride: otel-gateway
+
+# Enriches tenant OTLP with k8s.* resource attributes, and auto-creates the
+# ClusterRole it needs. kx runs no node agents, so every signal arrives here
+# unenriched and this preset is the only thing adding pod/namespace identity.
+presets:
+  kubernetesAttributes:
+    enabled: true
+
+serviceAccount:
+  create: true
+  name: otel-gateway
+
+# One replica, sized for kind. Upstream's headroom exists because its
+# remote-write sending queue buffers to memory rather than a WAL; the same is
+# true here, but a laptop's telemetry volume is not production's.
+replicaCount: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# OTLP (4317/4318) is the whole ingress surface. Drop the legacy jaeger/zipkin
+# ingest ports, as upstream does.
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+config:
+  processors:
+    batch: {}
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+  exporters:
+    # Same exporter upstream uses, pointed at the in-cluster Prometheus instead
+    # of AMP. `enableRemoteWriteReceiver` in the kube-prometheus-stack values is
+    # what opens this endpoint; without it Prometheus 404s the write.
+    prometheus_remote_write:
+      endpoint: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+      external_labels:
+        cluster: kx
+      # Parity with upstream: no target_info series.
+      target_info:
+        enabled: false
+    # Loki's native OTLP endpoint. The exporter appends /v1/logs, so the endpoint
+    # stops at /otlp. kx disables the chart's gateway, so this addresses the
+    # single-binary Service directly.
+    otlphttp/loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
+    otlp/tempo:
+      endpoint: tempo.monitoring.svc.cluster.local:4317
+      tls:
+        insecure: true
+  service:
+    pipelines:
+      # memory_limiter stays first in every pipeline — it can only shed load it
+      # sees before the rest of the chain has allocated for it.
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [prometheus_remote_write]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlphttp/loki]
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp/tempo]
+
+# The tenant-facing endpoint, decoupled from the release name exactly as upstream
+# decouples it. This is the `telemetry.monitoring.svc` name every tenant chart
+# wires against, and it is the reason this slice exists.
+extraManifests:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: telemetry
+      namespace: monitoring
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/component: otel-gateway-alias
+    spec:
+      type: ClusterIP
+      selector:
+        app.kubernetes.io/name: opentelemetry-collector
+        app.kubernetes.io/instance: '{{ .Release.Name }}'
+        component: standalone-collector
+      ports:
+        - name: otlp
+          port: 4317
+          targetPort: 4317
+          protocol: TCP
+          appProtocol: grpc
+        - name: otlp-http
+          port: 4318
+          targetPort: 4318
+          protocol: TCP
+          appProtocol: http
