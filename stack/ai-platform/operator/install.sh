@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # eks-agent-platform operator — the control plane that reconciles
-# Platform / AgentFleet / ModelGateway / Tenant CRs against kagent +
-# agentgateway. Direct mirror of eks-agent-platform (installed after kagent +
-# agentgateway so the agent-plane CRDs exist when it reconciles).
+# Platform / AgentFleet / ModelGateway / Tenant CRs. Direct mirror of
+# eks-agent-platform, installed after Envoy AI Gateway: a ModelGateway
+# reconciles into a Gateway plus AIGatewayRoute / AIServiceBackend resources,
+# so those kinds have to exist first. An AgentFleet needs nothing extra — each
+# agent becomes a Deployment of the tenant's own image.
 #
 # Local: the operator image isn't published, so it's built from the sibling
 # eks-agent-platform checkout and kind-loaded. --disable-aws skips the real

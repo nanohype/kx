@@ -1,0 +1,17 @@
+# envoy-ai-gateway for kx — the AI-aware layer over envoy-gateway.
+#
+# Owns AIGatewayRoute / AIServiceBackend / BackendSecurityPolicy: model-name
+# routing, upstream schema translation (Anthropic Messages and OpenAI chat
+# completions both reach Bedrock), and upstream credentials.
+#
+# Production runs the controller with two replicas; one is enough on a kind
+# cluster, where a second copy only competes for the same leader lease.
+#
+# Nothing here holds a credential in either environment. On the cluster a
+# BackendSecurityPolicy names only a region and the Envoy pod's Pod Identity
+# association supplies the rest; locally there is no association, so a route
+# that reaches a real model needs credentials supplied to the kind node — the
+# slice deliberately provides none.
+
+controller:
+  replicaCount: 1

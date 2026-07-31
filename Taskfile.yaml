@@ -58,15 +58,16 @@ tasks:
     cmds:
       - kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 30030:80
 
-  port-forward:kagent-ui:
-    desc: kagent UI on http://localhost:8082 (requires ai-platform slice)
+  # A tenant's model gateway is a Service in that tenant's own namespace, not a
+  # shared one — envoy-gateway runs in GatewayNamespace mode, so there is no
+  # single address to forward. Name the Platform to reach its gateway:
+  #   task port-forward:model-gateway PLATFORM=slack-knowledge-bot
+  port-forward:model-gateway:
+    desc: A Platform's model gateway on http://localhost:8080 (PLATFORM=<name>, requires ai-platform slice)
     cmds:
-      - kubectl -n kagent port-forward svc/kagent-ui 8082:80
-
-  port-forward:agentgateway:
-    desc: agentgateway control plane on http://localhost:9978 (requires ai-platform slice)
-    cmds:
-      - kubectl -n agentgateway port-forward svc/agentgateway 9978:9978
+      - kubectl -n tenants-{{.PLATFORM}} port-forward svc/{{.PLATFORM}}-gateway 8080:8080
+    requires:
+      vars: [PLATFORM]
 
   argocd:initial-password:
     desc: Print the ArgoCD admin password
