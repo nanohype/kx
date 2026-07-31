@@ -1,20 +1,28 @@
 version: '3'
 
 # ai-platform slice — agent plane mirroring eks-agent-platform
-# kagent (CRDs out-of-band, then chart) + agentgateway + the operator.
-# The operator installs last so its agent-plane CRDs (kagent/agentgateway)
-# are present when it reconciles. It's built from the sibling
-# eks-agent-platform checkout (image isn't published) — override the path with
-# KX_EKS_AGENT_PLATFORM_DIR if your repos don't sit side by side.
+# Envoy AI Gateway (CRDs, then the Gateway API control plane, then the AI
+# layer) plus the operator.
+#
+# Order is load-bearing. The AI layer's CRDs go in first because its chart does
+# not ship them, so a controller installed ahead of them watches kinds the API
+# server has never heard of and reconciles nothing while reporting healthy.
+# envoy-gateway precedes envoy-ai-gateway because the AI layer registers a
+# webhook against that control plane and reads its GatewayClass. The operator
+# is last: it reconciles ModelGateway CRs into Gateway + AIGatewayRoute
+# resources, which need all three in place.
+#
+# The operator is built from the sibling eks-agent-platform checkout (image
+# isn't published) — override the path with KX_EKS_AGENT_PLATFORM_DIR if your
+# repos don't sit side by side.
 
 tasks:
   enable:
-    desc: Install ai-platform slice (kagent + agentgateway + operator)
+    desc: Install ai-platform slice (Envoy AI Gateway + operator)
     cmds:
-      - bash {{.TASKFILE_DIR}}/kagent-crds/install.sh
-      - bash {{.TASKFILE_DIR}}/kagent/install.sh
-      - bash {{.TASKFILE_DIR}}/agentgateway-crds/install.sh
-      - bash {{.TASKFILE_DIR}}/agentgateway/install.sh
+      - bash {{.TASKFILE_DIR}}/envoy-ai-gateway-crds/install.sh
+      - bash {{.TASKFILE_DIR}}/envoy-gateway/install.sh
+      - bash {{.TASKFILE_DIR}}/envoy-ai-gateway/install.sh
       - bash {{.TASKFILE_DIR}}/operator/install.sh
 
   disable:
@@ -22,9 +30,7 @@ tasks:
     cmds:
       - helm uninstall -n eks-agent-platform eks-agent-platform-operator || true
       - kubectl delete ns eks-agent-platform --ignore-not-found
-      - helm uninstall -n agentgateway agentgateway      || true
-      - helm uninstall -n agentgateway agentgateway-crds || true
-      - helm uninstall -n kagent kagent                  || true
-      - helm uninstall -n kagent kagent-crds             || true
-      - kubectl delete ns agentgateway --ignore-not-found
-      - kubectl delete ns kagent --ignore-not-found
+      - helm uninstall -n envoy-gateway-system envoy-ai-gateway      || true
+      - helm uninstall -n envoy-gateway-system envoy-gateway         || true
+      - helm uninstall -n envoy-gateway-system envoy-ai-gateway-crds || true
+      - kubectl delete ns envoy-gateway-system --ignore-not-found

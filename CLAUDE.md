@@ -31,8 +31,9 @@ eks-agent-platform mirror (these are direct mirrors, not substitutes):
 
 | eks-agent-platform | kx | Note |
 |---|---|---|
-| kagent (ns kagent) | stack/ai-platform/kagent | Same OCI chart, kagent-tools + kmcp sub-charts disabled by default locally |
-| agentgateway (ns agentgateway) | stack/ai-platform/agentgateway | Same OCI chart, single replica, no Bedrock PrivateLink config |
+| envoy-ai-gateway-crds (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway-crds | Same OCI chart and pin. Its own release because the AI-layer chart does not ship its CRDs |
+| envoy-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-gateway | Same OCI chart and values, including `GatewayNamespace` deploy mode — each tenant's Envoy runs in the tenant namespace, so the topology under test matches production |
+| envoy-ai-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway | Same OCI chart, single controller replica. No credential either side: on the cluster a BackendSecurityPolicy names a region and Pod Identity supplies the rest; locally there is no association, so reaching a real model needs credentials the slice deliberately does not provide |
 | operator (ns eks-agent-platform) | stack/ai-platform/operator | Built from the sibling eks-agent-platform checkout + kind-loaded (image isn't published); `--disable-aws`, self-signed webhook issuer, cilium netpol. Override the repo path with `KX_EKS_AGENT_PLATFORM_DIR` |
 | nvidia-gpu-operator / nvidia-dra-driver / aws-neuron-device-plugin | (not applicable) | No GPUs on kind |
 
