@@ -24,7 +24,7 @@ task down                                # tear down the cluster
 Projects target the cluster by convention: pick a namespace and point kubeconfig at the `kind-kx` context.
 
 ```
-export KUBECONFIG=$(kind get kubeconfig --name kx --internal=false | psub)
+kind export kubeconfig --name kx
 kubectl create namespace my-project
 kubectl -n my-project apply -f ...
 ```

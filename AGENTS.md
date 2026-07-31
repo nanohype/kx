@@ -26,7 +26,7 @@ task down                              # tear down
 Target the local cluster:
 
 ```sh
-export KUBECONFIG=$(kind get kubeconfig --name kx --internal=false | psub)
+kind export kubeconfig --name kx
 kubectl create namespace my-project
 helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/values-development.yaml
 ```
