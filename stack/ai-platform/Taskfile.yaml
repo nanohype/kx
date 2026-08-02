@@ -35,6 +35,23 @@ tasks:
     cmds:
       - bash {{.TASKFILE_DIR}}/bedrock-credentials/verify.sh
 
+  # The only check here that sends traffic. Everything else — status phases,
+  # the credentials verify, the render gate — reads a resource, and a gateway
+  # that answers nothing looks identical to one that works in all of them.
+  #
+  #   task stack:ai-platform:conformance PLATFORM=blank
+  #   task stack:ai-platform:conformance PLATFORM=blank ROUTE=embeddings
+  #
+  # Needs the credentials slice: the gateway signs the upstream Bedrock call,
+  # so without an identity every probe fails at the upstream rather than at
+  # anything this workspace controls.
+  conformance:
+    desc: Probe a Platform's gateway with real traffic (PLATFORM=<name>, ROUTE=primary)
+    cmds:
+      - bash {{.TASKFILE_DIR}}/conformance/run.sh
+    requires:
+      vars: [PLATFORM]
+
   disable:
     desc: Uninstall ai-platform slice
     cmds:
