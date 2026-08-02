@@ -20,3 +20,20 @@ webhooks:
 networkPolicy:
   enabled: true
   engine: cilium
+
+# The eval runtime ships an Argo WorkflowTemplate, so the chart cannot render
+# without the Argo Workflows CRDs. Those belong to the argo-platform slice, and
+# slices install independently — so enabling it here would make this slice fail
+# on any cluster that has not enabled that one.
+#
+# Failing is the mild part. `helm upgrade` aborts before touching the
+# Deployment, so the freshly built image is loaded onto the nodes and never
+# rolled out: the slice reports an error, and the operator keeps serving
+# whatever code it was already running. Every later verification then reads a
+# cluster the source no longer describes.
+#
+# Turn it on once argo-platform is enabled, if you want to exercise eval
+# gating locally: `task stack:argo-platform:enable`, then reinstall this slice
+# with --set evalRuntime.enabled=true.
+evalRuntime:
+  enabled: false

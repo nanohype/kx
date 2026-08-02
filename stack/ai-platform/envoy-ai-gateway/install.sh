@@ -14,3 +14,8 @@ helm upgrade --install envoy-ai-gateway oci://docker.io/envoyproxy/ai-gateway-he
   --version 1.0.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
+
+# The GatewayClass the operator's Gateways name. Neither chart ships one, so
+# without this every ModelGateway reconciles into a Gateway no controller
+# claims. See gatewayclass.yaml.
+kubectl apply -f "${SCRIPT_DIR}/gatewayclass.yaml"
