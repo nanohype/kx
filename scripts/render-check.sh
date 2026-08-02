@@ -14,7 +14,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # - gateway-api-crds is kubectl-apply only
 # - druid renders via helm template → filter → kubectl apply (Helm v4 dropped
 #   the exec post-renderer); its chart is validated in eks-gitops CI, where it lives
-SKIP=("stack/core/gateway-api-crds" "stack/data/druid")
+# - bedrock-credentials installs no chart: it applies a Kyverno policy and an
+#   aggregated ClusterRole, both plain manifests the yaml lint already covers
+SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
 
 # Register every chart repo the scripts reference, once, then refresh
 # exactly those (a bare `helm repo update` would also touch unrelated repos
