@@ -25,6 +25,16 @@ tasks:
       - bash {{.TASKFILE_DIR}}/envoy-ai-gateway/install.sh
       - bash {{.TASKFILE_DIR}}/operator/install.sh
 
+  credentials:
+    desc: Give local gateways an AWS identity (needs the security slice for Kyverno)
+    cmds:
+      - bash {{.TASKFILE_DIR}}/bedrock-credentials/install.sh
+
+  credentials:verify:
+    desc: Assert every gateway data plane carries the local Bedrock credentials
+    cmds:
+      - bash {{.TASKFILE_DIR}}/bedrock-credentials/verify.sh
+
   disable:
     desc: Uninstall ai-platform slice
     cmds:
