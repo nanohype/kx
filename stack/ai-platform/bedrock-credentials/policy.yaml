@@ -1,0 +1,112 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: inject-local-bedrock-credentials
+  annotations:
+    policies.kyverno.io/title: Inject Local Bedrock Credentials
+    policies.kyverno.io/category: AI Platform
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/subject: Pod, Secret
+    policies.kyverno.io/description: >-
+      On a cluster the eks-agent-platform operator reconciles, each tenant's
+      model gateway reaches Bedrock as the tenant: the operator points the
+      Platform's EnvoyProxy at the tenant ServiceAccount, which carries a Pod
+      Identity association to the tenant IAM role, and the BackendSecurityPolicy
+      names only a region — meaning the ambient credential chain. kind has no
+      Pod Identity, so that chain resolves to nothing and every Bedrock call
+      fails with AccessDeniedException.
+
+      This supplies the credentials the chain would have found. The Secret is
+      cloned into each tenant namespace as it appears, and referenced from the
+      envoy container of that namespace's gateway data plane — the container
+      that evaluates the chain, since Envoy AI Gateway signs AWS requests in
+      Envoy itself rather than in a sidecar.
+
+      It exists because the alternative does not survive. The data plane is
+      generated: Envoy Gateway renders the Deployment from the EnvoyProxy the
+      operator renders, so a patch to either is reconciled away. Mutating at
+      admission reapplies itself every time the pod is recreated, and asks
+      nothing of the operator — which is identical here and on EKS.
+
+      Local only. Nothing installs this on a real cluster, where the identity
+      it stands in for actually exists.
+spec:
+  admission: true
+  # Mutation applies as pods are admitted. There is no value in scanning
+  # existing pods: a running gateway that predates the Secret is replaced by
+  # Envoy Gateway on the next reconcile and picks the mutation up then.
+  background: false
+  emitWarning: false
+  # Fail open. This policy only ever ADDS an envFrom reference and clones a
+  # Secret; it never rejects. A local-credentials shortcut must not be able to
+  # block pod admission in the namespaces that run the platform's own data
+  # plane — if Kyverno cannot evaluate it, the pod is still admitted and the
+  # symptom is the AccessDeniedException this existed to prevent, on that one
+  # gateway, rather than a cluster that will not schedule.
+  #
+  # Set under webhookConfiguration, the field GetFailurePolicy() consults first:
+  # the top-level spec.failurePolicy is deprecated, and leaving this path unset
+  # defaults the effective policy to Fail.
+  webhookConfiguration:
+    failurePolicy: Ignore
+  rules:
+    # ── Clone the credentials into each tenant namespace as it appears ────────
+    #
+    # envFrom.secretRef is namespace-local, so the Secret has to exist beside
+    # every gateway. Generating it on namespace creation means a tenant vended
+    # after setup is covered without re-running anything — the case a one-shot
+    # script gets wrong precisely because nobody re-runs it.
+    #
+    # synchronize keeps the copies current: rotating the source Secret updates
+    # every tenant, and deleting it removes them.
+    - name: clone-bedrock-credentials
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+              names:
+                - tenants-*
+      generate:
+        apiVersion: v1
+        kind: Secret
+        name: kx-bedrock-credentials
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        clone:
+          namespace: kyverno
+          name: kx-bedrock-credentials
+
+    # ── Point the gateway's envoy container at it ─────────────────────────────
+    #
+    # The label set is Envoy Gateway's own, read off a running data plane rather
+    # than assumed: managed-by identifies the renderer and component
+    # distinguishes the proxy from the control plane. The container is named
+    # envoy; shutdown-manager sits beside it and needs nothing.
+    #
+    # optional: true is what keeps this from being a footgun. A tenant namespace
+    # that has no Secret — someone ran the gateway slice without the credentials
+    # slice — gets a gateway that starts and fails on the Bedrock call, which is
+    # legible. Without it the pod would sit in CreateContainerConfigError and
+    # the cause would be three layers from the symptom.
+    - name: mount-bedrock-credentials
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - tenants-*
+              selector:
+                matchLabels:
+                  app.kubernetes.io/managed-by: envoy-gateway
+                  app.kubernetes.io/component: proxy
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - (name): envoy
+                envFrom:
+                  - secretRef:
+                      name: kx-bedrock-credentials
+                      optional: true
