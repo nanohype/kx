@@ -34,6 +34,19 @@ kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 
 kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl apply -f -
 
+# Helm installs a chart's crds/ on first install and never touches them again
+# on upgrade. So a CRD added after this cluster's first install never arrives,
+# and the operator watches a kind the API server has never heard of — which
+# blocks that controller's cache sync forever. The controller never starts, its
+# CRs keep reporting whatever status they last had, and nothing in the cluster
+# says why. That is how a Platform sat Ready two generations stale with no
+# NetworkPolicy in its namespace.
+#
+# Applying them before the upgrade is what makes `task stack:ai-platform:enable`
+# idempotent across a chart that grows.
+echo "Applying CRDs (helm does not upgrade them) ..."
+kubectl apply -f "${OPERATOR_REPO}/charts/operator/crds/"
+
 helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
   --namespace eks-agent-platform \
   --values "${SCRIPT_DIR}/values.yaml" \

@@ -1,3 +1,21 @@
+# Kyverno ships with no rights over Secrets, so the clone rule below is
+# rejected at admission — "requires permissions list,get for resource v1/Secret"
+# — and the whole policy fails to install. Its controllers pick up rights from
+# ClusterRoles carrying these aggregation labels.
+#
+# Scoped to Secrets because that is the only resource this slice generates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:bedrock-credentials-secrets
+  labels:
+    rbac.kyverno.io/aggregate-to-admission-controller: "true"
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -18,9 +36,10 @@ metadata:
 
       This supplies the credentials the chain would have found. The Secret is
       cloned into each tenant namespace as it appears, and referenced from the
-      envoy container of that namespace's gateway data plane — the container
-      that evaluates the chain, since Envoy AI Gateway signs AWS requests in
-      Envoy itself rather than in a sidecar.
+      ai-gateway-extproc sidecar of that namespace's gateway data plane — the
+      container that evaluates the chain, since Envoy AI Gateway resolves
+      credentials and SigV4-signs inside its external processor rather than in
+      Envoy.
 
       It exists because the alternative does not survive. The data plane is
       generated: Envoy Gateway renders the Deployment from the EnvoyProxy the
@@ -104,6 +123,26 @@ spec:
       mutate:
         patchStrategicMerge:
           spec:
+            # The extproc sidecar is what signs. Envoy AI Gateway resolves the
+            # AWS credential chain and SigV4-signs the upstream Bedrock call
+            # inside its external processor, not inside Envoy — so this is the
+            # container that has to see the credentials. It is declared as a
+            # native sidecar, which means it lives under initContainers even
+            # though it runs for the life of the pod.
+            #
+            # Get this wrong and nothing looks broken: the pod is 3/3, the
+            # Gateway reports Programmed, and every model call returns 500 with
+            # "cannot retrieve AWS credentials ... no EC2 IMDS role found" from
+            # a container nobody was looking at.
+            initContainers:
+              - (name): ai-gateway-extproc
+                envFrom:
+                  - secretRef:
+                      name: kx-bedrock-credentials
+                      optional: true
+            # Envoy keeps them too. It needs no AWS identity for the Bedrock
+            # call, but leaving the reference here costs nothing and covers a
+            # future aigw release moving signing back into the proxy.
             containers:
               - (name): envoy
                 envFrom:
