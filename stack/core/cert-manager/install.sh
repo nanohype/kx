@@ -10,6 +10,6 @@ kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -
 
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
-  --version v1.21.0 \
+  --version v1.21.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
