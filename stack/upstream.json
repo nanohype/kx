@@ -1,9 +1,9 @@
 {
-  "_README": "kx mirrors the eks-gitops addon catalog. `scripts/mirror-check.py check` compares every chart pinned here against eks-gitops at `upstream.ref`, in both directions, and fails on any undeclared difference. Move the pin with `sync`; ask whether it has fallen behind with `freshness` (scheduled, never a merge gate). Divergence is fine and must be declared below with a reason \u2014 an entry here is a decision on the record, an omission is not. `kind` is one of: gitops-only (upstream pins it, kx deliberately does not), kx-only (kx pins it, upstream deliberately does not), version (both pin it, at deliberately different versions).",
+  "_README": "kx mirrors the eks-gitops addon catalog. `scripts/mirror-check.py check` compares every chart pinned here against eks-gitops at `upstream.ref`, in both directions, and fails on any undeclared difference. Move the pin with `sync`; ask whether it has fallen behind with `freshness` (scheduled, never a merge gate). Divergence is fine and must be declared below with a reason — an entry here is a decision on the record, an omission is not. `kind` is one of: gitops-only (upstream pins it, kx deliberately does not), kx-only (kx pins it, upstream deliberately does not), version (both pin it, at deliberately different versions).",
   "upstream": {
     "repository": "nanohype/eks-gitops",
     "path": "applicationsets",
-    "ref": "1351e1e0a6b18133ba6cfcf672a8065d113a31c8"
+    "ref": "eb22981a967f449ea9f9061da69e1711cab03c30"
   },
   "divergences": [
     {
@@ -24,17 +24,7 @@
     {
       "chart": "karpenter",
       "kind": "gitops-only",
-      "reason": "Provisions EC2 capacity in response to pending pods. kind nodes are containers on one host \u2014 there is nothing to provision."
-    },
-    {
-      "chart": "gpu-operator",
-      "kind": "gitops-only",
-      "reason": "Drivers and device plugins for GPU nodes. kind has no GPUs."
-    },
-    {
-      "chart": "k8s-dra-driver-gpu",
-      "kind": "gitops-only",
-      "reason": "Dynamic Resource Allocation driver for GPUs, paired with gpu-operator. Same reason: no GPUs on kind."
+      "reason": "Provisions EC2 capacity in response to pending pods. kind nodes are containers on one host — there is nothing to provision."
     },
     {
       "chart": "kube-state-metrics",
@@ -49,7 +39,7 @@
     {
       "chart": "argo-cd",
       "kind": "kx-only",
-      "reason": "eks-gitops is ArgoCD's configuration, so it assumes an ArgoCD that already exists \u2014 the cluster factory installs it during bootstrap. kx has no bootstrap, so it installs ArgoCD itself and leaves it idle: present to work against, not owning the addon lifecycle."
+      "reason": "eks-gitops is ArgoCD's configuration, so it assumes an ArgoCD that already exists — the cluster factory installs it during bootstrap. kx has no bootstrap, so it installs ArgoCD itself and leaves it idle: present to work against, not owning the addon lifecycle."
     },
     {
       "chart": "trust-manager",
@@ -64,12 +54,27 @@
     {
       "chart": "minio",
       "kind": "kx-only",
-      "reason": "S3-compatible object storage standing in for S3, including as velero's backup target \u2014 same Velero chart on both sides, different backend."
+      "reason": "S3-compatible object storage standing in for S3, including as velero's backup target — same Velero chart on both sides, different backend."
     },
     {
       "chart": "nats",
       "kind": "kx-only",
       "reason": "Local queue and stream substrate standing in for SQS and Kinesis, so a tenant declaring a queue datastore has something to bind to."
+    }
+  ],
+  "_crdInstallers_README": "eks-gitops installs some CRDs from a dedicated Application whose source is a git directory rather than a chart. Those carry no `chart` key, so the version comparison cannot see them — which is how kx went on fetching the argoproj.io CRDs from raw.githubusercontent.com at install time while every check reported a match. kx has no ArgoCD and no sync waves, so it reaches the same end by a different mechanism; each installer upstream must name that mechanism here. An entry is a decision on the record.",
+  "crdInstallers": [
+    {
+      "appset": "argo-workflows-crds.yaml",
+      "kinds": "argoproj.io",
+      "mechanism": "stack/argo-platform/argo-workflows/values.yaml sets crds.full: false, so the chart renders all eight CRDs itself.",
+      "why": "The chart default (crds.full: true) renders NO CRD manifests and instead applies them from raw.githubusercontent.com, making a local cluster bring-up depend on GitHub. eks-gitops solves the same problem with a separate Application at an earlier sync wave; kx has no waves, and crds.install: false alone would leave the cluster with no argoproj.io CRDs at all."
+    },
+    {
+      "appset": "gateway-api-crds.yaml",
+      "kinds": "gateway.networking.k8s.io",
+      "mechanism": "stack/core/gateway-api-crds/install.sh applies the CRDs by server-side apply before cilium installs.",
+      "why": "Cilium serves Gateway API locally and will not start with gatewayAPI.enabled when the CRDs are absent, so kx already ordered this by hand. Recorded here so the ordering is a declared answer rather than a coincidence. NOTE a real divergence: eks-gitops installs the STANDARD channel (config/crd/standard) and kx installs the EXPERIMENTAL one, because local development exercises routes the standard channel does not define. That also forces server-side apply — HTTPRoute's experimental schema exceeds the 256KB last-applied-configuration annotation limit."
     }
   ]
 }

@@ -9,6 +9,6 @@ helm repo update cilium >/dev/null
 
 helm upgrade --install cilium cilium/cilium \
   --namespace kube-system \
-  --version 1.19.5 \
+  --version 1.19.6 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait

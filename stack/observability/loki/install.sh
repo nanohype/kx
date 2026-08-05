@@ -10,6 +10,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install loki grafana/loki \
   --namespace monitoring \
-  --version 7.0.0 \
+  --version 7.2.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait

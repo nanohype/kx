@@ -179,6 +179,50 @@ def stale_divergences(declared, upstream, local):
     return stale
 
 
+def crd_installers(gitops):
+    """{appset filename: (repo, path, revision)} for every CRD-only Application.
+
+    These carry NO `chart` key — they are git sources pointing at a directory of
+    CRD manifests — so upstream_pins() cannot see them and neither direction of
+    compare() has ever walked them. That blind spot is not hypothetical: the
+    argo-workflows CRD installer exists upstream precisely because the chart's
+    default fetches its CRDs from raw.githubusercontent.com at sync time, and kx
+    went on doing exactly that while every version comparison reported a match.
+
+    A CRD installer is a decision about how a kind reaches the cluster, and kx
+    has to make the same decision by a different mechanism (it has no ArgoCD and
+    no sync waves). So each one must be answered in stack/upstream.json rather
+    than silently inherited or silently ignored.
+    """
+    appsets = gitops / "applicationsets"
+    found = {}
+    for path in sorted(appsets.glob("*.yaml")):
+        with path.open() as fh:
+            for doc in yaml.safe_load_all(fh):
+                for node in walk(doc):
+                    repo, src = node.get("repoURL"), node.get("path")
+                    if not isinstance(repo, str) or not isinstance(src, str):
+                        continue
+                    if "chart" in node or "{{" in src:
+                        continue
+                    if "crd" not in src.lower():
+                        continue
+                    found[path.name] = (repo, src, node.get("targetRevision"))
+    return found
+
+
+def unanswered_crd_installers(manifest, gitops):
+    """CRD installers upstream that stack/upstream.json does not account for."""
+    answered = {e["appset"]: e for e in manifest.get("crdInstallers", [])}
+    upstream = crd_installers(gitops)
+    if not upstream:
+        die("read no CRD installers out of the catalog — the parser and the "
+            "catalog disagree, so this check is asserting nothing")
+    missing = [(name, meta) for name, meta in sorted(upstream.items()) if name not in answered]
+    stale = [name for name in sorted(answered) if name not in upstream]
+    return missing, stale
+
+
 def compare(manifest, gitops):
     """(mismatched, missing_here, extra_here, stale) after applying declared divergences."""
     declared = {d["chart"]: d for d in manifest.get("divergences", [])}
@@ -208,6 +252,14 @@ def compare(manifest, gitops):
 
 def report(manifest, gitops):
     mismatched, missing_here, extra_here, stale = compare(manifest, gitops)
+    unanswered, stale_installers = unanswered_crd_installers(manifest, gitops)
+
+    for name, (repo, src, rev) in unanswered:
+        print(f"  \u2717 {name}: eks-gitops installs CRDs from {repo} ({src} @ {rev})")
+        print(f"      and stack/upstream.json says nothing about how kx gets those kinds.")
+        print(f"      Add a crdInstallers entry recording the local mechanism.")
+    for name in stale_installers:
+        print(f"  \u2717 {name}: declared in crdInstallers but no longer exists upstream")
 
     for chart, mine, theirs, script in mismatched:
         rel = script.relative_to(ROOT)
@@ -220,7 +272,7 @@ def report(manifest, gitops):
     for chart, why in stale:
         print(f"  ✗ {chart}: stale divergence in stack/upstream.json — {why}")
 
-    return mismatched, missing_here, extra_here, stale
+    return mismatched, missing_here, extra_here, stale, unanswered, stale_installers
 
 
 def cmd_check(manifest):
@@ -229,8 +281,9 @@ def cmd_check(manifest):
         die(f"upstream.ref is {ref}, which is not a commit sha")
 
     gitops = upstream_dir(manifest, ref)
-    mismatched, missing_here, extra_here, stale = report(manifest, gitops)
-    total = len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
+    mismatched, missing_here, extra_here, stale, unanswered, stale_inst = report(manifest, gitops)
+    total = (len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
+             + len(unanswered) + len(stale_inst))
 
     if total:
         print()
@@ -243,15 +296,17 @@ def cmd_check(manifest):
     declared = len(manifest.get("divergences", []))
     print(
         f"mirror-check: {charts} chart(s) match eks-gitops@{ref[:12]} "
-        f"({declared} declared divergence(s))"
+        f"({declared} declared divergence(s), "
+        f"{len(manifest.get('crdInstallers', []))} CRD installer(s) answered)"
     )
 
 
 def cmd_freshness(manifest):
     """Compare against whatever upstream is now, not against the pin."""
     gitops = upstream_dir(manifest, None)
-    mismatched, missing_here, extra_here, stale = report(manifest, gitops)
-    total = len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
+    mismatched, missing_here, extra_here, stale, unanswered, stale_inst = report(manifest, gitops)
+    total = (len(mismatched) + len(missing_here) + len(extra_here) + len(stale)
+             + len(unanswered) + len(stale_inst))
 
     if not total:
         print("mirror-check: kx matches the eks-gitops catalog at its default branch")

@@ -1,5 +1,24 @@
 # argo-workflows — workflow / CI-style execution as DAGs of pods.
 
+# The chart's DEFAULT (crds.full: true) installs no CRD manifests at all. It
+# renders a Job that runs `kubectl apply --server-side -f https://raw.github
+# usercontent.com/...` once per CRD, so bringing the cluster up depends on live
+# GitHub egress at install time. Verified by rendering 1.0.23 three ways:
+#
+#   default            0 CRD manifests, 8 raw.githubusercontent.com URLs
+#   crds.full: false   8 CRD manifests, 0 URLs
+#   crds.install:false 0 CRD manifests, 0 URLs
+#
+# eks-gitops takes the third and installs the CRDs from a separate Application
+# at an earlier sync wave. kx has no ArgoCD and no waves — helm installs this
+# slice directly — so `install: false` here would leave the cluster with no
+# argoproj.io CRDs at all. `full: false` is the local equivalent of the same
+# decision: the CRDs come from the chart that is already on disk, and nothing
+# reaches the network to bring the workflow engine up.
+crds:
+  full: false
+  install: true
+
 controller:
   replicas: 1
   resources:
