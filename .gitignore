@@ -4,3 +4,8 @@
 
 # Local planning notes
 .plans/
+
+# Running the gate scripts under scripts/ leaves this behind. An untracked
+# directory is not harmless here: several checks in this org read
+# `git status --porcelain` to decide whether a tree is clean before acting.
+__pycache__/
