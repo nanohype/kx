@@ -10,6 +10,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
-  --version 85.1.2 \
+  --version 88.2.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
