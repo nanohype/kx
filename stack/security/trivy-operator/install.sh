@@ -10,6 +10,6 @@ kubectl create namespace trivy-system --dry-run=client -o yaml | kubectl apply -
 
 helm upgrade --install trivy-operator aqua/trivy-operator \
   --namespace trivy-system \
-  --version 0.34.0 \
+  --version 0.35.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
