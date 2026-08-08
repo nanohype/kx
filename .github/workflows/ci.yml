@@ -37,6 +37,26 @@ jobs:
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
 
+  chart-provenance:
+    name: Every chart pin is recorded
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Offline half only. Whether a chart went deprecated upstream overnight is
+      # not a function of this commit, and gating merges on it would redden pull
+      # requests that did not cause it — the same reason mirror freshness is
+      # asked on a schedule. chart-provenance.yml asks the live question.
+      #
+      # What is checked here is that every pinned chart has a record and every
+      # record still names a pinned chart, so the live half cannot quietly stop
+      # covering something.
+      - name: Every pin has a provenance record, and can fail
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-chart-deprecation.py
+          python3 scripts/check-chart-deprecation.py --self-test
+
   mirror:
     name: Mirror the eks-gitops catalog
     runs-on: ubuntu-latest
@@ -93,6 +113,7 @@ jobs:
       [
         lint,
         renovate-coverage,
+        chart-provenance,
         mirror,
         render,
       ]

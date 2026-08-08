@@ -3,7 +3,7 @@
   "upstream": {
     "repository": "nanohype/eks-gitops",
     "path": "applicationsets",
-    "ref": "eb22981a967f449ea9f9061da69e1711cab03c30"
+    "ref": "614560ad84ad0461506c4574f50f7e449a7b3c55"
   },
   "divergences": [
     {
@@ -30,6 +30,11 @@
       "chart": "kube-state-metrics",
       "kind": "gitops-only",
       "reason": "Present locally, not as its own chart: kube-prometheus-stack bundles kube-state-metrics and node-exporter as subcharts. Upstream runs it standalone because it has no in-cluster Prometheus to bundle it into."
+    },
+    {
+      "chart": "operator",
+      "kind": "gitops-only",
+      "reason": "The eks-agent-platform operator. Both sides run it; only eks-gitops pins a chart version, because it installs the published chart from GHCR. kx installs the chart straight out of the sibling eks-agent-platform checkout and kind-loads an image it built from that same tree, since the dev image is not published — so there is no version here to compare against 0.6.3. That is the point of the local slice: it exercises the operator in the working tree, which a released artifact cannot. This entry appeared when the pin moved past the commit where eks-gitops started pinning the chart at all, not because either side changed what it does."
     },
     {
       "chart": "kube-prometheus-stack",

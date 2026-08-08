@@ -67,11 +67,15 @@ for script in "$ROOT"/stack/*/*/install.sh; do
   # doesn't survive eval; this script sets it to the slice dir itself.
   assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' || true)"
 
+  # The render is piped into the mount check rather than discarded. A chart that
+  # starts providing a volume a values file already hand-rolls renders two mounts
+  # on one path, which the API server rejects and `helm template` does not — so
+  # exit status alone cannot see it. pipefail (set above) carries either failure.
   if (
     # shellcheck disable=SC2030,SC2034  # consumed by the eval'd block
     SCRIPT_DIR="$(dirname "$script")"
     [[ -n "$assignments" ]] && eval "$assignments"
-    eval "$cmd" >/dev/null
+    eval "$cmd" | python3 "$ROOT/scripts/check-rendered-mounts.py" "$slice"
   ); then
     echo "OK    $slice"
   else

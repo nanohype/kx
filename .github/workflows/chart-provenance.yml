@@ -1,0 +1,45 @@
+name: chart provenance
+# Asks whether the charts this stack pins are still the charts they were pinned
+# for, upstream, right now.
+#
+# Separate from ci.yml for the same reason mirror freshness is. ci.yml checks
+# that every pin has a record, which is a fact about the commit under test.
+# Whether a maintainer deprecated a chart, or handed it to another organisation,
+# has a different answer every day and is not something a pull request caused.
+# Asking it on the blocking path reddens changes that are not at fault.
+#
+# It is also structurally impossible to put here: the merge gate refuses a
+# workflow containing a job it does not watch, and counts a skipped dependency
+# as a failure, so a schedule-only job cannot live in ci.yml.
+#
+# A red run here means: read the upstream notes for whatever it names, decide
+# whether the chart is still the one you want, then either migrate the pin or
+# `python3 scripts/check-chart-deprecation.py --sync` to re-record it.
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Are the pinned charts still what they were?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      # Fails on a `deprecated: true`, and on a chart whose description no longer
+      # matches its record. The second is the one worth having: a chart can be
+      # re-scoped to a different product, or forked away to a different
+      # maintainer, without anyone setting the deprecated flag — and then the pin
+      # keeps resolving while the thing behind it is no longer the same software.
+      - name: Compare every pinned chart against its record
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-chart-deprecation.py --live

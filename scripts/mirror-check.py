@@ -351,7 +351,11 @@ def cmd_sync(manifest):
 
     manifest["upstream"]["ref"] = head
     with MANIFEST.open("w") as fh:
-        json.dump(manifest, fh, indent=2)
+        # ensure_ascii=False is load-bearing. Without it json.dump escapes every
+        # non-ASCII character, so each em-dash in the divergence reasons comes
+        # back as a \\u2014 escape and moving the pin rewrites prose it never
+        # touched — a one-line change arriving as a diff across the whole file.
+        json.dump(manifest, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
 
     print(f"mirror-check: {changed} slice(s) re-pinned; upstream.ref now {head[:12]}")
