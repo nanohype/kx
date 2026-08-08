@@ -27,16 +27,18 @@ singleBinary:
     requests:
       cpu: 100m
       memory: 256Mi
+  # No extraVolumes/extraVolumeMounts here, deliberately. With persistence off
+  # this chart now mounts its own emptyDir at /var/loki, which is exactly the gap
+  # a hand-rolled `data` volume used to fill — loki mkdir'ing the storage and
+  # ruler dirs onto a read-only rootfs and crashing.
+  #
+  # Adding one back is worse than redundant: two volumeMounts on one mountPath in
+  # a single container is rejected outright, so the pod never starts. `helm
+  # template` renders that happily and exits 0, which is why the render gate now
+  # pipes its output through scripts/check-rendered-mounts.py — exit status alone
+  # cannot see it.
   persistence:
     enabled: false   # kx is ephemeral by design
-  # With persistence disabled the chart provides no volume at /var/loki, but loki still tries
-  # to mkdir the storage + ruler dirs on its read-only rootfs and crashes. Provide an emptyDir.
-  extraVolumes:
-    - name: data
-      emptyDir: {}
-  extraVolumeMounts:
-    - name: data
-      mountPath: /var/loki
 
 # Disable the chart's bundled gateway/loki-canary/test components.
 gateway:

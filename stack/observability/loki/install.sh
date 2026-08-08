@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # loki — log aggregation. Single-binary mode for kx.
+#
+# The chart comes from grafana-community, not grafana. The OSS Loki chart moved
+# there, forked at 6.55.0; what is still published at grafana/helm-charts is the
+# Grafana Enterprise Logs chart. That one is not marked deprecated and still
+# installs, so nothing would have reported that the old pin had quietly become a
+# different product — the description was the only field that changed.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
-helm repo update grafana >/dev/null
+helm repo add grafana-community https://grafana-community.github.io/helm-charts >/dev/null 2>&1 || true
+helm repo update grafana-community >/dev/null
 
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
 
-helm upgrade --install loki grafana/loki \
+helm upgrade --install loki grafana-community/loki \
   --namespace monitoring \
-  --version 7.2.0 \
+  --version 18.7.5 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
