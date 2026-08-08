@@ -8,8 +8,8 @@
 #
 # Local: the operator image isn't published, so it's built from the sibling
 # eks-agent-platform checkout and kind-loaded. --disable-aws skips the real
-# IRSA/KMS reconcile (no AWS locally); the webhook cert comes from a
-# self-signed ClusterIssuer via the cert-manager installed in kx core.
+# IAM/KMS reconcile (no AWS locally). The operator serves no admission webhook,
+# so nothing here needs a serving certificate.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
