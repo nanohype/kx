@@ -10,6 +10,6 @@ kubectl create namespace nats --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install nats nats/nats \
   --namespace nats \
-  --version 2.14.0 \
+  --version 2.14.4 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait
