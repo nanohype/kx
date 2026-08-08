@@ -9,12 +9,6 @@ image:
 extraArgs:
   - --disable-aws
 
-# kx core runs cert-manager; provision a self-signed ClusterIssuer for the
-# webhook cert rather than expecting a production issuer.
-webhooks:
-  certManager:
-    installSelfSignedIssuer: true
-
 # kx uses cilium — a vanilla NetworkPolicy can't allow kube-apiserver egress
 # under it, so use the CiliumNetworkPolicy engine.
 networkPolicy:
