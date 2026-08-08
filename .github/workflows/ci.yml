@@ -22,6 +22,21 @@ jobs:
           sudo apt-get install -y -qq shellcheck >/dev/null
           shellcheck scripts/*.sh cluster/*.sh stack/*/*/install.sh
 
+  renovate-coverage:
+    name: Every chart pin is watched
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every chart version in this repo is pinned inside an install.sh, because
+      # explicit install scripts are the point here. Renovate ships no manager
+      # that reads a shell script, so the pins are covered by customManagers in
+      # renovate.json — and a customManager whose regex matches nothing is valid
+      # config watching nothing. renovate-config-validator passes it: the schema
+      # is fine and the pattern never runs against a file.
+      - name: renovate customManagers cover every install.sh pin
+        run: python3 scripts/check-renovate-coverage.py
+
   mirror:
     name: Mirror the eks-gitops catalog
     runs-on: ubuntu-latest
@@ -77,6 +92,7 @@ jobs:
     needs:
       [
         lint,
+        renovate-coverage,
         mirror,
         render,
       ]

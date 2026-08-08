@@ -1,4 +1,38 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>nanohype/.github"]
+  "extends": ["github>nanohype/.github"],
+  "customManagers": [
+    {
+      "description": [
+        "Chart pins in stack/*/*/install.sh. Renovate ships no manager that reads a version out of a shell script, and this repo keeps every pin there by design — explicit install scripts are the point, so the fix is to teach Renovate the shape rather than move the pins.",
+        "Without this, 32 chart versions were watched by nothing. mirror-check.py compares kx against eks-gitops and skips anything declared kx-only in stack/upstream.json, so the seven kx-only charts — argo-cd, cloudnative-pg, ingress-nginx, kube-prometheus-stack, minio, nats, trust-manager — had no currency instrument at all. argo-cd drifted 22 releases and a full chart major before anyone looked.",
+        "One `helm repo add` per file is what lets the URL and the chart be captured separately without a backreference. Renovate's regex engine is RE2, which has none."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": ["/^stack/.+/install\\.sh$/"],
+      "matchStrings": [
+        "helm repo add \\S+ (?<registryUrl>https?://\\S+)[\\s\\S]*?helm upgrade --install \\S+ \\S+/(?<depName>[a-zA-Z0-9._-]+)[\\s\\S]*?--version (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    {
+      "description": "The same pins for charts pulled straight from an OCI registry, where there is no `helm repo add` line and the chart reference is the image path.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^stack/.+/install\\.sh$/"],
+      "matchStrings": [
+        "helm upgrade --install \\S+ oci://(?<depName>\\S+)[\\s\\S]*?--version (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": [
+        "Group the local stack's chart bumps so a slice moves in one PR rather than one per addon, the way the shared preset already groups helm charts elsewhere.",
+        "Deliberately sets nothing but groupName. The preset warns that a consumer's packageRules are appended after its own and later rules win — a local rule setting automerge would defeat the security rule that must stay last. This sets no schedule either: the preset already extends schedule:weekly, and a schedule here would also land on CVE-triggered updates, which are meant to fire at any time."
+      ],
+      "matchManagers": ["custom.regex"],
+      "groupName": "kx-stack-charts"
+    }
+  ]
 }
