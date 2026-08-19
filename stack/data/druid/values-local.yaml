@@ -1,7 +1,7 @@
 # kx overrides for the eks-gitops Druid chart.
 # Merged ON TOP OF the sibling checkout's eks-gitops/catalog/druid/values.yaml at install
 # time (see install.sh; override the path via KX_DRUID_CHART_VALUES).
-# Only the local-friendly deltas live here — pull request to the upstream chart not required.
+# Only the local-friendly deltas live here; the upstream chart is used unmodified.
 
 # Naming — release "ds", hostedId "kx" → resources like `kx-ds-druid-{component}`.
 # (helpers concat `hostedId-Release.Name` for the name root.)
@@ -148,7 +148,7 @@ runtime: |-
 router:
   replicas: 1
   resources:
-    # Bumped from 50m/500m — Druid sizes Jetty pools from "available processors". At low
+    # Druid sizes Jetty pools from "available processors". At low
     # cpu limits the JVM sees 1 CPU and computes a 2-thread pool, which is below the minimum
     # the management proxy servlet needs (3). 2 CPUs is the floor.
     requests: { cpu: 200m,  memory: 384Mi }

@@ -39,8 +39,7 @@ kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl a
 # and the operator watches a kind the API server has never heard of — which
 # blocks that controller's cache sync forever. The controller never starts, its
 # CRs keep reporting whatever status they last had, and nothing in the cluster
-# says why. That is how a Platform sat Ready two generations stale with no
-# NetworkPolicy in its namespace.
+# says why: a Platform can read Ready while its namespace has no NetworkPolicy.
 #
 # Applying them before the upgrade is what makes `task stack:ai-platform:enable`
 # idempotent across a chart that grows.

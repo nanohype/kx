@@ -30,10 +30,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROFILE="${AWS_PROFILE:-default}"
-# us-east-1, and deliberately not the substrate's region. The estate pins every
-# venture account to one home region with the `guardrail-region-lock` SCP —
-# stxkxs/landing-zone, iac/components/aws/organization/main.tf, attached to the
-# Ventures OU. us-east-1 is the anchor by design, not by accident: CloudFront's
+# Defaults to us-east-1, overridable with AWS_REGION. This is the region the
+# gateway signs the upstream Bedrock call for, so it has to be one the profile's
+# account actually allows Bedrock in. An account with a region-lock policy
+# returns AccessDeniedException for any other region — indistinguishable from
+# the empty credential chain this slice exists to fill. us-east-1 is the anchor by design, not by accident: CloudFront's
 # ACM certificates must be issued there regardless, so anchoring anywhere else
 # would need a permanent carve-out for the one thing every venture does. The
 # `home_region` variable carries the full reasoning — read it there rather than
@@ -41,9 +42,7 @@ PROFILE="${AWS_PROFILE:-default}"
 #
 # A gateway signing for any other region gets AccessDeniedException: the exact
 # error this slice exists to remove, arriving from the guardrail instead of from
-# the empty credential chain. eks-agent-platform's substrate is still us-west-2,
-# so this is the one value kx does not mirror. That gap closes when the substrate
-# moves to the home region, not by widening the SCP.
+# the empty credential chain.
 REGION="${AWS_REGION:-us-east-1}"
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"

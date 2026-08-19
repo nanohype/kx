@@ -7,8 +7,9 @@ version: '3'
 #   task down                        delete cluster
 #   task reset                       down + up
 #   task status                      nodes + pods + slice install status
-#   task stack:enable <slice>        install an opt-in slice (or use task stack:enable:<slice>)
-#   task stack:disable <slice>       uninstall an opt-in slice
+#   task stack:<slice>:enable        install an opt-in slice
+#   task stack:<slice>:disable       uninstall an opt-in slice
+#   task stack:all:enable            install every opt-in slice (skips druid)
 #   task port-forward:argocd         expose ArgoCD UI on localhost:30080
 #   task port-forward:grafana        expose Grafana UI on localhost:30030 (after observability is enabled)
 
@@ -49,7 +50,7 @@ tasks:
       - task: stack:status
 
   port-forward:argocd:
-    desc: ArgoCD UI on https://localhost:30080
+    desc: ArgoCD UI on http://localhost:30080
     cmds:
       - kubectl -n argocd port-forward svc/argocd-server 30080:443
 

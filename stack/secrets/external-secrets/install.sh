@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# external-secrets — same chart eks-gitops uses; locally you'll create SecretStores with
+# external-secrets — same chart eks-gitops uses; locally SecretStores use
 # the `kubernetes` or `fake` provider rather than the AWS Secrets Manager provider.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

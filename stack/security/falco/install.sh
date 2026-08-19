@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # falco — runtime security monitoring via eBPF
-# NOTE: may not load kernel module on all Docker hosts; modern-bpf works on most modern Linux kernels.
+# The modern_ebpf driver needs a kernel with CO-RE BPF support — the Docker Desktop and OrbStack VMs provide one.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

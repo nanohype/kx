@@ -18,7 +18,7 @@ repos could pull the same version from different repositories and it would pass.
 Recording the repo here closes that from this side: changing where a chart comes
 from now requires re-recording it deliberately.
 
-That matters most for the seven charts mirror-check deliberately does not cover
+That matters most for the charts mirror-check deliberately does not cover
 at all — the kx-only slices declared in stack/upstream.json. Nothing upstream
 watches those. This does.
 
@@ -31,7 +31,7 @@ Split by what is and is not a function of this commit:
       `deprecated: true`, or a description that no longer matches its record.
 
 The description comparison is the one that earns its keep. `deprecated: true` is
-loud. The failure that prompted this was not: the OSS Loki chart moved to
+loud. A silently re-scoped chart is not: the OSS Loki chart moved to
 grafana-community and the chart left behind was re-scoped to Grafana Enterprise
 Logs, with no deprecation flag ever set. The pin resolved, the chart installed,
 the render gate stayed green. The description was the only field that moved.

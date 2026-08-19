@@ -4,7 +4,7 @@ You're an AI client (or the author of one) about to run a chart locally before d
 
 ## What this repo gives you
 
-A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [`eks-gitops`](../eks-gitops/). Chart shapes match production EKS, so workloads developed against kx deploy unchanged to a real cluster.
+A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [`eks-gitops`](https://github.com/nanohype/eks-gitops). Chart shapes match production EKS, so workloads developed against kx deploy unchanged to a real cluster.
 
 Use it to:
 
@@ -38,7 +38,7 @@ kx is the **mirror** of `eks-gitops`. Cloud-portable addons install from the sam
 - **Identity**: kx doesn't run IRSA. Pods that expect AWS credentials get them via mounted env vars or `~/.aws/credentials` — `aws.platformRoleArn` is set to `""` in local dev values, omitting the SA annotation entirely.
 - **Druid post-renderer**: `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) unmodified through a post-renderer that strips EKS-only resources (Karpenter `NodePool`/`EC2NodeClass`, `ExternalSecret`) and EKS node-selector labels.
 
-If a chart works under kx, it should work on a real EKS cluster after the IRSA annotation is plumbed in.
+A chart that runs under kx runs on EKS once the tenant ServiceAccount carries its Pod Identity association.
 
 ## Add an addon to the local stack
 
@@ -66,7 +66,7 @@ The chart's `aws.platformRoleArn: ""` in local-dev values means the conditional 
 The `eks-agent-platform` operator can run on kx. Install it via the operator's Helm chart:
 
 ```sh
-helm install eks-agent-platform /path/to/eks-agent-platform/charts/operator/ -n eks-agent-platform --create-namespace
+task stack:ai-platform:enable   # builds the operator image from the sibling checkout, kind-loads it, applies the CRDs and installs the chart with kx's values
 kubectl apply -f /path/to/<app>/platform.yaml
 ```
 

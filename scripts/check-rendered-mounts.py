@@ -9,10 +9,9 @@ the workload, the rollout wedges and the old pod keeps serving, which is worse
 because nothing looks broken.
 
 The way this surfaces in practice is a chart growing a volume a values file was
-already hand-rolling. Loki did exactly that: with persistence off the chart
-started mounting its own emptyDir at /var/loki, which is what the local values
-had been supplying for itself, and the two collided. Rendering stayed green
-through the whole thing.
+already hand-rolling. Loki is the standing case: with persistence off the chart mounts its own
+emptyDir at /var/loki, so a values file supplying a volume on that path renders
+two mounts on one path and the render stays green.
 
     helm template ... | check-rendered-mounts.py <label>
     check-rendered-mounts.py --self-test

@@ -7,7 +7,10 @@
 # the console reaches this through ingress on :80. If that binding is ever
 # widened, these become a credential on the local network, so change them in the
 # same edit rather than after it.
-# Console: http://minio.kx.local (or kubectl port-forward svc/minio-console 9001:9001)
+# the console is reached by port-forward, not published. If that binding is ever
+# widened, these become a credential on the local network, so change them in the
+# same edit rather than after it.
+# Console: kubectl port-forward -n minio svc/minio-console 9001:9001
 
 mode: standalone
 

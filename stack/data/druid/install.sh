@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Apache Druid for kx — uses your eks-gitops/catalog/druid chart unmodified, with a local
+# Apache Druid for kx — runs the eks-gitops/catalog/druid chart unmodified, with a local
 # filter (post-renderer.sh) that strips EKS-only resources before kubectl apply.
 #
 # Why kubectl apply instead of `helm upgrade --install`:
 #   Helm v4 dropped the arbitrary-executable --post-renderer flag in favor of a plugin model.
-#   Rather than ship a helm plugin, we render → filter → apply. We lose `helm history` for druid,
+#   Rather than ship a helm plugin, this renders → filters → applies. `helm history` is
+#   unavailable for druid,
 #   but disable is just `kubectl delete ns druid` (which sweeps CNPG cluster + all resources).
 #
 # Heaviest single addition to kx. Allow 5–10 minutes on first install.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gateway API CRDs (standard channel).
+# Gateway API CRDs (experimental channel).
 # Installed out-of-band so Cilium's gatewayAPI feature can register its controller against them
 # and so any workload that references HTTPRoute / Gateway / GatewayClass applies cleanly.
 # Upstream: https://github.com/kubernetes-sigs/gateway-api
