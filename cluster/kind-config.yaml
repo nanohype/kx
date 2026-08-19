@@ -36,18 +36,30 @@ nodes:
     labels:
       workload: system
       ingress-ready: "true"
+    # listenAddress is 0.0.0.0 by default, which publishes each of these on every
+    # interface the workstation has — so on shared wifi the cluster's ingress,
+    # Grafana and the ArgoCD UI are reachable by anyone on the network. Nothing
+    # here is authenticated well enough for that: MinIO ships minioadmin/minioadmin
+    # and Grafana ships admin, both deliberately, because this is a local
+    # workspace. Those defaults are only defensible while the ports are loopback,
+    # so the binding is what makes the credentials safe rather than the other way
+    # round. Bind explicitly; do not rely on the default.
     extraPortMappings:
       - containerPort: 80
         hostPort: 80
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 443
         hostPort: 443
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 30030
         hostPort: 30030
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 30080
         hostPort: 30080
+        listenAddress: "127.0.0.1"
         protocol: TCP
 
   - role: worker

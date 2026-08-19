@@ -26,6 +26,9 @@ grafana:
     nodePort: 30030
   persistence:
     enabled: false
+  # Deliberate, and safe only because hostPort 30030 is bound to 127.0.0.1 in
+  # cluster/kind-config.yaml. Grafana is a NodePort, so the binding is the only
+  # thing between this password and anyone on the same wifi.
   adminPassword: admin
 
 prometheus:

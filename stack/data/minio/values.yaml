@@ -2,7 +2,11 @@
 # S3-compatible object storage. Used as the velero backend, and available to any project that
 # needs S3 semantics locally (replaces what S3 buckets do in eks-gitops).
 #
-# Default credentials (local-only): minioadmin / minioadmin
+# Default credentials: minioadmin / minioadmin. Deliberate, and safe only because
+# the cluster's host ports are bound to 127.0.0.1 in cluster/kind-config.yaml —
+# the console reaches this through ingress on :80. If that binding is ever
+# widened, these become a credential on the local network, so change them in the
+# same edit rather than after it.
 # Console: http://minio.kx.local (or kubectl port-forward svc/minio-console 9001:9001)
 
 mode: standalone
