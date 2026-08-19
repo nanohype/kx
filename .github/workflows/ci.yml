@@ -135,6 +135,13 @@ jobs:
 
       # Runs before the stack is validated, so a gate that has stopped rejecting
       # fails here rather than reporting a green stack it never checked.
+      # The producer, proven before the consumer. render-check.sh feeds the schema
+      # gate its input, so an extraction that quietly lifted the wrong command
+      # would hand that gate a clean verdict over something the installer never
+      # runs — a tested consumer over an unproven producer.
+      - name: Prove the render extraction still lifts the right command
+        run: ./scripts/render-check.sh --self-test
+
       - name: Prove the schema gate still rejects
         run: |
           pip install --quiet pyyaml
