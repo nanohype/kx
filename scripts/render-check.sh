@@ -90,6 +90,19 @@ fi
 #   aggregated ClusterRole, both plain manifests the yaml lint already covers
 SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
 
+# An unmatched glob expands to the literal pattern, so every consumer below would
+# read a path that does not exist and fail on whichever tool opened it first.
+# That direction is safe by accident: it depends on those tools erroring rather
+# than skipping, and a consumer that skipped would report a clean render over no
+# slices. Assert the corpus before anything reads it.
+shopt -s nullglob
+scripts=("$ROOT"/stack/*/*/install.sh)
+shopt -u nullglob
+if [[ ${#scripts[@]} -eq 0 ]]; then
+  echo "FAIL  no install.sh under stack/*/*/ — refusing to report a clean render over no slices."
+  exit 2
+fi
+
 # Register every chart repo the scripts reference, once, then refresh
 # exactly those (a bare `helm repo update` would also touch unrelated repos
 # in the runner's helm config).
@@ -97,11 +110,11 @@ repos=()
 while read -r line; do
   eval "$line" >/dev/null 2>&1 || true
   repos+=("$(awk '{print $4}' <<<"$line")")
-done < <(grep -h '^helm repo add ' "$ROOT"/stack/*/*/install.sh | sort -u)
+done < <(grep -h '^helm repo add ' "${scripts[@]}" | sort -u)
 helm repo update "${repos[@]}" >/dev/null
 
 fail=0
-for script in "$ROOT"/stack/*/*/install.sh; do
+for script in "${scripts[@]}"; do
   slice="${script#"$ROOT"/}"
   slice="${slice%/install.sh}"
   for s in "${SKIP[@]}"; do
