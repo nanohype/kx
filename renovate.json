@@ -33,6 +33,18 @@
       ],
       "matchManagers": ["custom.regex"],
       "groupName": "kx-stack-charts"
+    },
+    {
+      "description": [
+        "Cilium moves alone, and it does not move ahead of the catalog. eks-gitops ungroups it for reasons that are half local: a CNI minor cannot be reviewed, staged or reverted independently once it is inside a batch, and this is the one chart every pod's networking depends on. The other half of its reasoning — a second pin in landing-zone's cluster-bootstrap, and Cilium's rule that upgrades go consecutive-minor with the newest patch first — does not apply here, because kind installs Cilium straight from this install.sh and there is no second pin to skew against.",
+        "The reason that is kx's alone is the mirror. This workspace exists to validate against the shape eks-gitops actually ships, so bumping a chart the catalog deliberately holds does not merely risk a broken kind cluster — it breaks what kx is for. Without this rule cilium rides the kx-stack-charts group, and the next scheduler tick would have carried 1.19.6 to 1.20.0 alongside seven unrelated charts, past a hold encoded upstream in eks-gitops#207. mirror-check would have caught the divergence afterwards, but the reason would be gone and someone would re-derive it from scratch, which is the condition #207 exists to end.",
+        "dependencyDashboardApproval rather than enabled:false. The update stays on the Dependency Dashboard with a checkbox, visible and releasable the moment the catalog moves. Disabling the package makes the update silently stop existing, which is a worse failure than holding it in the open.",
+        "This rule is placed after the grouping rule on purpose: a consumer's packageRules are appended after the preset's and later rules win, which is what lets groupName: null pull cilium back out of a group set above."
+      ],
+      "matchDatasources": ["helm"],
+      "matchPackageNames": ["cilium"],
+      "groupName": null,
+      "dependencyDashboardApproval": true
     }
   ]
 }
