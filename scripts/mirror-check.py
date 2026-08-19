@@ -117,6 +117,12 @@ def upstream_pins(gitops):
         die(f"{appsets} does not exist — is EKS_GITOPS_DIR really an eks-gitops checkout?")
 
     pins = {}
+    # Charts seen only in a shape this parser skips. A skip is correct — a
+    # templated pin resolves from the list generator, and a branch-tracking
+    # source has no version to compare — but a chart that appears in NO other
+    # shape leaves the comparison silently smaller than upstream's catalog, and
+    # the verdict is a count over whatever survived. Recorded here, checked below.
+    skipped = {}
     for path in sorted(appsets.glob("*.yaml")):
         with path.open() as fh:
             for doc in yaml.safe_load_all(fh):
@@ -126,9 +132,11 @@ def upstream_pins(gitops):
                         continue
                     version = node.get("chartVersion") or node.get("targetRevision")
                     if not isinstance(version, str) or "{{" in version:
+                        skipped.setdefault(chart, "templated version")
                         continue
                     version = version.strip()
                     if version in ("main", "HEAD"):
+                        skipped.setdefault(chart, f"tracks {version}")
                         continue
                     if chart in pins and pins[chart] != version:
                         die(
@@ -138,6 +146,14 @@ def upstream_pins(gitops):
                     pins[chart] = version
     if not pins:
         die(f"read no chart pins out of {appsets} — the parser and the catalog disagree")
+    unresolved = {c: why for c, why in skipped.items() if c not in pins}
+    if unresolved:
+        for chart, why in sorted(unresolved.items()):
+            print(f"mirror-check: {chart} appears upstream only as {why} — "
+                  f"no version to compare against", file=sys.stderr)
+        die(f"{len(unresolved)} upstream chart(s) carry no comparable version. The "
+            "comparison would be a count over the ones that happened to parse.")
+
     return pins
 
 
