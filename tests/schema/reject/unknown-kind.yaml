@@ -1,0 +1,9 @@
+# No CRD defines this. It must be an ERROR, not a skip. This is the fixture the
+# mutation test flips: with -ignore-missing-schemas it becomes Skipped: 1 and
+# exit 0, which is the defect the gate exists to prevent.
+apiVersion: kx.test/v1
+kind: Sprocket
+metadata:
+  name: undefined-kind
+spec:
+  anything: true

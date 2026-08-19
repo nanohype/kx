@@ -1,0 +1,6 @@
+apiVersion: kx.test/v1
+kind: Widget
+metadata:
+  name: good
+spec:
+  size: 3

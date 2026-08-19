@@ -1,0 +1,8 @@
+# size must be an integer. Rejected by the CRD-derived schema, which is the
+# whole point: `helm template` renders this happily.
+apiVersion: kx.test/v1
+kind: Widget
+metadata:
+  name: bad-type
+spec:
+  size: "quite large"

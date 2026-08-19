@@ -23,6 +23,18 @@
         "helm upgrade --install \\S+ oci://(?<depName>\\S+)[\\s\\S]*?--version (?<currentValue>\\S+)"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "description": [
+        "kubeconform is fetched by release URL in ci.yml, not by `uses:`, so neither the github-actions manager nor the chart regexes above can see it. Left unwatched it would be the same shape this repo already fixed once: a version pinned somewhere no instrument looks, drifting until someone happens to read the line.",
+        "It is the schema gate's only external binary, and a gate whose validator silently ages is worse than no gate, because the green tick keeps arriving."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.yml$/"],
+      "matchStrings": [
+        "https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/(?<currentValue>v[0-9][^/]*)/"
+      ],
+      "datasourceTemplate": "github-releases"
     }
   ],
   "packageRules": [
