@@ -26,6 +26,16 @@ reason per entry, so "kx runs kube-prometheus-stack because the OTLP waist
 needs a cluster the kind workspace doesn't have" is a decision on the record
 rather than an omission indistinguishable from one.
 
+What is compared is the chart PIN, not the chart VALUES. That scope is
+deliberate — kx must not copy values that assume IRSA, ENI or an NLB — but it
+is narrower than "kx matches the catalog" sounds, and the gap is real: upstream
+can change resource bounds, a security context or a replica count and every
+check here stays green. Resource bounds in particular are not AWS-specific, so
+the reasoning that justifies ignoring values does not cover them. When a values
+difference matters, it has to be carried as a comment in the addon's own
+values.yaml, because this manifest has no slot for it and this script would not
+notice it.
+
 `check` reads upstream AT THE PINNED REF, so its verdict is a function of the
 commit under test. Whether that pin is behind is a different question with a
 different answer every day, and asking it here would turn a required check red

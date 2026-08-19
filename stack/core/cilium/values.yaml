@@ -22,8 +22,33 @@ hubble:
   enabled: true
   relay:
     enabled: true
+    # Flow API control plane, not the datapath — throttling it delays
+    # observability, not packets, so a full pair is safe.
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
   ui:
     enabled: true
+    frontend:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+    backend:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
   metrics:
     enabled:
       - dns
@@ -36,6 +61,17 @@ hubble:
 
 operator:
   replicas: 1
+  # Control plane, and unlike the fleet's it drives no ENI/IPAM allocation —
+  # kind uses kubernetes-mode IPAM and there is no Karpenter scale-out to burst
+  # for. So it takes a full, tight limit pair rather than the generous CPU
+  # ceiling the cluster-side operator needs.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 
 # Default-allow at the policy layer — opt into NetworkPolicy when a project wants it.
 policyEnforcementMode: default
@@ -46,3 +82,57 @@ gatewayAPI:
   enabled: true
   enableAlpn: true
   enableAppProtocol: true
+
+# ─── Resource bounds ────────────────────────────────────────────────────────
+# Follows eks-gitops' cilium bounds in SHAPE, not in numbers. The chart ships
+# `resources: {}` for every component, so unset, the agent and the Envoy proxy
+# run unbounded — on kind that means they compete with every workload on the
+# single node, which is the usual cause of pods sitting Pending after a heavy
+# slice like data or druid comes up.
+#
+# The class split is the part worth mirroring. Datapath components
+# (cilium-agent, cilium-envoy) carry a memory limit and deliberately NO CPU
+# limit: CFS throttling on the CNI datapath adds packet-processing latency to
+# every pod on the node, so a CPU limit would degrade the thing it is meant to
+# protect, while the memory limit still bounds the failure. Control-plane
+# components (operator, hubble relay/ui) take a full pair, because throttling
+# them costs observability rather than traffic.
+#
+# The numbers are deliberately NOT eks-gitops'. Those were sized against nodes
+# running prefix delegation at roughly 110 pods each; this is one kind node on a
+# workstation, where every millicore requested is one a project cannot schedule.
+# Requests are therefore small and limits stay meaningful.
+#
+# Do not "fix" the two missing CPU limits below. kx's kyverno slice ships no
+# resource-limit policy at all, so nothing here is out of compliance with
+# anything. If one is ever added, exclude kube-system rather than capping the
+# datapath — cilium installs into kube-system.
+
+# cilium-agent — one per node, and every pod's networking depends on it.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Init containers run before the datapath is serving, so throttling them is
+# harmless and a CPU limit is appropriate.
+initResources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+envoy:
+  # The L7 proxy, also a per-node DaemonSet, and in the request path for both
+  # the httpV2 Hubble metric above and the Gateway API listeners below. Same
+  # datapath reasoning as the agent: memory bound, no CPU cap.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
