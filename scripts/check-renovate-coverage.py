@@ -82,15 +82,42 @@ def main() -> int:
     covered = []
     for p in pins:
         src = pathlib.Path(p).read_text()
-        hit = next((m for m in (pat.search(src) for pat in patterns) if m), None)
-        if hit is None:
-            unmatched.append(str(pathlib.Path(p).relative_to(ROOT)))
+        rel = str(pathlib.Path(p).relative_to(ROOT))
+
+        # Every pin in the file, not the first one. `search` returns one match, so
+        # a file pinning two charts had its second pin unwatched AND invisible —
+        # in the gate whose entire purpose is proving no pin is unwatched. Every
+        # install.sh happens to pin exactly one chart today, which is what let
+        # per-file stand in for per-pin; nothing enforced that and the count below
+        # is what now does.
+        found = {}
+        for pat in patterns:
+            for m in pat.finditer(src):
+                g = m.groupdict()
+                dep, ver = g.get("depName"), g.get("currentValue")
+                if not dep or not ver:
+                    unmatched.append(f"{rel} (matched, empty capture)")
+                    continue
+                # Keyed, because the two managers can both match one block — the
+                # OCI pattern and the repo-add pattern are not disjoint by
+                # construction — and a dedup by capture keeps that from reading
+                # as two covered pins.
+                found[(dep, ver)] = True
+
+        # The independent count of what SHOULD have matched. Derived from the file
+        # rather than from the matcher, so a regex that stops matching cannot also
+        # revise the target it is measured against. Comment lines excluded: a pin
+        # discussed in prose is not a pin.
+        expected = sum(
+            1 for line in src.splitlines()
+            if "--version" in line and not line.lstrip().startswith("#")
+        )
+        if len(found) < expected:
+            unmatched.append(
+                f"{rel} ({expected} pin(s) present, {len(found)} matched by a customManager)"
+            )
             continue
-        g = hit.groupdict()
-        if not g.get("depName") or not g.get("currentValue"):
-            unmatched.append(f"{pathlib.Path(p).relative_to(ROOT)} (matched, empty capture)")
-            continue
-        covered.append((g["depName"], g["currentValue"]))
+        covered.extend(found)
 
     if unmatched:
         print(f"FAIL  {len(unmatched)} chart pin(s) are not watched by any customManager:")
