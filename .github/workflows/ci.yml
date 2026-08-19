@@ -23,6 +23,26 @@ jobs:
           pip install --quiet yamllint
           yamllint .
 
+      # The MinIO and Grafana default credentials are defensible only while these
+      # ports are loopback-bound, and both values files now say so. That makes the
+      # binding a claim, and a claim needs an instrument: kind's listenAddress
+      # default is 0.0.0.0, so an added mapping that omits it is exposed on every
+      # interface and reads exactly like the four that came before it.
+      - name: host ports are loopback-bound
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          doc = yaml.safe_load(open("cluster/kind-config.yaml"))
+          maps = [(n.get("role","?"), m) for n in doc["nodes"] for m in n.get("extraPortMappings") or []]
+          if not maps:
+              sys.exit("no extraPortMappings found — this check would pass vacuously")
+          bad = [f'{r}:{m["hostPort"]} -> {m.get("listenAddress", "0.0.0.0 (kind default)")}'
+                 for r, m in maps if m.get("listenAddress") != "127.0.0.1"]
+          if bad:
+              sys.exit("host ports not bound to 127.0.0.1:\n  " + "\n  ".join(bad))
+          print(f"ok  {len(maps)} host port(s) bound to 127.0.0.1")
+          PY
+
       - name: shellcheck
         run: |
           sudo apt-get install -y -qq shellcheck >/dev/null
