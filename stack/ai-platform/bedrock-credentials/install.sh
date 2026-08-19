@@ -14,11 +14,37 @@
 #
 # Optional slice. Without it the platform still installs and reconciles — only
 # a real Bedrock call fails, which is the honest local default.
+#
+# FIDELITY GAP, deliberate and bounded. On a real cluster each tenant reaches
+# Bedrock as itself: a per-tenant IAM role, scoped by the operator to that
+# tenant's models. Here there is one credential — whatever ${AWS_PROFILE} holds
+# — cloned into every tenants-* namespace, so every local tenant shares one
+# identity with the operator's own permissions. Nothing scopes it down, and
+# nothing here can: minting per-tenant roles is an AWS write this workspace has
+# no business making. So local tenants are NOT isolated from each other on the
+# AWS side, and a local Bedrock call is not a test of the production authz path.
+# Acceptable because the blast radius is one kind cluster on one workstation and
+# the credential is normally a short-lived SSO session. Do not point this at a
+# profile whose permissions you would not hand to every namespace at once.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROFILE="${AWS_PROFILE:-default}"
-REGION="${AWS_REGION:-us-west-2}"
+# us-east-1, and deliberately not the substrate's region. The estate pins every
+# venture account to one home region with the `guardrail-region-lock` SCP —
+# stxkxs/landing-zone, iac/components/aws/organization/main.tf, attached to the
+# Ventures OU. us-east-1 is the anchor by design, not by accident: CloudFront's
+# ACM certificates must be issued there regardless, so anchoring anywhere else
+# would need a permanent carve-out for the one thing every venture does. The
+# `home_region` variable carries the full reasoning — read it there rather than
+# trusting this restatement.
+#
+# A gateway signing for any other region gets AccessDeniedException: the exact
+# error this slice exists to remove, arriving from the guardrail instead of from
+# the empty credential chain. eks-agent-platform's substrate is still us-west-2,
+# so this is the one value kx does not mirror. That gap closes when the substrate
+# moves to the home region, not by widening the SCP.
+REGION="${AWS_REGION:-us-east-1}"
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"
 
