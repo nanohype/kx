@@ -3,7 +3,7 @@
   "upstream": {
     "repository": "nanohype/eks-gitops",
     "path": "applicationsets",
-    "ref": "9c7ce0476cd44aa2637b893f592a1f40fda99f81"
+    "ref": "a59ce049f86cec6f669abd8cce5fc98b1bef1251"
   },
   "divergences": [
     {
