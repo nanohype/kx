@@ -1,6 +1,6 @@
 version: '3'
 
-# Cluster lifecycle. Invoked via top-level `kx up | down | reset | status`.
+# Cluster lifecycle. Invoked via top-level `task up | down | reset | status`.
 
 vars:
   CLUSTER_NAME: kx

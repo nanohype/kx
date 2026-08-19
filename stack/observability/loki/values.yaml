@@ -1,5 +1,5 @@
 # loki for kx — single-binary mode with filesystem storage
-# Production eks-gitops uses S3 (gp3-backed); locally we keep it in-pod for simplicity.
+# Production eks-gitops uses S3 (gp3-backed); locally storage stays in-pod.
 
 deploymentMode: SingleBinary
 
@@ -28,9 +28,10 @@ singleBinary:
       cpu: 100m
       memory: 256Mi
   # No extraVolumes/extraVolumeMounts here, deliberately. With persistence off
-  # this chart now mounts its own emptyDir at /var/loki, which is exactly the gap
-  # a hand-rolled `data` volume used to fill — loki mkdir'ing the storage and
-  # ruler dirs onto a read-only rootfs and crashing.
+  # this chart mounts its own emptyDir at /var/loki when persistence is off,
+  # which is what a hand-rolled `data` volume would otherwise supply — without
+  # it loki mkdir's the storage and ruler dirs onto a read-only rootfs and
+  # crashes.
   #
   # Adding one back is worse than redundant: two volumeMounts on one mountPath in
   # a single container is rejected outright, so the pod never starts. `helm

@@ -10,7 +10,7 @@ global:
 
 configs:
   params:
-    server.insecure: true   # kx is local-only; ALB/ingress TLS isn't doing anything for us
+    server.insecure: true   # kx is local-only; nothing terminates TLS in front of it, so the UI is plain http
   cm:
     timeout.reconciliation: 60s
 

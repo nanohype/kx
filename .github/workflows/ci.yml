@@ -24,10 +24,10 @@ jobs:
           yamllint .
 
       # The MinIO and Grafana default credentials are defensible only while these
-      # ports are loopback-bound, and both values files now say so. That makes the
+      # ports are loopback-bound, and both values files say so. That makes the
       # binding a claim, and a claim needs an instrument: kind's listenAddress
-      # default is 0.0.0.0, so an added mapping that omits it is exposed on every
-      # interface and reads exactly like the four that came before it.
+      # default is 0.0.0.0, so a mapping added without it is exposed on every
+      # interface and reads exactly like the ones above it.
       - name: host ports are loopback-bound
         run: |
           python3 - <<'PY'

@@ -10,11 +10,10 @@
 # NOT the same command the installer runs, and the difference is deliberate:
 # `--wait` and `--hide-notes` are stripped because they are meaningless to
 # `helm template`, and `--include-crds` is added because helm omits a chart's
-# crds/ directory otherwise. The header used to claim it extracted the invocation
-# "exactly", which was already untrue of the two stripped flags before
-# --include-crds made it a third — a claim slightly false is one nobody re-reads
-# when they widen it. What is guaranteed is narrower and worth stating plainly:
-# the chart, its version pin, and its values file are the installer's.
+# crds/ directory otherwise. What is guaranteed is narrower: the chart, its
+# version pin, and its values file are the installer's. Anything else added to or
+# stripped from that transform belongs in this list, so the header stays true as
+# the transform widens.
 #
 # `--self-test` proves the lifting works, over the shapes the tree actually
 # contains. This script is the input to check-rendered-schemas.py, so an
@@ -138,8 +137,8 @@ for script in "${scripts[@]}"; do
   # --include-crds because `helm template` omits a chart's crds/ directory by
   # default, and helm installs those separately at release time. Without it the
   # render is missing exactly the definitions the schema gate needs: trivy-operator
-  # ships twelve CRDs there, so its own ClusterComplianceReports had nothing to
-  # validate against and the mount check never saw those documents either.
+  # ships its CRDs there, so its own ClusterComplianceReports would have nothing
+  # to validate against and the mount check would never see those documents.
   cmd="${cmd} --include-crds"
 
   # Top-level VAR=... assignments from the script (e.g. the operator slice's

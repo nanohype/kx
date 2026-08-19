@@ -14,7 +14,7 @@ The obvious way to add schema validation is the wrong one. `kubeconform
 -ignore-missing-schemas` makes every unrecognised kind a SKIP, and a skip counts
 as success, so pointing it at a stack full of custom resources produces
 `Valid: 0, Invalid: 0, Skipped: 240` and exit 0 — a green check that validated
-nothing. clusters and tenants both shipped that shape before catching it. This
+nothing.  This
 gate therefore runs WITHOUT that flag: an unresolvable kind is an error, and the
 schemas for custom kinds are built from the CRDs the stack itself renders.
 

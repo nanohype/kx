@@ -1,8 +1,8 @@
 # kx — kind cluster config
 #
 # 1 control plane + 2 workers — enough to feel scheduling, anti-affinity, PDBs.
-# Default CNI/kube-proxy disabled because we install cilium with kubeProxyReplacement.
-# Nodes will be NotReady until cilium is installed (cluster/registry.sh handles that as part of `kx up`).
+# Default CNI/kube-proxy disabled because cilium installs with kubeProxyReplacement.
+# Nodes stay NotReady until cilium is installed — `task up` does that in its stack:core step.
 # Host ports 80/443 land on the control-plane node where ingress-nginx schedules.
 
 kind: Cluster

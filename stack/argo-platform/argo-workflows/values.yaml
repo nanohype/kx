@@ -3,7 +3,7 @@
 # The chart's DEFAULT (crds.full: true) installs no CRD manifests at all. It
 # renders a Job that runs `kubectl apply --server-side -f https://raw.github
 # usercontent.com/...` once per CRD, so bringing the cluster up depends on live
-# GitHub egress at install time. Verified by rendering 1.0.23 three ways:
+# GitHub egress at install time. The three modes render as:
 #
 #   default            0 CRD manifests, 8 raw.githubusercontent.com URLs
 #   crds.full: false   8 CRD manifests, 0 URLs

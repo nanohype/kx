@@ -100,11 +100,10 @@ def main() -> int:
         rel = str(pathlib.Path(p).relative_to(ROOT))
 
         # Every pin in the file, not the first one. `search` returns one match, so
-        # a file pinning two charts had its second pin unwatched AND invisible —
-        # in the gate whose entire purpose is proving no pin is unwatched. Every
-        # install.sh happens to pin exactly one chart today, which is what let
-        # per-file stand in for per-pin; nothing enforced that and the count below
-        # is what now does.
+        # a file pinning two charts would have its second pin unwatched AND invisible,
+        # in the gate whose entire purpose is proving no pin is unwatched. The
+        # count below is derived per pin rather than per file, so that holds
+        # however many charts one script pins.
         found = {}
         for pat in patterns:
             for m in pat.finditer(src):

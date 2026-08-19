@@ -5,17 +5,18 @@
     python3 scripts/mirror-check.py sync        # rewrite kx's pins from upstream
     python3 scripts/mirror-check.py freshness   # has upstream moved past the pin? (scheduled)
 
-kx is the local kind workspace for the eks-gitops catalog. "Mirrors eks-gitops"
-was true when each slice was written and had nothing holding it true
-afterwards: eks-gitops has Renovate watching every chart pin, kx has none, so
-one side advances on its own and the other never moves. A mirror where only one
+kx is the local kind workspace for the eks-gitops catalog. kx is the local kind workspace for the eks-gitops catalog. Nothing else holds
+the two sides equal: eks-gitops has Renovate watching every chart pin and kx
+has none, so one side advances on its own. A mirror where only one side can
+advance drifts by construction, silently, in the direction of the side that
+moves. A mirror where only one
 side can advance drifts by construction, silently, in the direction of the side
 that moves.
 
 The comparison runs in both directions, because they catch different failures:
 
   * every chart kx pins is checked against upstream's pin — catches kx falling
-    behind, which is what happened.
+    behind.
   * every chart upstream pins is checked for presence here — catches an addon
     landing in the catalog that never reaches the local workspace. Iterating
     kx's own slices cannot find this: the set being walked doesn't change when
@@ -210,10 +211,9 @@ def crd_installers(gitops):
 
     These carry NO `chart` key — they are git sources pointing at a directory of
     CRD manifests — so upstream_pins() cannot see them and neither direction of
-    compare() has ever walked them. That blind spot is not hypothetical: the
-    argo-workflows CRD installer exists upstream precisely because the chart's
-    default fetches its CRDs from raw.githubusercontent.com at sync time, and kx
-    went on doing exactly that while every version comparison reported a match.
+    compare() has ever walked them. The gap is real: eks-gitops installs the argoproj.io CRDs from a git source
+    because the chart's default fetches them from raw.githubusercontent.com at
+    sync time — and neither fact is visible to a version comparison.
 
     A CRD installer is a decision about how a kind reaches the cluster, and kx
     has to make the same decision by a different mechanism (it has no ArgoCD and

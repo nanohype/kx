@@ -4,8 +4,9 @@
 # The chart comes from grafana-community, not grafana. The OSS Loki chart moved
 # there, forked at 6.55.0; what is still published at grafana/helm-charts is the
 # Grafana Enterprise Logs chart. That one is not marked deprecated and still
-# installs, so nothing would have reported that the old pin had quietly become a
-# different product — the description was the only field that changed.
+# installs, so a pin left on the original repository resolves to a different
+# product with nothing reporting it — the description is the only field that
+# differs.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

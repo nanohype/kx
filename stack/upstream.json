@@ -34,7 +34,7 @@
     {
       "chart": "operator",
       "kind": "gitops-only",
-      "reason": "The eks-agent-platform operator. Both sides run it; only eks-gitops pins a chart version, because it installs the published chart from GHCR. kx installs the chart straight out of the sibling eks-agent-platform checkout and kind-loads an image it built from that same tree, since the dev image is not published — so there is no version here to compare against 0.6.3. That is the point of the local slice: it exercises the operator in the working tree, which a released artifact cannot. This entry appeared when the pin moved past the commit where eks-gitops started pinning the chart at all, not because either side changed what it does."
+      "reason": "The eks-agent-platform operator. Both sides run it; only eks-gitops pins a chart version, because it installs the published chart from GHCR. kx installs the chart straight out of the sibling eks-agent-platform checkout and kind-loads an image it built from that same tree, since the dev image is not published — so there is no version here to compare against the catalog's pin. That is the point of the local slice: it exercises the operator in the working tree, which a released artifact cannot."
     },
     {
       "chart": "kube-prometheus-stack",
@@ -67,12 +67,12 @@
       "reason": "Local queue and stream substrate standing in for SQS and Kinesis, so a tenant declaring a queue datastore has something to bind to."
     }
   ],
-  "_crdInstallers_README": "eks-gitops installs some CRDs from a dedicated Application whose source is a git directory rather than a chart. Those carry no `chart` key, so the version comparison cannot see them — which is how kx went on fetching the argoproj.io CRDs from raw.githubusercontent.com at install time while every check reported a match. kx has no ArgoCD and no sync waves, so it reaches the same end by a different mechanism; each installer upstream must name that mechanism here. An entry is a decision on the record.",
+  "_crdInstallers_README": "eks-gitops installs some CRDs from a dedicated Application whose source is a git directory rather than a chart. Those carry no `chart` key, so the version comparison cannot see them — so a CRD installer upstream can change how a kind reaches the cluster with every version check still reporting a match. kx has no ArgoCD and no sync waves, so it reaches the same end by a different mechanism; each installer upstream must name that mechanism here. An entry is a decision on the record.",
   "crdInstallers": [
     {
       "appset": "argo-workflows-crds.yaml",
       "kinds": "argoproj.io",
-      "mechanism": "stack/argo-platform/argo-workflows/values.yaml sets crds.full: false, so the chart renders all eight CRDs itself.",
+      "mechanism": "stack/argo-platform/argo-workflows/values.yaml sets crds.full: false, so the chart renders the argoproj.io CRDs itself.",
       "why": "The chart default (crds.full: true) renders NO CRD manifests and instead applies them from raw.githubusercontent.com, making a local cluster bring-up depend on GitHub. eks-gitops solves the same problem with a separate Application at an earlier sync wave; kx has no waves, and crds.install: false alone would leave the cluster with no argoproj.io CRDs at all."
     },
     {
