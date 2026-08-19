@@ -70,12 +70,27 @@ def main() -> int:
             except re.error as e:
                 fail(f"matchString does not compile: {e}\n      {s}")
 
-    pins = [
-        p for p in sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
-        if "--version" in pathlib.Path(p).read_text()
-    ]
+    # Classify by what a script installs, not by whether it happens to contain the
+    # string this gate looks for. Filtering on `--version` derives the verdict from
+    # the set that survived the filter: a script pinning a remote chart in a form
+    # without that literal drops out of the population and is reported as neither
+    # covered nor unmatched.
+    #
+    # `helm repo add` or `oci://` means the chart comes from a registry and its
+    # version is a pin something must watch. A script with neither installs from a
+    # local path or installs no chart, so there is no version to track — those are
+    # excluded by name below rather than silently.
+    remote = re.compile(r"helm repo add|oci://")
+    scripts = sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
+    if not scripts:
+        fail("found no install.sh under stack/*/*/ — refusing to report coverage "
+             "over an empty set.")
+
+    pins, no_chart = [], []
+    for p in scripts:
+        (pins if remote.search(pathlib.Path(p).read_text()) else no_chart).append(p)
     if not pins:
-        fail("found no install.sh carrying a --version pin — refusing to report "
+        fail("no install.sh installs a chart from a registry — refusing to report "
              "full coverage over an empty set.")
 
     unmatched = []
@@ -108,10 +123,15 @@ def main() -> int:
         # rather than from the matcher, so a regex that stops matching cannot also
         # revise the target it is measured against. Comment lines excluded: a pin
         # discussed in prose is not a pin.
-        expected = sum(
+        # At least one, because this script installs a chart from a registry and
+        # that is what put it in this set. Counting only `--version` lines would
+        # take the floor from the same marker the patterns need: a chart carrying
+        # its version in an OCI ref rather than a flag counts zero, and `0 < 0`
+        # passes over a pin nothing watches.
+        expected = max(1, sum(
             1 for line in src.splitlines()
             if "--version" in line and not line.lstrip().startswith("#")
-        )
+        ))
         if len(found) < expected:
             unmatched.append(
                 f"{rel} ({expected} pin(s) present, {len(found)} matched by a customManager)"
@@ -130,6 +150,11 @@ def main() -> int:
 
     print(f"OK    {len(covered)} chart pin(s) in stack/*/*/install.sh, all matched by a "
           f"Renovate customManager.")
+    if no_chart:
+        print(f"      {len(no_chart)} install.sh install no chart from a registry and carry "
+              f"no version to watch:")
+        for p in no_chart:
+            print(f"        {pathlib.Path(p).relative_to(ROOT)}")
     for dep, ver in sorted(covered):
         print(f"        {dep:<40} {ver}")
     return 0
