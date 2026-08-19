@@ -67,6 +67,8 @@ cluster/   kind config + cluster lifecycle tasks
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
+scripts/   CI gates (render, schema, mirror, chart provenance, renovate coverage)
+tests/     fixtures the gates prove themselves against
 Taskfile.yaml
 ```
 
@@ -88,6 +90,8 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | Bedrock calls return `AccessDeniedException` | Either the `bedrock-credentials` slice is not installed, or the profile's SSO session expired, or the call is signing for a non-home region | `aws sso login`, re-run the slice; see the region note in its `install.sh` |
 | `bedrock-credentials` refuses to install | Kyverno is absent — the slice is a mutating policy | `task stack:security:enable` first |
 | Credentials installed but gateways still fail | Envoy Gateway regenerates the data plane on its own schedule; running proxies predate the Secret | `kubectl delete pod -A -l app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy` |
+| A chart bump fails `Validate every rendered resource against a schema` | A rendered resource no longer matches its CRD — the API server would reject it too | Read the reported path (e.g. `/spec/endpoints/0/port`); for any kind whose CRD is in the render, this is a real incompatibility |
+| ...but the failing kind is a `Cilium*` resource | Cilium registers its CRDs at operator runtime, so that schema comes from the community catalog and is **not** version-matched to the pinned chart | Triage schema skew first — compare against the CRD the running operator registered before treating the manifest as wrong |
 | `mirror-check.py check` refuses to run | It reads `eks-gitops` at the exact ref in `stack/upstream.json`, and the checkout is elsewhere | Check that commit out, or ask `freshness` instead, which compares against upstream's default branch |
 
 Recovery of last resort is `task reset` (down, then up) — the cluster holds no state worth

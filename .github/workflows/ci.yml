@@ -107,10 +107,30 @@ jobs:
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      # Runs before the stack is validated, so a gate that has stopped rejecting
+      # fails here rather than reporting a green stack it never checked.
+      - name: Prove the schema gate still rejects
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-rendered-schemas.py --self-test
+
       - name: helm template each slice at its pinned version
         env:
           KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
+          KX_RENDER_OUT: ${{ runner.temp }}/render
         run: ./scripts/render-check.sh
+
+      # Same render, second pass. A custom resource in one slice is defined by a
+      # CRD shipped in another, so nothing can be validated until every slice has
+      # rendered — which is why this is a step here rather than its own job.
+      - name: Validate every rendered resource against a schema
+        run: python3 scripts/check-rendered-schemas.py "${{ runner.temp }}/render"
 
   merge-gate:
     name: merge gate

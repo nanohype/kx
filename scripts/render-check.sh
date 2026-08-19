@@ -60,6 +60,12 @@ for script in "$ROOT"/stack/*/*/install.sh; do
   cmd="${block/helm upgrade --install/helm template}"
   cmd="${cmd// --wait/}"
   cmd="${cmd// --hide-notes/}"
+  # --include-crds because `helm template` omits a chart's crds/ directory by
+  # default, and helm installs those separately at release time. Without it the
+  # render is missing exactly the definitions the schema gate needs: trivy-operator
+  # ships twelve CRDs there, so its own ClusterComplianceReports had nothing to
+  # validate against and the mount check never saw those documents either.
+  cmd="${cmd} --include-crds"
 
   # Top-level VAR=... assignments from the script (e.g. the operator slice's
   # OPERATOR_REPO sibling-checkout path) — the helm block may reference them.
@@ -71,11 +77,22 @@ for script in "$ROOT"/stack/*/*/install.sh; do
   # starts providing a volume a values file already hand-rolls renders two mounts
   # on one path, which the API server rejects and `helm template` does not — so
   # exit status alone cannot see it. pipefail (set above) carries either failure.
+  # KX_RENDER_OUT keeps the rendered manifests instead of discarding them, so a
+  # second pass can validate them against schemas. The schema gate cannot run as
+  # a per-slice pipe like the mount check: a custom resource in one slice is
+  # defined by a CRD shipped in another, so nothing can be validated until every
+  # slice has rendered. Unset, behaviour is unchanged.
+  out_file=/dev/null
+  if [[ -n "${KX_RENDER_OUT:-}" ]]; then
+    mkdir -p "$KX_RENDER_OUT"
+    out_file="$KX_RENDER_OUT/${slice//\//__}.yaml"
+  fi
+
   if (
     # shellcheck disable=SC2030,SC2034  # consumed by the eval'd block
     SCRIPT_DIR="$(dirname "$script")"
     [[ -n "$assignments" ]] && eval "$assignments"
-    eval "$cmd" | python3 "$ROOT/scripts/check-rendered-mounts.py" "$slice"
+    eval "$cmd" | tee "$out_file" | python3 "$ROOT/scripts/check-rendered-mounts.py" "$slice"
   ); then
     echo "OK    $slice"
   else
