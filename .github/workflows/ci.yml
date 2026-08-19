@@ -5,12 +5,18 @@ on:
   push:
     branches: [main]
 
+# Every job here only reads the tree. Declared explicitly rather than inherited:
+# the org default is already `read`, but a default is a setting someone can change
+# without touching this file, and the two sibling workflows declare it too.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: yamllint
         run: |
@@ -26,7 +32,7 @@ jobs:
     name: Every chart pin is watched
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Every chart version in this repo is pinned inside an install.sh, because
       # explicit install scripts are the point here. Renovate ships no manager
@@ -41,7 +47,7 @@ jobs:
     name: Every chart pin is recorded
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Offline half only. Whether a chart went deprecated upstream overnight is
       # not a function of this commit, and gating merges on it would redden pull
@@ -61,7 +67,7 @@ jobs:
     name: Mirror the eks-gitops catalog
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # At the pinned ref, never at eks-gitops' default branch. The verdict has
       # to be a function of the commit under test — reading upstream's head
@@ -71,7 +77,7 @@ jobs:
       # Full history, because the ref to compare against lives in
       # stack/upstream.json and is read after the checkout, not before it.
       - name: Check out the catalog
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-gitops
           path: .sibling/eks-gitops
@@ -90,16 +96,16 @@ jobs:
     name: Render every helm slice
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The operator slice installs the sibling eks-agent-platform checkout's
       # chart against kx's values — give it one to render from.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-agent-platform
           path: .sibling/eks-agent-platform
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: helm template each slice at its pinned version
         env:

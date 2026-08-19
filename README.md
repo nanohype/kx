@@ -70,7 +70,29 @@ stack/
 Taskfile.yaml
 ```
 
-Each addon directory contains `install.sh` (an explicit `helm upgrade --install`) and `values.yaml` (deltas from chart defaults).
+Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned) and,
+for the charts that need one, a `values.yaml` of deltas from chart defaults. A few addons carry more: CRD-only
+installers have no values, and `druid` and `bedrock-credentials` ship the extra manifests their install needs.
+
+## When something breaks
+
+Every `install.sh` is idempotent, so the first move for a slice that failed partway is to run
+`task stack:<slice>:enable` again. The failure modes that are not self-healing:
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| `task up` fails immediately | Docker Desktop / OrbStack not running | Start it; kind needs a container runtime |
+| A slice enables but pods sit `Pending` | kind node is out of CPU/memory — the data slice and druid are the usual causes | Raise the VM's limits, or disable a slice you are not using |
+| `task stack:ai-platform:enable` fails on the operator | No sibling `eks-agent-platform` checkout — the operator image is built locally, not published | Clone it beside `kx`, or set `KX_EKS_AGENT_PLATFORM_DIR` |
+| `task stack:data:druid:enable` fails on a missing chart | Druid runs the unmodified `eks-gitops` chart from a sibling checkout | Clone `eks-gitops` beside `kx`, or set `KX_DRUID_CHART_DIR` |
+| Bedrock calls return `AccessDeniedException` | Either the `bedrock-credentials` slice is not installed, or the profile's SSO session expired, or the call is signing for a non-home region | `aws sso login`, re-run the slice; see the region note in its `install.sh` |
+| `bedrock-credentials` refuses to install | Kyverno is absent — the slice is a mutating policy | `task stack:security:enable` first |
+| Credentials installed but gateways still fail | Envoy Gateway regenerates the data plane on its own schedule; running proxies predate the Secret | `kubectl delete pod -A -l app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy` |
+| `mirror-check.py check` refuses to run | It reads `eks-gitops` at the exact ref in `stack/upstream.json`, and the checkout is elsewhere | Check that commit out, or ask `freshness` instead, which compares against upstream's default branch |
+
+Recovery of last resort is `task reset` (down, then up) — the cluster holds no state worth
+preserving, so rebuilding it is cheaper than debugging it. Anything you needed to keep should
+have been in a project namespace with its own manifests.
 
 ## Versions
 
