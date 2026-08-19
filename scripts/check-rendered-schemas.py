@@ -163,6 +163,14 @@ def run_kubeconform(schema_dir, targets, ignore_missing=False):
         # slice's CiliumNetworkPolicy has nothing in-tree to validate against.
         # A fallback, not a shortcut — anything unresolvable by all three
         # locations is still a hard error.
+        #
+        # THIS CATALOG IS NOT VERSION-MATCHED TO THE PINNED CHART. Cilium's real
+        # schema at 1.19.6 is whatever that operator registers at runtime; the
+        # catalog holds a snapshot, which may be ahead or behind it. So a
+        # CiliumNetworkPolicy failure here is not automatically a bad manifest —
+        # triage schema skew first, by checking the policy against the CRD the
+        # running operator actually registered. Kinds with an in-tree CRD are
+        # unaffected: the rendered schema above wins for those.
         "-schema-location",
         CRDS_CATALOG,
         "-schema-location",
