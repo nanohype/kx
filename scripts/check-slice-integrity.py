@@ -29,6 +29,8 @@ numbers and column offsets survive and a file:line citation stays true.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -117,6 +119,35 @@ def strip_comments(text: str) -> str:
 
 
 EXAMINED: dict[str, int] = {}
+
+# A floor on what each invariant EXAMINED, set well under the real count.
+#
+# Zero is the obvious vacuous run and the rare one. The common one is a corpus
+# that collapsed to a handful — a glob that stopped matching, a rename that put a
+# directory out of reach, a filter that grew one clause too many — where the
+# check still runs, still finds nothing wrong, and still reports success. Nothing
+# in a clean verdict distinguishes "looked at everything" from "looked at two of
+# forty", which is why the count is printed; printing it is not gating on it.
+#
+# Set well under the real count on purpose. A floor at the real count fails on
+# every ordinary addition and gets raised until it means nothing, so it is
+# calibrated to catch a corpus falling away rather than a single item leaving.
+# Raise one when the tree has grown enough that it can no longer fail.
+MINIMUM_EXAMINED = {
+    "every helm install names a timeout": 20,
+    "no helm repo add swallows its own failure": 18,
+    "every shell script runs on bash 3.2": 30,
+    "every scrape surface a values file names is enabled": 1,
+    "every file in an addon directory is applied": 25,
+    "every gate is observed to reject and to accept": 3,
+    "every path named in markdown resolves": 5,
+}
+
+# The suite itself is a corpus and can collapse the same way. With CHECKS and
+# CONTROLS both emptied, every per-check control has nothing to report on and
+# the run loop has nothing to iterate, so the whole gate exits 0 having asserted
+# nothing at all.
+MINIMUM_CHECKS = 7
 
 
 def names_token(haystack: str, token: str) -> bool:
@@ -962,6 +993,18 @@ def controls() -> int:
     names = {label for label, _ in CHECKS}
     failures = 0
 
+    if len(CHECKS) < MINIMUM_CHECKS:
+        print(f"  SUITE       {len(CHECKS)} check(s), below the floor of {MINIMUM_CHECKS}. "
+              f"An empty suite passes every control it has and asserts nothing.")
+        failures += 1
+    for label in sorted(names - set(MINIMUM_EXAMINED)):
+        print(f"  NO FLOOR    {label} — a check with no minimum can report a clean verdict "
+              f"over an empty corpus.")
+        failures += 1
+    for label in sorted(set(MINIMUM_EXAMINED) - names):
+        print(f"  ORPHANED    MINIMUM_EXAMINED names {label!r}, which is not a check.")
+        failures += 1
+
     for label in sorted(names - set(CONTROLS) - set(CONTROLLED_ELSEWHERE)):
         print(f"  NO CONTROL  {label} — a check with no positive control cannot be trusted.")
         failures += 1
@@ -971,6 +1014,40 @@ def controls() -> int:
     for label in sorted(set(CONTROLS) - names):
         print(f"  ORPHANED    control for {label!r}, which is not a check any more.")
         failures += 1
+
+    # The floor, proven by running the whole suite over a tree far below every
+    # minimum. A floor that lives in a table and is never exercised is a comment
+    # about a floor: it cannot tell you it stopped firing, and the run that
+    # would have needed it is the run that finds out.
+    # Measured as a DIFFERENCE, because every simpler form of this control passes
+    # for the wrong reason. A tree small enough to sit below every floor also
+    # violates invariants that have nothing to do with floors, so "the suite
+    # failed" is satisfied by floors that gate nothing; and "the output mentions
+    # a floor" is satisfied by a floor downgraded to a warning, which still
+    # prints. Running the same tree with the floors removed isolates what they
+    # contribute to the verdict, which is the only thing that matters about them.
+    starved_tree = _tree({
+        "stack/s/a/install.sh": BOUNDED,
+        "README.md": "see `stack/s/a/install.sh`\n",
+    })
+    buf = io.StringIO()
+    saved = dict(MINIMUM_EXAMINED)
+    with contextlib.redirect_stdout(buf):
+        with_floors = run(starved_tree)
+        MINIMUM_EXAMINED.clear()
+        try:
+            without_floors = run(starved_tree)
+        finally:
+            MINIMUM_EXAMINED.update(saved)
+    if with_floors <= without_floors:
+        print(f"  FLOOR OPEN  a tree below every minimum fails {with_floors} invariant(s) with "
+              f"the floors and {without_floors} without them. The floors change no verdict, so "
+              f"they are reporting rather than gating.")
+        failures += 1
+    else:
+        print(f"  control ok  the examined-floor rejects a collapsed corpus "
+              f"[{with_floors} invariant(s) fired, {with_floors - without_floors} of them "
+              f"only because of a floor]")
 
     by_label = dict(CHECKS)
     for label, cases in sorted(CONTROLS.items()):
@@ -1067,15 +1144,22 @@ def run(root: pathlib.Path = ROOT) -> int:
         # The denominator, always. A check that found nothing to look at and a
         # check that looked at everything print the same clean line without it,
         # and the first is the one that needs saying.
+        floor = MINIMUM_EXAMINED.get(label)
         seen = "" if n is None else f"  [{n} examined]"
         if problems:
             failed += 1
             print(f"FAIL  {label}:{seen}")
             for p in problems:
                 print(f"        {p}")
-        elif n == 0:
-            print(f"  ok  {label}{seen} — nothing in the tree to check, so this asserts "
-                  f"nothing yet")
+        elif n is not None and floor is not None and n < floor:
+            # Not a warning. A clean verdict over a corpus this small is the
+            # thing the floor exists to refuse, so it exits the way a violation
+            # does.
+            failed += 1
+            print(f"FAIL  {label}:{seen}")
+            print(f"        examined {n}, below the floor of {floor}. The corpus this "
+                  f"invariant reads has fallen away, so a clean verdict over it says "
+                  f"nothing. Restore what it reads, or lower the floor deliberately.")
         else:
             print(f"  ok  {label}{seen}")
     return failed
