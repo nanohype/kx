@@ -373,8 +373,13 @@ def self_test() -> int:
     else:
         print("  matched   (positive) a version applied by release URL")
 
-    scripts = sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
-    if coverage(patterns, scripts, quiet=True) != 0:
+    # SOURCE_ROOT, not ROOT. This control's subject is the tree this gate SHIPS
+    # in; ROOT may be pointed at a fixture by the suite-wide floor, and asserting
+    # "the shipped tree passes" about a fixture makes the gate exit non-zero for
+    # a reason that has nothing to do with the corpus under test — which the
+    # floor would then score as the gate catching what it planted.
+    scripts = sorted(glob.glob(str(SOURCE_ROOT / "stack/*/*/install.sh")))
+    if coverage(patterns, scripts, root=SOURCE_ROOT, quiet=True) != 0:
         failures.append("the shipped tree does not pass")
         print("  ACCEPTED  (control) the shipped tree is rejected")
     else:

@@ -26,11 +26,16 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 yamllint==1.37.1
           yamllint .
 
-      # The MinIO and Grafana default credentials are defensible only while these
-      # ports are loopback-bound, and both values files say so. That makes the
-      # binding a claim, and a claim needs an instrument: kind's listenAddress
-      # default is 0.0.0.0, so a mapping added without it is exposed on every
-      # interface and reads exactly like the ones above it.
+      # Grafana ships a default password and is published as a NodePort on a
+      # mapped host port, so that credential is defensible only while the port
+      # is loopback-bound — which its values file states. That makes the binding
+      # a claim, and a claim needs an instrument: kind's listenAddress default is
+      # 0.0.0.0, so a mapping added without it is exposed on every interface and
+      # reads exactly like the ones above it.
+      #
+      # MinIO also ships a default credential but publishes nothing, so it rests
+      # on a different argument its own values file makes. This check is about
+      # the mappings, not about every default password in the tree.
       - name: host ports are loopback-bound
         run: |
           python3 - <<'PY'

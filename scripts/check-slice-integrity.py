@@ -225,6 +225,11 @@ RENOVATE_ONE_MANAGER = json.dumps(
     indent=2,
 ) + "\n"
 
+WATCHED_PIN = (
+    "helm repo add w https://w --force-update >/dev/null\n"
+    "helm upgrade --install w w/w --version 1.0.0\n"
+)
+
 OPERATOR_IMAGE = DEPLOY_WITH % "ghcr.io/nanohype/eks-agent-platform/operator:dev"
 
 BOUNDED_INSTALL = (
@@ -241,6 +246,7 @@ BOUNDED_INSTALL = (
 GATE_PROBES: dict[str, dict] = {
     "check-images.py": {
         "argv": ["--pins", "{root}/render"],
+        "names": "r/x:latest",
         # Both trees carry the operator image, because the gate asserts its
         # own exemptions against the render it is handed and an exemption whose
         # subject is absent is a finding in its own right. The fixture differs
@@ -250,17 +256,22 @@ GATE_PROBES: dict[str, dict] = {
     },
     "check-renovate-coverage.py": {
         "argv": [],
-        # The bad tree pins a chart in a shape no manager matches; the good one
-        # pins it in the shape the shipped manager was written for.
+        "names": "stack/s/a/install.sh",
+        # Both trees carry a slice the manager DOES match, so the manager is
+        # never dead and the gate cannot reject for that unrelated reason. They
+        # differ only in whether a second slice pins in a shape no manager
+        # matches — which is the violation this probe plants, and which the
+        # rejection has to name.
         "bad": {"renovate.json": RENOVATE_ONE_MANAGER,
+                "stack/s/w/install.sh": WATCHED_PIN,
                 "stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
                                         "helm upgrade --install a x/a --ver 1.2.3\n"},
         "good": {"renovate.json": RENOVATE_ONE_MANAGER,
-                 "stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
-                                         "helm upgrade --install a x/a --version 1.2.3\n"},
+                 "stack/s/w/install.sh": WATCHED_PIN},
     },
     "check-chart-deprecation.py": {
         "argv": [],
+        "names": "a",
         "bad": {"stack/s/a/install.sh": BOUNDED_INSTALL,
                 "stack/chart-provenance.json": '{"charts": {}}\n'},
         "good": {"stack/s/a/install.sh": BOUNDED_INSTALL,
@@ -321,12 +332,16 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
     for name, probe in sorted(GATE_PROBES.items()):
         if name not in present:
             continue
+        if "names" not in probe:
+            problems.append(f"{name}: its probe declares no `names`, so a rejection for any "
+                            f"reason at all would score as a catch.")
+            continue
         if probe["bad"] == probe["good"]:
             problems.append(f"{name}: the probe's bad and good trees are identical, so running "
                             f"them proves nothing.")
             continue
         gate = scripts_dir / name
-        verdict = {}
+        verdict, output = {}, {}
         for kind in ("bad", "good"):
             fixture = _tree(probe[kind])
             argv = [a.format(root=fixture) for a in probe["argv"]]
@@ -335,6 +350,7 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
                 proc = subprocess.run([sys.executable, str(gate), *argv], capture_output=True,
                                       text=True, timeout=180, check=False, env=env)
                 verdict[kind] = proc.returncode
+                output[kind] = proc.stdout + proc.stderr
             except subprocess.TimeoutExpired:
                 problems.append(f"{name}: did not finish within 180s on its {kind} fixture.")
                 verdict[kind] = None
@@ -342,6 +358,17 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
             problems.append(
                 f"{name}: exited 0 on a tree built to violate the invariant it names. This "
                 f"floor wrote that tree and ran the gate over it — the gate accepted it."
+            )
+        # Exit status alone is not proof the gate found what this floor planted:
+        # it could be refusing the fixture for an unrelated reason, and scoring
+        # that as a catch is the same credulity the floor exists to remove one
+        # level down. The rejection has to name the mutation.
+        names = probe.get("names")
+        if names and verdict.get("bad") not in (0, None) and names not in output.get("bad", ""):
+            problems.append(
+                f"{name}: rejected the bad tree without naming {names!r}. It refused the "
+                f"fixture for some other reason, so this proves nothing about the violation "
+                f"the floor planted."
             )
         if verdict.get("good") not in (0, None):
             problems.append(
@@ -719,13 +746,19 @@ def controls() -> int:
     # gate that genuinely inspects its tree, probes it through the same
     # machinery, and observes the exit codes — including the case that matters,
     # a gate that ignores its input and always succeeds.
+    # The honest gate names what it found, because the floor now requires a
+    # rejection to identify the planted violation rather than merely occur.
     honest = ("import os, pathlib, sys\n"
               "root = pathlib.Path(os.environ['KX_GATE_ROOT'])\n"
-              "sys.exit(1 if (root / 'BAD').exists() else 0)\n")
+              "if (root / 'BAD').exists():\n"
+              "    print('found BAD')\n"
+              "    sys.exit(1)\n"
+              "sys.exit(0)\n")
     liar = "import sys\nsys.exit(0)\n"
     for label, body, expect_caught in (("a gate that reads its input", honest, False),
                                        ("a gate that ignores its input", liar, True)):
-        probe = {"argv": [], "bad": {"scripts/check-probe.py": body, "BAD": "x"},
+        probe = {"argv": [], "names": "BAD",
+                 "bad": {"scripts/check-probe.py": body, "BAD": "x"},
                  "good": {"scripts/check-probe.py": body}}
         GATE_PROBES["check-probe.py"] = probe
         try:
