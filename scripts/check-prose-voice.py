@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import io
 import re
+import shutil
 import subprocess
 import sys
 
@@ -94,15 +95,45 @@ RULES = """
 """
 
 
+class RangeUnavailable(Exception):
+    """The diff range could not be determined, so nothing was examined.
+
+    Distinct from an empty diff on purpose. "I looked and there was no added
+    prose" and "I could not look" are different facts, and collapsing them is
+    how this gate reported success in the one place it gates: a shallow CI
+    checkout has no merge base, the diff failed, the failure was swallowed into
+    an empty list, and the run printed "this change adds no prose" and exited 0.
+    A skip message prints into a green job, and nobody reads a green job.
+    """
+
+
 def added_prose(base: str) -> list[tuple[str, str]]:
-    """(file, line) for every prose-looking line the diff adds."""
+    """(file, line) for every prose-looking line the diff adds.
+
+    Raises RangeUnavailable when the range cannot be computed.
+    """
+    if shutil.which("git") is None:
+        raise RangeUnavailable(
+            "git is not on PATH, so no range can be computed. A gate that cannot run its "
+            "own tool reports nothing about the change."
+        )
+    merge_base = subprocess.run(
+        ["git", "merge-base", base, "HEAD"], capture_output=True, text=True, check=False,
+    )
+    if merge_base.returncode != 0:
+        raise RangeUnavailable(
+            f"no merge base between {base} and HEAD: "
+            f"{merge_base.stderr.strip() or 'git gave no reason'}. On a shallow checkout "
+            f"this usually means the fetch did not reach far enough back."
+        )
     diff = subprocess.run(
         ["git", "diff", "--unified=0", f"{base}...HEAD"],
         capture_output=True, text=True, check=False,
     )
     if diff.returncode != 0:
-        print(f"check-prose-voice: git diff against {base} failed:\n{diff.stderr}", file=sys.stderr)
-        return []
+        raise RangeUnavailable(
+            f"git diff against {base} failed: {diff.stderr.strip() or 'no reason given'}"
+        )
     out, path = [], "?"
     for line in diff.stdout.splitlines():
         if line.startswith("+++ b/"):
@@ -206,7 +237,16 @@ def main() -> int:
         print("check-prose-voice: markers are not behaving as specified.", file=sys.stderr)
         return 1
     base = sys.argv[1] if len(sys.argv) > 1 else "origin/main"
-    lines = added_prose(base)
+    # Advisory about PROSE, never about its own ability to look. Findings exit
+    # 0 by design; being unable to determine the range exits non-zero, because
+    # that is the one thing this gate must not report as success.
+    try:
+        lines = added_prose(base)
+    except RangeUnavailable as e:
+        print(f"check-prose-voice: {e}", file=sys.stderr)
+        print("Refusing to report that a change adds no prose over a range that could "
+              "not be computed.", file=sys.stderr)
+        return 1
     if not lines:
         print(f"check-prose-voice: this change adds no prose against {base}.")
         return 0
