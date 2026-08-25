@@ -1,0 +1,85 @@
+name: image cves
+# Scans the images kx's pinned charts resolve to, and fails on CRITICAL.
+#
+# kx pins its own chart versions in its own stack/*/*/install.sh and records
+# them in its own stack/chart-provenance.json. Those pins are not derived from
+# the catalog and can diverge from it, so no other repository can vouch for what
+# they resolve to. `task up` pulls exactly these images into whichever
+# environment runs it, which makes them a surface this repository owns once per
+# adopter rather than once.
+#
+# Deliberately not part of ci.yml, for the reason chart-provenance and
+# mirror-freshness give: whether a vulnerability was published against a pinned
+# image overnight has a different answer every day and is not something a pull
+# request caused. Asking it on the blocking path reddens changes that are not at
+# fault. The half that IS a fact about the commit — whether every image
+# reference is immutable — runs there instead.
+#
+# In-cluster runtime scanning belongs to the trivy-operator addon and stays
+# there. This is the other half: the images a pin resolves to, checked where the
+# pin can actually be changed.
+#
+# A red run means: read what upstream has published. Where the image publisher
+# has rebuilt on a patched base, move the chart pin — noting that moving ahead
+# of the catalog is a divergence mirror-check will report and that
+# stack/upstream.json is where it gets declared. Where they have not, the
+# finding stands until they do.
+
+on:
+  schedule:
+    - cron: "0 16 * * 1"
+  workflow_dispatch:
+
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Are the pinned charts' images free of CRITICAL?
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nanohype/eks-agent-platform
+          path: .sibling/eks-agent-platform
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: v0.74.0
+        run: |
+          url="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused -o trivy.tar.gz "$url"
+          tar -xz -C /usr/local/bin -f trivy.tar.gz trivy
+          rm trivy.tar.gz
+          trivy --version
+
+      # The scan needs the rendered stack, which is the same input the schema
+      # gate takes: the images a chart actually produces, not the ones a values
+      # file happens to name.
+      - name: Render every slice at its pinned version
+        env:
+          KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
+          KX_RENDER_OUT: ${{ runner.temp }}/render
+        run: |
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          ./scripts/render-check.sh
+
+      - name: Scan every image the pinned charts resolve to
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+        run: python3 scripts/check-images.py --cves "$RENDER_DIR"

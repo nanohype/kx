@@ -11,12 +11,13 @@ alone accepts a ServiceMonitor with a misspelled field and every check stays
 green until the API server refuses it on a cluster.
 
 The obvious way to add schema validation is the wrong one. `kubeconform
--ignore-missing-schemas` makes every unrecognised kind a SKIP, and a skip counts
-as success, so pointing it at a stack full of custom resources produces
-`Valid: 0, Invalid: 0, Skipped: 240` and exit 0 — a green check that validated
-nothing.  This
-gate therefore runs WITHOUT that flag: an unresolvable kind is an error, and the
-schemas for custom kinds are built from the CRDs the stack itself renders.
+-ignore-missing-schemas` makes every unrecognised kind a SKIP and a skip counts
+as success, so pointed at a stack of custom resources it reports every one of
+them skipped and exits 0 — a green check that validated nothing. This gate runs
+WITHOUT that flag: an unresolvable kind is an error, and the schemas for custom
+kinds are built from the CRDs the stack itself renders. `--self-test` restores
+the flag and asserts the skip count moves, so the claim is checked rather than
+believed.
 
 Two passes are required and the order is not incidental. A custom resource in
 one slice is defined by a CRD shipped in another — kube-prometheus-stack's
@@ -24,6 +25,9 @@ ServiceMonitors are validated by prometheus-operator-crds' CRD — so nothing ca
 be validated until every slice has rendered.
 """
 
+import contextlib
+import io
+import os
 import json
 import pathlib
 import re
@@ -34,7 +38,10 @@ import tempfile
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 
 
 class ManifestLoader(yaml.SafeLoader):
@@ -52,10 +59,20 @@ class ManifestLoader(yaml.SafeLoader):
 ManifestLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
+# kubeconform resolves unknown kinds over the network, so this gate is not
+# hermetic and the two facts that follow from that are bounded rather than
+# ignored: the subprocess carries a timeout, and an unreachable host is reported
+# as an unreachable host instead of as a manifest failure.
+CRDS_CATALOG_HOST = "raw.githubusercontent.com"
 CRDS_CATALOG = (
-    "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/"
+    f"https://{CRDS_CATALOG_HOST}/datreeio/CRDs-catalog/main/"
     "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 )
+
+# Longer than a healthy run and far short of the runner's own ceiling. The
+# number that matters is that one exists: without it an unreachable schema host
+# holds the job open for six hours and the gate reports nothing at all.
+KUBECONFORM_TIMEOUT_S = 300
 SUMMARY_RE = re.compile(
     r"Valid:\s*(\d+).*?Invalid:\s*(\d+).*?Errors:\s*(\d+).*?Skipped:\s*(\d+)", re.S
 )
@@ -71,11 +88,10 @@ def check_crd_structure(doc):
     problem — every custom resource validated against it becomes meaningless.
 
     kubeconform cannot check these: the upstream schema store publishes no
-    CustomResourceDefinition schema (verified against master-standalone and
-    -strict; all candidate filenames 404). So this is the ONE kind excluded from
-    kubeconform, and excluded is not unchecked — the properties asserted here are
-    the ones the rest of the gate actually depends on. Every other unresolvable
-    kind stays a hard error.
+    CustomResourceDefinition schema, so a CRD is the ONE kind excluded from it.
+    Excluded is not unchecked — the properties asserted here are the ones the
+    rest of the gate depends on to build its schema store. Every other
+    unresolvable kind stays a hard error.
     """
     spec = doc.get("spec") or {}
     name = (doc.get("metadata") or {}).get("name", "<unnamed>")
@@ -177,7 +193,19 @@ def run_kubeconform(schema_dir, targets, ignore_missing=False):
         "default",
     ]
     cmd += [str(t) for t in targets]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    # Bounded because kubeconform resolves unknown kinds over the network. An
+    # unreachable schema host would otherwise hold the job open to the runner's
+    # own six-hour ceiling, and a gate that hangs is a gate that reports nothing.
+    try:
+        p = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=KUBECONFORM_TIMEOUT_S, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return 1, (
+            f"kubeconform did not finish within {KUBECONFORM_TIMEOUT_S}s. It resolves "
+            f"unknown kinds over the network, so this is usually {CRDS_CATALOG_HOST} "
+            f"being unreachable rather than a manifest problem."
+        )
     return p.returncode, (p.stdout + p.stderr)
 
 
@@ -189,7 +217,26 @@ def summarise(output):
     return {"valid": valid, "invalid": invalid, "errors": errors, "skipped": skipped}
 
 
+def require_kubeconform():
+    """The validator has to exist before anything is reported about a render.
+
+    Without this the first subprocess raises FileNotFoundError and the gate dies
+    with a Python traceback — exit non-zero, so it reads as a rejection, while
+    blaming the interpreter for a missing tool. A gate that depends on a binary
+    asserts it, or it can fail in a way that looks like a verdict.
+    """
+    if shutil.which("kubeconform") is None:
+        die("kubeconform is not on PATH. This gate validates nothing without it, and "
+            "reporting a clean render would be worse than failing.", code=2)
+    probe = subprocess.run(["kubeconform", "-v"], capture_output=True, text=True,
+                           timeout=30, check=False)
+    if probe.returncode != 0:
+        die(f"kubeconform is on PATH but will not run: "
+            f"{(probe.stderr or probe.stdout).strip()[:200]}", code=2)
+
+
 def gate(render_dir):
+    require_kubeconform()
     render_dir = pathlib.Path(render_dir)
     if not render_dir.is_dir():
         die(f"{render_dir} is not a directory — run render-check.sh with KX_RENDER_OUT set.")
@@ -240,6 +287,7 @@ def gate(render_dir):
 
 def self_test():
     """Prove the gate rejects, and that its skip assertion actually fires."""
+    require_kubeconform()
     fixtures = ROOT / "tests" / "schema"
     failures = 0
     checked = 0
@@ -309,11 +357,43 @@ def self_test():
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        # The evidence, not just a tally of it. The floor derives the counts
+        # from these lines rather than trusting a number a gate could return
+        # without having run anything.
+        "lines": lines,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('admitted  ',))),
+    }
+
+
 def main():
     if len(sys.argv) != 2:
         die("usage: check-rendered-schemas.py {<render-dir>|--self-test}")
     if sys.argv[1] == "--self-test":
         return self_test()
+    # Always, before validating anything. This gate's whole thesis is that a
+    # skip counts as success, so a gate that stopped rejecting would report the
+    # same clean summary it reports when everything is genuinely valid.
+    if self_test() != 0:
+        die("refusing to validate a render with a gate that has not proven it rejects", code=1)
+    print()
     return gate(sys.argv[1])
 
 

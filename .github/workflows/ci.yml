@@ -8,6 +8,13 @@ on:
 # Every job here only reads the tree. Declared explicitly rather than inherited:
 # the org default is already `read`, but a default is a setting someone can change
 # without touching this file, and the two sibling workflows declare it too.
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -15,19 +22,27 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: yamllint
         run: |
-          pip install --quiet yamllint
+          pip install --quiet --timeout 60 --retries 3 yamllint==1.38.0
           yamllint .
 
-      # The MinIO and Grafana default credentials are defensible only while these
-      # ports are loopback-bound, and both values files say so. That makes the
-      # binding a claim, and a claim needs an instrument: kind's listenAddress
-      # default is 0.0.0.0, so a mapping added without it is exposed on every
-      # interface and reads exactly like the ones above it.
+      # Grafana ships a default password and is published as a NodePort on a
+      # mapped host port, so that credential is defensible only while the port
+      # is loopback-bound — which its values file states. That makes the binding
+      # a claim, and a claim needs an instrument: kind's listenAddress default is
+      # 0.0.0.0, so a mapping added without it is exposed on every interface and
+      # reads exactly like the ones above it.
+      #
+      # MinIO also ships a default credential but publishes nothing, so it rests
+      # on a different argument its own values file makes. This check is about
+      # the mappings, not about every default password in the tree.
       - name: host ports are loopback-bound
         run: |
           python3 - <<'PY'
@@ -43,16 +58,81 @@ jobs:
           print(f"ok  {len(maps)} host port(s) bound to 127.0.0.1")
           PY
 
+      # `git ls-files` rather than a glob: a glob names one filename and silently
+      # excludes every other shell file in the tree, which is the reduced-corpus
+      # failure the gates in this repo assert against for their own inputs. An
+      # exclusion here has to be a `shellcheck disable` line carrying a reason,
+      # where the reader of the script sees it.
       - name: shellcheck
         run: |
+          sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck >/dev/null
-          shellcheck scripts/*.sh cluster/*.sh stack/*/*/install.sh
+          mapfile -t sh < <(git ls-files '*.sh')
+          if [ "${#sh[@]}" -eq 0 ]; then
+            echo "no shell files found — refusing to report a clean lint over nothing" >&2
+            exit 1
+          fi
+          echo "linting ${#sh[@]} shell file(s)"
+          shellcheck "${sh[@]}"
+
+      # The gate scripts are a third of this repo's code and nothing linted them.
+      - name: ruff
+        run: |
+          pip install --quiet --timeout 60 --retries 3 ruff==0.16.4
+          ruff check scripts/
+
+      # Advisory, and exits 0 whatever it finds. Prose conformance is read
+      # rather than matched — a pattern finds only the phrasings its author
+      # thought of — so this surfaces the prose a change adds next to the rules
+      # instead of claiming a verdict over it. Needs the base commit to diff
+      # against, which the default shallow checkout does not fetch.
+      # The supply-chain scan, and it fails the build rather than warning. This
+      # repository ships no package manifest, so its dependency surface is the
+      # workflows themselves: the actions they call, the tokens they hold, and
+      # every `${{ }}` that reaches a run block. A branch name is attacker-
+      # controlled on a fork pull request, and an expansion is substituted into
+      # shell source before bash parses it.
+      - name: zizmor
+        run: |
+          # Pinned from the registry, not from a local resolver. A laptop on an
+          # older interpreter silently caps a pip install at the last version
+          # that supports it — zizmor resolved to 1.16.3 here against 1.29.0
+          # published, so the scanner CI ran was chosen by a workstation's
+          # python rather than by what the tool has released.
+          pip install --quiet --timeout 60 --retries 3 zizmor==1.29.0
+          # --no-online-audits keeps the verdict a function of the commit under
+          # test, the same rule the mirror job states: the online audits ask
+          # GitHub whether an action has since been archived, which is a fact
+          # about the world on the day the job runs and would redden a pull
+          # request that did not cause it. It is also an unbounded network call
+          # inside a blocking gate.
+          # --persona=auditor, not the default. The default persona does not
+          # RUN the excessive-permissions audit at all, so a workflow-level
+          # id-token: write — which every job added later silently inherits,
+          # with no diff that looks like a permission change — is not merely
+          # unreported, it is never looked for. A green tick from a check that
+          # skipped the audit is worse than no check.
+          zizmor --no-online-audits --persona=auditor .github/workflows/
+
+      - name: prose the change adds
+        if: github.event_name == 'pull_request'
+        env:
+          # Through the environment, never interpolated into the run block: a
+          # `${{ }}` expansion is substituted into the shell source before bash
+          # parses it, so a branch named with a shell metacharacter would run.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          python3 scripts/check-prose-voice.py "origin/$BASE_REF"
 
   renovate-coverage:
     name: Every chart pin is watched
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every chart version in this repo is pinned inside an install.sh, because
       # explicit install scripts are the point here. Renovate ships no manager
@@ -66,8 +146,11 @@ jobs:
   chart-provenance:
     name: Every chart pin is recorded
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Offline half only. Whether a chart went deprecated upstream overnight is
       # not a function of this commit, and gating merges on it would redden pull
@@ -79,15 +162,17 @@ jobs:
       # covering something.
       - name: Every pin has a provenance record, and can fail
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/check-chart-deprecation.py
-          python3 scripts/check-chart-deprecation.py --self-test
 
   mirror:
     name: Mirror the eks-gitops catalog
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # At the pinned ref, never at eks-gitops' default branch. The verdict has
       # to be a function of the commit under test — reading upstream's head
@@ -102,12 +187,13 @@ jobs:
           repository: nanohype/eks-gitops
           path: .sibling/eks-gitops
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Compare every chart pin against the catalog
         env:
           EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
           git -C "$EKS_GITOPS_DIR" checkout -q "$ref"
           python3 scripts/mirror-check.py check
@@ -115,37 +201,75 @@ jobs:
   render:
     name: Render every helm slice
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The operator slice installs the sibling eks-agent-platform checkout's
       # chart against kx's values — give it one to render from.
+      #
+      # At the ref stack/upstream.json records, for the reason the mirror job
+      # states: reading that repository's default branch makes this job's
+      # verdict a fact about a commit nobody here proposed, so a merge there
+      # reddens a pull request that did not cause it.
+      - name: Read the sibling ref
+        id: sibling
+        run: |
+          ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-agent-platform
           path: .sibling/eks-agent-platform
+          ref: ${{ steps.sibling.outputs.ref }}
+          persist-credentials: false
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # Downloaded to a file and checked before it is unpacked onto PATH and run.
+      # Piping the response straight into tar executes whatever arrives: a
+      # truncated transfer, a proxy error page, or a replaced asset all reach
+      # the next step as a binary. The digest is the one the release publishes
+      # alongside the archive, so it catches corruption and substitution of the
+      # asset; it does not attest the release itself, which would need the
+      # upstream signing key.
       - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
         run: |
-          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin kubeconform
+          url="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused -o kubeconform.tar.gz "$url"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
+          rm kubeconform.tar.gz
           kubeconform -v
 
-      # Runs before the stack is validated, so a gate that has stopped rejecting
-      # fails here rather than reporting a green stack it never checked.
+      # Every gate this job runs proves it can still reject before the stack is
+      # validated, so a gate that has stopped rejecting fails here rather than
+      # reporting a green stack it never checked.
       # The producer, proven before the consumer. render-check.sh feeds the schema
       # gate its input, so an extraction that quietly lifted the wrong command
       # would hand that gate a clean verdict over something the installer never
       # runs — a tested consumer over an unproven producer.
-      - name: Prove the render extraction still lifts the right command
-        run: ./scripts/render-check.sh --self-test
-
-      - name: Prove the schema gate still rejects
+      # Three invariants, each closing a class the sweep found once and fixed
+      # everywhere: an unbounded helm install, a manifest in an addon directory
+      # that nothing applies, and a gate that can no longer reject. It runs its
+      # own positive controls before reporting, so there is no separate step to
+      # forget.
+      #
+      # In this job because the third invariant RUNS every gate in the suite and
+      # observes what it does, rather than reading its source for the word
+      # "control" — and the schema gate's controls need kubeconform, installed
+      # above. A floor that cannot observe a gate refuses to certify it, so this
+      # has to run where every gate can run.
+      - name: Slice invariants hold, and every gate still rejects
         run: |
-          pip install --quiet pyyaml
-          python3 scripts/check-rendered-schemas.py --self-test
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          python3 scripts/check-slice-integrity.py
 
       - name: helm template each slice at its pinned version
         env:
@@ -156,12 +280,34 @@ jobs:
       # Same render, second pass. A custom resource in one slice is defined by a
       # CRD shipped in another, so nothing can be validated until every slice has
       # rendered — which is why this is a step here rather than its own job.
+      # Every gate below runs its own positive controls before it reports, so a
+      # gate that has stopped rejecting fails on its own invocation rather than
+      # in a step somebody has to remember to add.
+      # Whether an image reference is immutable IS a fact about the commit under
+      # test, so this half blocks. The CVE half asks a question with a different
+      # answer every day and runs on a schedule, in image-cves.yml — the same
+      # split, for the same reason, as chart provenance and mirror freshness.
+      #
+      # kx pins its own chart versions and those pins are not derived from the
+      # catalog, so no other repository can vouch for what they resolve to. The
+      # render is the input rather than the values files, because a values file
+      # names the deltas and the chart supplies the rest.
+      - name: Every image the pinned charts resolve to is immutable
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+        run: python3 scripts/check-images.py --pins "$RENDER_DIR"
+
       - name: Validate every rendered resource against a schema
-        run: python3 scripts/check-rendered-schemas.py "${{ runner.temp }}/render"
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+        run: |
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          python3 scripts/check-rendered-schemas.py "$RENDER_DIR"
 
   merge-gate:
     name: merge gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs:
       [
         lint,

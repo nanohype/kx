@@ -12,4 +12,4 @@ helm upgrade --install envoy-ai-gateway-crds oci://docker.io/envoyproxy/ai-gatew
   --namespace envoy-gateway-system \
   --create-namespace \
   --version 1.0.0 \
-  --wait
+  --wait --timeout 10m

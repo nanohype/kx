@@ -12,4 +12,4 @@ helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
   --create-namespace \
   --version 1.8.3 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

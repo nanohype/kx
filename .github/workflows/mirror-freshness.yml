@@ -17,6 +17,13 @@ on:
     - cron: "0 15 * * 1"
   workflow_dispatch:
 
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -24,18 +31,22 @@ jobs:
   freshness:
     name: Is the catalog pin behind?
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check out the catalog at its default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-gitops
           path: .sibling/eks-gitops
+          persist-credentials: false
 
       - name: Compare against the current catalog
         env:
           EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/mirror-check.py freshness

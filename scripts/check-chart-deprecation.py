@@ -39,6 +39,9 @@ the render gate stayed green. The description was the only field that moved.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import json
 import pathlib
 import re
@@ -47,12 +50,70 @@ import sys
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 RECORDS = ROOT / "stack" / "chart-provenance.json"
 
-REPO_ADD = re.compile(r"^helm repo add\s+(\S+)\s+(\S+)", re.M)
-HELM_INSTALL = re.compile(r"^helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
-VERSION_FLAG = re.compile(r"--version\s+(\S+)")
+# The tree this gate SHIPS in, which is not necessarily the tree it is checking.
+# KX_GATE_ROOT points ROOT at a corpus; the controls' subject is always this
+# repository, because a suite that mutates whatever a fixture happens to carry
+# is asserting nothing about the gate — and, when the fixture carries less than
+# the suite expects, crashes instead of reporting.
+SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
+SOURCE_RECORDS = SOURCE_ROOT / "stack" / "chart-provenance.json"
+
+REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
+HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
+VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
+
+
+def strip_comments(text: str) -> str:
+    """Source with `#` comment bodies blanked, quote-aware.
+
+    A superseded pin recorded in a comment above the live one would otherwise
+    win an unanchored search, and this file records what a chart WAS pinned for
+    — so reading the dead version puts the wrong description on the record and
+    every later comparison is against a chart nobody installs.
+    """
+    out = []
+    for line in text.splitlines():
+        # An unbalanced quote must not swallow the rest of the line. A word like
+        # dont'care opens a quote that never closes, and every `#` after it then
+        # reads as quoted — so a comment survives blanking and whatever it
+        # mentions counts as code. Scanned twice: if a quote is still open at
+        # end of line it was an apostrophe inside a word, so the second pass
+        # treats that character as literal.
+        buf = []
+        for literal_apostrophe in (False, True):
+            buf, quote, i = [], None, 0
+            while i < len(line):
+                c = line[i]
+                if quote:
+                    buf.append(c)
+                    if c == "\\" and quote == '"' and i + 1 < len(line):
+                        buf.append(line[i + 1])
+                        i += 2
+                        continue
+                    if c == quote:
+                        quote = None
+                elif c == "'" and literal_apostrophe:
+                    buf.append(c)
+                elif c in "\"'":
+                    quote = c
+                    buf.append(c)
+                elif c == "#" and (not buf or buf[-1].isspace()):
+                    buf.append(" " * (len(line) - i))
+                    quote = None
+                    break
+                else:
+                    buf.append(c)
+                i += 1
+            if quote is None:
+                break
+        out.append("".join(buf))
+    return "\n".join(out)
 
 
 def die(msg: str) -> None:
@@ -60,11 +121,12 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-def pins() -> dict[str, dict]:
+def pins(root: pathlib.Path | None = None) -> dict[str, dict]:
     """{chart: {repo, version, source}} for every helm pin in stack/*/*/install.sh."""
+    root = root or ROOT
     found: dict[str, dict] = {}
-    for script in sorted(ROOT.glob("stack/*/*/install.sh")):
-        text = script.read_text()
+    for script in sorted(root.glob("stack/*/*/install.sh")):
+        text = strip_comments(script.read_text())
         install = HELM_INSTALL.search(text)
         version = VERSION_FLAG.search(text)
         if not install or not version:
@@ -80,23 +142,25 @@ def pins() -> dict[str, dict]:
             repo = urls.get(alias)
             if not repo:
                 die(
-                    f"{script.relative_to(ROOT)} installs {ref} but adds no repo "
+                    f"{script.relative_to(root)} installs {ref} but adds no repo "
                     f"named {alias!r} — the parser and the script disagree"
                 )
         found[chart] = {
             "repo": repo,
             "version": version.group(1),
-            "source": str(script.relative_to(ROOT)),
+            "source": str(script.relative_to(root)),
         }
     if not found:
         die("read no chart pins out of stack/*/*/install.sh — the parser and the tree disagree")
     return found
 
 
-def load_records() -> dict:
-    if not RECORDS.exists():
-        die(f"{RECORDS.relative_to(ROOT)} does not exist. Run --sync to create it.")
-    return json.loads(RECORDS.read_text()).get("charts", {})
+def load_records(records: pathlib.Path | None = None, root: pathlib.Path | None = None) -> dict:
+    records = records or RECORDS
+    root = root or ROOT
+    if not records.exists():
+        die(f"{records.relative_to(root)} does not exist. Run --sync to create it.")
+    return json.loads(records.read_text()).get("charts", {})
 
 
 def fetch(chart: str, repo: str, version: str) -> dict:
@@ -104,7 +168,7 @@ def fetch(chart: str, repo: str, version: str) -> dict:
         cmd = ["helm", "show", "chart", repo, "--version", version]
     else:
         cmd = ["helm", "show", "chart", "--repo", repo, chart, "--version", version]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     if out.returncode != 0:
         tail = (out.stderr or out.stdout).strip().splitlines()
         return {"_error": tail[-1][:200] if tail else "no output"}
@@ -212,10 +276,12 @@ def sync() -> int:
 
 
 def self_test() -> int:
-    import contextlib
-    import io
-
-    real_pins, real_records = pins(), load_records()
+    # SOURCE_ROOT: the controls prove this gate's logic against the tree it
+    # ships in. Driving them from a fixture makes them mutate a record set that
+    # may not contain what they are about to edit, which crashes rather than
+    # reporting — and a crash exits non-zero exactly like a rejection.
+    real_pins = pins(SOURCE_ROOT)
+    real_records = load_records(SOURCE_RECORDS, SOURCE_ROOT)
 
     def run(p, r):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -261,11 +327,44 @@ def self_test() -> int:
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        # The evidence, not just a tally of it. The floor derives the counts
+        # from these lines rather than trusting a number a gate could return
+        # without having run anything.
+        "lines": lines,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('passed    ',))),
+    }
+
+
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
     if "--sync" in sys.argv:
         return sync()
+    # Always, before either check reports. The offline half is a set comparison
+    # that would return no problems if it stopped comparing, and print the same
+    # OK line it prints when every pin really is recorded.
+    if self_test() != 0:
+        print("\nRefusing to report with a gate that has not proven it rejects.")
+        return 1
+    print()
     if "--live" in sys.argv:
         return check_live()
     return check_offline(pins(), load_records())

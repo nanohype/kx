@@ -29,21 +29,37 @@ if [ ! -d "${REPO}/packages/gateway-conformance" ]; then
   exit 1
 fi
 
-# The ModelGateway CR names the Service, and the operator publishes the
-# in-cluster endpoint on status. Read the route contract off the cluster rather
-# than assuming it — status.routes[] carries the resolved wire format and base
-# URL per route, which is precisely what the probes are here to check.
-GATEWAY="$(kubectl get modelgateway -n "${NAMESPACE}" \
-  -o jsonpath="{.items[?(@.spec.platformRef.name=='${PLATFORM}')].metadata.name}" | awk '{print $1}')"
-if [ -z "${GATEWAY}" ]; then
+# The ModelGateway CR names the Service the probes reach. The published routes
+# are printed for the operator, not parsed: the suite is told which route to
+# exercise through GATEWAY_ROUTE, and what it asserts about the wire format is
+# that repository's contract to state. Printing status.routes beside the probe
+# result is what makes a wrong ROUTE legible here rather than as an assertion
+# failure three layers down.
+# Every match, not the first. Taking one of several and saying nothing about
+# the rest reports a pass for gateways this run never sent a byte through.
+read -r -a GATEWAYS <<<"$(kubectl get modelgateway -n "${NAMESPACE}" \
+  -o jsonpath="{.items[?(@.spec.platformRef.name=='${PLATFORM}')].metadata.name}")"
+if [ "${#GATEWAYS[@]}" -eq 0 ]; then
   echo "no ModelGateway in ${NAMESPACE} references Platform '${PLATFORM}'" >&2
   exit 1
 fi
+if [ "${#GATEWAYS[@]}" -gt 1 ]; then
+  echo "Platform '${PLATFORM}' has ${#GATEWAYS[@]} ModelGateways: ${GATEWAYS[*]}" >&2
+  echo "Probe one at a time — set NAMESPACE and re-run per gateway." >&2
+  exit 1
+fi
+GATEWAY="${GATEWAYS[0]}"
 
 PHASE="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}')"
 echo "ModelGateway ${GATEWAY} (Platform ${PLATFORM}) reports phase=${PHASE:-<none>}"
 echo "Routes it publishes:"
-kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.routes}' || true
+ROUTES="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" \
+  -o jsonpath='{.status.routes}')"
+if [ -z "${ROUTES}" ]; then
+  echo "  (none — the operator has not published a route for this gateway)" >&2
+else
+  echo "  ${ROUTES}"
+fi
 echo
 
 # The gateway's Service is in the tenant namespace — envoy-gateway runs in
@@ -52,14 +68,42 @@ echo
 # themselves, the same way a tenant app does.
 SVC_NS="tenants-${PLATFORM}"
 echo "Forwarding ${SVC_NS}/svc/${GATEWAY} to localhost:${LOCAL_PORT} ..."
-kubectl port-forward -n "${SVC_NS}" "svc/${GATEWAY}" "${LOCAL_PORT}:8080" >/dev/null 2>&1 &
-PF_PID=$!
-trap 'kill "${PF_PID}" 2>/dev/null || true' EXIT
 
+# Kept, not discarded. A forward that fails to bind — the port is taken, the
+# Service is not there yet — is the most likely reason this script fails, and
+# discarding both streams left the reader with a conformance error from the
+# suite instead of the one sentence that explains it.
+PF_LOG="$(mktemp)"
+trap 'rm -f "${PF_LOG}"' EXIT
+kubectl port-forward -n "${SVC_NS}" "svc/${GATEWAY}" "${LOCAL_PORT}:8080" >"${PF_LOG}" 2>&1 &
+PF_PID=$!
+trap 'kill "${PF_PID}" 2>/dev/null || true; rm -f "${PF_LOG}"' EXIT
+
+ready=0
 for _ in $(seq 1 30); do
-  curl -s -o /dev/null -m 2 "http://localhost:${LOCAL_PORT}/anthropic/v1/messages" && break
+  # The forwarder dying is terminal — retrying for 30s against a dead child
+  # only delays the same failure and buries its reason.
+  if ! kill -0 "${PF_PID}" 2>/dev/null; then
+    echo "port-forward exited before the gateway answered:" >&2
+    sed 's/^/      /' "${PF_LOG}" >&2
+    exit 1
+  fi
+  if curl -s -o /dev/null -m 2 "http://localhost:${LOCAL_PORT}/anthropic/v1/messages"; then
+    ready=1
+    break
+  fi
   sleep 1
 done
+
+# Falling out of the loop used to run the suite anyway. A probe that cannot
+# reach its target has not passed, and saying so here names the gateway rather
+# than leaving the suite to report a connection error against a bare port.
+if [ "${ready}" -ne 1 ]; then
+  echo "gateway ${SVC_NS}/${GATEWAY} did not answer on localhost:${LOCAL_PORT} within 30s." >&2
+  echo "port-forward said:" >&2
+  sed 's/^/      /' "${PF_LOG}" >&2
+  exit 1
+fi
 
 cd "${REPO}"
 GATEWAY_ENDPOINT="http://localhost:${LOCAL_PORT}" GATEWAY_ROUTE="${ROUTE}" \

@@ -26,5 +26,8 @@ fi
 
 # Server-side apply: HTTPRoute's experimental-channel OpenAPI schema exceeds the 256KB
 # last-applied-configuration annotation limit of client-side apply.
-kubectl apply --server-side --force-conflicts \
+# --request-timeout because this is a network fetch on the core path: every
+# `task up` runs it, and an unreachable release host would otherwise hang the
+# install with no output rather than failing with one.
+kubectl apply --server-side --force-conflicts --request-timeout=120s \
   -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/experimental-install.yaml"

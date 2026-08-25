@@ -1,6 +1,15 @@
 # grafana-operator for kx
-# Lets you author Grafana Dashboards / Datasources as CRs and have the operator reconcile them
-# into the grafana from kube-prometheus-stack.
+# Lets a project author Grafana Dashboard / Datasource CRs and have the operator
+# reconcile them into a Grafana instance.
+#
+# The operator reconciles into whatever a `Grafana` CR names, and this slice
+# installs no such CR — a project supplies one pointing at the instance it wants,
+# which for the kube-prometheus-stack Grafana means an `external` block carrying
+# its URL and an admin credential. Until one exists the operator runs and
+# reconciles nothing, which is the correct idle state and not a fault to debug.
+#
+# Prometheus, Loki and Tempo are wired as datasources by the kube-prometheus-stack
+# slice directly, so nothing here is needed to query the three signals.
 
 replicas: 1
 

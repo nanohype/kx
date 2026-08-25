@@ -29,3 +29,20 @@ reportsController:
     requests:
       cpu: 25m
       memory: 64Mi
+
+# The chart leaves this tag unset, and its own comment records what that means:
+# "Defaults to `latest` if omitted". A floating tag is a different program on
+# the next pull with nothing recording which one an adopter got, and `task up`
+# pulls it into whichever environment runs it.
+#
+# v0.1.0 is the only semantic tag the registry publishes for this image; the
+# rest are commit shas. Pinned in both places the chart uses it — the webhook
+# cleanup hook, which runs on every install, and the test hook, which does not
+# render here but would carry the same default if it were enabled.
+webhooksCleanup:
+  image:
+    tag: v0.1.0
+
+test:
+  image:
+    tag: v0.1.0

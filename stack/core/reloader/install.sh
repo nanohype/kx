@@ -3,11 +3,11 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add stakater https://stakater.github.io/stakater-charts >/dev/null 2>&1 || true
+helm repo add stakater https://stakater.github.io/stakater-charts --force-update >/dev/null
 helm repo update stakater >/dev/null
 
 helm upgrade --install reloader stakater/reloader \
   --namespace kube-system \
   --version 2.2.15 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -43,13 +43,13 @@ kubectl -n my-project apply -f ...
 | metrics-server | Source for `kubectl top` and HPA |
 | prometheus-operator-crds | `ServiceMonitor` / `PodMonitor` / `PrometheusRule` CRDs |
 | reloader | Pod restart on annotated ConfigMap/Secret change |
-| argo-cd | Installed but idle; UI at `localhost:30080` |
+| argo-cd | Installed but idle; UI at `http://localhost:30080` (NodePort on loopback, no port-forward needed) |
 
 **Opt-in slices** — enable on demand:
 
 | Slice | Charts | Command |
 |---|---|---|
-| observability | kube-prometheus-stack, loki, tempo, grafana-operator, opencost | `task stack:observability:enable` |
+| observability | kube-prometheus-stack, loki, tempo, otel-collector, grafana-operator, opencost | `task stack:observability:enable` |
 | security | kyverno, falco, trivy-operator | `task stack:security:enable` |
 | autoscaling | keda, vpa, goldilocks, descheduler | `task stack:autoscaling:enable` |
 | argo-platform | argo-events, argo-rollouts, argo-workflows | `task stack:argo-platform:enable` |
@@ -57,13 +57,14 @@ kubectl -n my-project apply -f ...
 | data | minio, velero, cloudnative-pg, nats | `task stack:data:enable` |
 | data → druid | apache druid (~4.5 GB resident) | `task stack:data:druid:enable` (requires the data slice) |
 | ai-platform | envoy-ai-gateway (+ CRDs), envoy-gateway, eks-agent-platform operator | `task stack:ai-platform:enable` |
+| ai-platform → credentials | local AWS identity for the model gateways (needs the security slice) | `task stack:ai-platform:credentials` |
 
 Each slice has a matching `:disable` target; the core stack stays up. `task stack:all:enable` enables every slice in a single command (excluding druid).
 
 ## Layout
 
 ```
-cluster/   kind config + cluster lifecycle tasks
+cluster/   kind config, cluster lifecycle tasks, local registry + coredns setup
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
@@ -72,9 +73,14 @@ tests/     fixtures the gates prove themselves against
 Taskfile.yaml
 ```
 
-Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned) and,
-for the charts that need one, a `values.yaml` of deltas from chart defaults. A few addons carry more: CRD-only
-installers have no values, and `druid` and `bedrock-credentials` ship the extra manifests their install needs.
+`task up` also starts a container registry at `localhost:5001` and points every
+node's containerd at it, so `docker push localhost:5001/foo:tag` is pullable
+from inside the cluster without a remote registry. `task down` removes it.
+
+Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned,
+with an explicit `--timeout`) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
+A few carry more or fewer: CRD-only installers take chart defaults whole and have no values, and `druid` and
+`bedrock-credentials` ship the extra manifests their install applies.
 
 ## When something breaks
 

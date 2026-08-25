@@ -1,8 +1,10 @@
 # argo-cd for kx — installed but idle.
 # No App-of-Apps Application is created by kx. Use the UI / CLI to drive it per-project when you want GitOps.
 #
-# Access:
-#   task port-forward:argocd       # https://localhost:30080
+# Access: the server Service is a NodePort on 30080 and cluster/kind-config.yaml
+# publishes that port on 127.0.0.1, so the UI is reachable as soon as the core
+# stack is up — no port-forward needed.
+#   http://localhost:30080         # plain http: server.insecure is set below
 #   task argocd:initial-password   # admin password from the initial secret
 
 global:

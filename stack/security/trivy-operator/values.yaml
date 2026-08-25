@@ -35,5 +35,9 @@ nodeCollector:
       operator: Exists
       effect: NoSchedule
 
+# On by default, for the reason the ingress-nginx values file states: the CRD is
+# core, so this applies on every cluster and is inert until a Prometheus reads
+# it. trivy-operator's findings are the one signal in this slice that is worth
+# nothing if nobody is looking.
 serviceMonitor:
-  enabled: false   # flip after observability slice
+  enabled: true

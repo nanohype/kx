@@ -27,16 +27,43 @@ CHART_DIR="${KX_DRUID_CHART_DIR:-${SCRIPT_DIR}/../../../../eks-gitops/catalog/dr
 CHART_BASE_VALUES="${KX_DRUID_CHART_VALUES:-${SCRIPT_DIR}/../../../../eks-gitops/catalog/druid/values.yaml}"
 
 # ---- prereqs ----
+#
+# Each check names a remedy, so each has to be sure of the cause. `kubectl get`
+# exits non-zero for a missing object AND for an unreachable API server, a wrong
+# context or a denied request — and discarding its stderr to assert the first
+# tells an operator to install something when the real problem is that nothing
+# is listening. The message they are given then costs them a search that cannot
+# succeed. So the output is kept and shown whenever it is not a plain NotFound.
+require() { # description remedy kubectl-args...
+  local what="$1" remedy="$2"; shift 2
+  local err
+  if err="$(kubectl "$@" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  if printf '%s' "$err" | grep -qiE 'not found|NotFound'; then
+    echo "ERROR: ${what} is not installed. ${remedy}" >&2
+  else
+    echo "ERROR: could not determine whether ${what} is installed — kubectl said:" >&2
+    # Deduplicated: kubectl repeats its discovery failure once per retry, and
+    # four copies of one line is noise in front of the one fact that matters.
+    printf '%s\n' "$err" | sort -u | sed 's/^/  /' >&2
+    echo "Fix that first; ${remedy} will not help until kubectl can reach the cluster." >&2
+  fi
+  exit 1
+}
+
 [ -d "${CHART_DIR}" ] \
-  || { echo "ERROR: chart not found at ${CHART_DIR}"; exit 1; }
-kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1 \
-  || { echo "ERROR: CNPG not installed. Run: task stack:data:enable"; exit 1; }
-kubectl get ns minio >/dev/null 2>&1 \
-  || { echo "ERROR: MinIO not installed. Run: task stack:data:enable"; exit 1; }
-kubectl get crd certificates.cert-manager.io >/dev/null 2>&1 \
-  || { echo "ERROR: cert-manager not installed (it's in core; run: task up)"; exit 1; }
-python3 -c "import yaml" 2>/dev/null \
-  || { echo "ERROR: post-renderer needs python3 + PyYAML. Run: pip3 install pyyaml"; exit 1; }
+  || { echo "ERROR: chart not found at ${CHART_DIR}" >&2; exit 1; }
+require "CNPG"         "Run: task stack:data:enable" get crd clusters.postgresql.cnpg.io
+require "MinIO"        "Run: task stack:data:enable" get ns minio
+require "cert-manager" "It is in core; run: task up"  get crd certificates.cert-manager.io
+
+if ! yaml_err="$(python3 -c "import yaml" 2>&1)"; then
+  echo "ERROR: the post-renderer needs python3 with PyYAML — python3 said:" >&2
+  printf '  %s\n' "$yaml_err" >&2
+  echo "Run: pip3 install pyyaml" >&2
+  exit 1
+fi
 
 kubectl create namespace druid --dry-run=client -o yaml | kubectl apply -f -
 

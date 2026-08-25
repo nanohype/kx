@@ -13,7 +13,10 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: mc
-          image: minio/mc:latest
+          # Pinned like every chart in this tree. A floating tag makes the
+          # job a different program on a rerun, and it is the one image here
+          # that runs against a Secret-bearing namespace.
+          image: minio/mc:RELEASE.2025-08-13T08-35-41Z
           command:
             - sh
             - -c

@@ -1,0 +1,19 @@
+# Lint config for the gate scripts under scripts/. They are a third of this
+# repository's code and the only part of it that parses another repository's
+# YAML, so an unused name or a stray `f` prefix is worth catching here.
+line-length = 100
+
+[lint]
+# F  pyflakes — unused names, undefined names, f-strings with no placeholders
+# E4/E7/E9 pycodestyle — imports, statements, syntax; the whitespace rules are
+#          left out because nothing formats this tree and reflowing hand-aligned
+#          argument lists would be churn with no reader benefit
+# B  bugbear — mutable defaults, loop-variable capture, silent except
+# UP pyupgrade — the floor is the python3 the runner ships
+# PL pylint — the subset ruff implements
+select = ["F", "E4", "E7", "E9", "B", "UP", "PL"]
+
+# Complexity metrics, not defects. These gates are long by design: each one
+# reads a tree, classifies it, and prints why. Splitting a linear checker to
+# satisfy a branch count makes it harder to follow, not easier.
+ignore = ["PLR0912", "PLR0915", "PLR2004", "PLR0913"]

@@ -42,8 +42,10 @@ extract_helm_block() {
 if [[ "${1:-}" == "--self-test" ]]; then
   t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
   fails=0
+  checks=0
 
   check() { # name expected file
+    checks=$((checks + 1))
     got="$(extract_helm_block "$3")"
     if [[ "$got" != "$2" ]]; then
       echo "FAIL  $1"; echo "        want: [$2]"; echo "        got:  [$got]"
@@ -69,6 +71,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   # command. An extractor that ran to EOF would return something that still looks
   # like a helm invocation and renders, so the schema gate downstream would grade
   # output the installer never produces.
+  checks=$((checks + 1))
   got="$(extract_helm_block "$t/oci.sh")"
   if [[ "$got" == *kubectl* ]]; then
     echo "FAIL  extraction swallowed a following kubectl line"; fails=$((fails + 1))
@@ -77,8 +80,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
   fi
 
   [[ "$fails" -eq 0 ]] || { echo "$fails extraction failure(s)."; exit 1; }
-  echo "OK    extraction behaves as specified over 5 shapes."
+  echo "OK    $checks shape(s) extract as specified."
   exit 0
+fi
+
+# Always, before rendering anything. This script feeds the schema gate its
+# input, so an extraction that silently lifted the wrong command would hand that
+# gate a clean verdict over something the installer never runs — and a proof
+# behind a flag is one the workflow can forget to ask for.
+if ! "${BASH_SOURCE[0]}" --self-test >/dev/null 2>&1; then
+  echo "FAIL  the extraction self-test does not pass — refusing to render." >&2
+  "${BASH_SOURCE[0]}" --self-test >&2 || true
+  exit 2
 fi
 
 # Slices with no `helm upgrade --install` block:
@@ -88,6 +101,22 @@ fi
 # - bedrock-credentials installs no chart: it applies a Kyverno policy and an
 #   aggregated ClusterRole, both plain manifests the yaml lint already covers
 SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
+
+# The exemptions, asserted rather than described. An entry naming a slice that
+# no longer exists silently exempts whatever takes that path next, and an entry
+# naming a slice that HAS grown a helm block exempts a render nobody asked to
+# skip. Both rot toward permissive, which is why neither is left to a reader.
+for s in "${SKIP[@]}"; do
+  if [[ ! -f "$ROOT/$s/install.sh" ]]; then
+    echo "FAIL  SKIP names $s, which has no install.sh — an exemption that outlives its slice."
+    exit 2
+  fi
+  if grep -qE '^[[:space:]]*helm upgrade --install' "$ROOT/$s/install.sh"; then
+    echo "FAIL  SKIP names $s, but it does run \`helm upgrade --install\` — it would be rendered"
+    echo "      if it were not exempt, so the exemption is hiding a slice from this gate."
+    exit 2
+  fi
+done
 
 # An unmatched glob expands to the literal pattern, so every consumer below would
 # read a path that does not exist and fail on whichever tool opened it first.
@@ -145,7 +174,24 @@ for script in "${scripts[@]}"; do
   # OPERATOR_REPO sibling-checkout path) — the helm block may reference them.
   # SCRIPT_DIR is excluded: the scripts derive it from BASH_SOURCE, which
   # doesn't survive eval; this script sets it to the slice dir itself.
-  assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' || true)"
+  #
+  # Assignments containing a command substitution are excluded too, and that is
+  # a correctness rule rather than a precaution: this runs on a clusterless CI
+  # runner, so a `$(docker ...)`, `$(kubectl ...)` or `$(git ...)` lifted out of
+  # an installer executes here against a machine that has none of those things.
+  # A helm block cannot reference one of these anyway — a chart reference
+  # resolved by asking the local docker daemon is not a pin this gate could
+  # check. Reported rather than dropped, because a silent exclusion is how a
+  # gate ends up rendering something other than what it claims.
+  # shellcheck disable=SC2016  # `$(` is the pattern to match, not one to expand
+  assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' | grep -v '\$(' || true)"
+  # shellcheck disable=SC2016  # same pattern, matched rather than expanded
+  runtime_assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' | grep '\$(' || true)"
+  if [[ -n "$runtime_assignments" ]]; then
+    while IFS= read -r a; do
+      echo "      note: ${slice} — not lifting ${a%%=*}=, it runs a command at install time"
+    done <<<"$runtime_assignments"
+  fi
 
   # The render is piped into the mount check rather than discarded. A chart that
   # starts providing a volume a values file already hand-rolls renders two mounts

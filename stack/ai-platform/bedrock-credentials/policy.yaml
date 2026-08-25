@@ -3,7 +3,22 @@
 # — and the whole policy fails to install. Its controllers pick up rights from
 # ClusterRoles carrying these aggregation labels.
 #
-# Scoped to Secrets because that is the only resource this slice generates.
+# Granted by aggregation rather than by binding to Kyverno's ServiceAccounts
+# directly: the chart owns those bindings, so a direct binding would be a second
+# owner of the same subject and would drift on upgrade. Both controllers need
+# it — the admission controller evaluates the rule when a namespace is created,
+# the background controller owns synchronize.
+#
+# The grant is cluster-wide over Secrets, and the resource scope is the only
+# bound on it: a generate-clone reads a source in one namespace and writes
+# targets in namespaces that do not exist yet, so it cannot be namespaced or
+# named. Installing this opt-in slice widens Kyverno from no Secret rights to
+# reading every Secret in the cluster, for as long as the ClusterRole exists.
+# `task stack:ai-platform:credentials:disable` removes it.
+#
+# The verb set is what the generate rule calls: create and update to write the
+# clone, delete to withdraw it when the source goes, get/list/watch to read the
+# source and reconcile the copies. Not `patch` — nothing here patches a Secret.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -14,7 +29,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy

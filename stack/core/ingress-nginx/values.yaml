@@ -26,8 +26,16 @@ controller:
     enable-ssl-passthrough: "true"
   metrics:
     enabled: true
+    # On by default. prometheus-operator-crds is a core addon, so the
+    # ServiceMonitor CRD exists on every kx cluster and this applies cleanly
+    # whether or not the observability slice is enabled — it is inert without
+    # a Prometheus to read it, and picked up the moment one arrives, because
+    # kube-prometheus-stack sets serviceMonitorSelectorNilUsesHelmValues:
+    # false. Leaving it off made the scrape a step the user had to know to
+    # take, which is the opt-in this workspace's always-complete rule exists
+    # to avoid.
     serviceMonitor:
-      enabled: false  # flip to true after observability slice is enabled
+      enabled: true
   resources:
     requests:
       cpu: 50m

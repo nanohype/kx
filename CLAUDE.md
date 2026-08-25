@@ -14,7 +14,7 @@ Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https
 
 When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (ingress-nginx is `stack/core/ingress-nginx`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
 
-Local mappings (kept here for future Claude, not surfaced to user):
+Local mappings:
 
 | eks-gitops | kx | Note |
 |---|---|---|
@@ -34,7 +34,7 @@ eks-agent-platform mirror (these are direct mirrors, not substitutes):
 | envoy-ai-gateway-crds (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway-crds | Same OCI chart and pin. Its own release because the AI-layer chart does not ship its CRDs |
 | envoy-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-gateway | Same OCI chart and values, including `GatewayNamespace` deploy mode — each tenant's Envoy runs in the tenant namespace, so the topology under test matches production |
 | envoy-ai-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway | Same OCI chart, single controller replica. No credential in this slice either side: on the cluster a BackendSecurityPolicy names a region and Pod Identity supplies the rest; locally there is no association, so credentials come from the opt-in `bedrock-credentials` slice below |
-| (Pod Identity association on the tenant ServiceAccount) | stack/ai-platform/bedrock-credentials | Opt-in, local-only, needs the security slice. A Kyverno policy clones a credentials Secret into each `tenants-*` namespace and adds it to the gateway's `envoy` container — the container that evaluates the AWS credential chain, since Envoy AI Gateway signs in Envoy rather than a sidecar. Mutating at admission rather than patching, because Envoy Gateway regenerates the data plane from the EnvoyProxy and a patch is reconciled away |
+| (Pod Identity association on the tenant ServiceAccount) | stack/ai-platform/bedrock-credentials | Opt-in, local-only, needs the security slice. A Kyverno policy clones a credentials Secret into each `tenants-*` namespace and adds it to the gateway's `ai-gateway-extproc` sidecar — the container that evaluates the AWS credential chain, since Envoy AI Gateway resolves credentials and SigV4-signs in its external processor rather than in Envoy. The sidecar is declared native, so it lives under `initContainers`. Mutating at admission rather than patching, because Envoy Gateway regenerates the data plane from the EnvoyProxy and a patch is reconciled away |
 | operator (ns eks-agent-platform) | stack/ai-platform/operator | Built from the sibling eks-agent-platform checkout + kind-loaded (image isn't published); `--disable-aws`, self-signed webhook issuer, cilium netpol. Override the repo path with `KX_EKS_AGENT_PLATFORM_DIR` |
 | nvidia-gpu-operator / nvidia-dra-driver / aws-neuron-device-plugin | (not applicable) | No GPUs on kind |
 
@@ -44,13 +44,31 @@ eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`ek
 - **Secret shape:** the chart's helper expects a Secret named `<hostedId>-<release>-druid-metadata` with keys `username/password/host/dbname`. `install.sh` reads CNPG's generated `druid-metadata-app` Secret and rewrites it into this shape — do not change naming on either side without updating both.
 - **S3 endpoint:** `values-local.yaml`'s `runtime:` adds `druid.s3.endpoint.url=http://minio.minio.svc.cluster.local:9000` + path-style + http. If MinIO moves or the service name changes, update that block.
 
+## Labels on kx's own manifests
+
+The org `resource-tagging` standard's required k8s label tier binds tenant
+workloads — the three kinds the eks-gitops `require-labels` ClusterPolicy
+matches, Deployment, StatefulSet and DaemonSet, outside the platform-managed
+namespaces. kx's own manifests are cluster fixtures, not tenant workloads, and
+none of them is one of those kinds. A production cluster would not match them
+either, so stamping the org tier here would make kx diverge from the shape it
+exists to mirror.
+
+Upstream chart output carries whatever labels its chart carries; kx does not
+add to it.
+
 ## File conventions
 
-Every addon directory has exactly two files:
-- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned. Idempotent. Read top-to-bottom by the user before running.
+Every addon directory has an `install.sh`, and every addon that overrides chart
+defaults has a `values.yaml` beside it:
+- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running.
 - `values.yaml` — local-only deltas from chart defaults. **Do not copy values from eks-gitops** — those assume IRSA, ENI, NLB, etc.
 
-The exception is `prometheus-operator-crds` which has no values.
+Two files is the shape to reach for, not a rule the tree satisfies everywhere.
+An addon that takes chart defaults whole carries no `values.yaml`, and an addon
+whose install applies manifests of its own carries those too. Anything beyond
+`install.sh` + `values.yaml` earns its place by being applied by that
+`install.sh` — a file in an addon directory that nothing applies is dead.
 
 ## Taskfile model
 
@@ -65,7 +83,7 @@ The exception is `prometheus-operator-crds` which has no values.
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
 - Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
 - Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
-- Don't add CI that needs a live cluster or cloud credentials. CI is lint (yamllint, shellcheck) plus a clusterless `helm template` render gate over every slice (`scripts/render-check.sh`) — anything that requires a running kind cluster stays a local `task` target
+- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered. The two questions whose answer changes without this repository changing — has a chart been deprecated upstream, has the catalog moved past the pin — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
 - Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 
