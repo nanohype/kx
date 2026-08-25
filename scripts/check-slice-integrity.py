@@ -35,6 +35,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -466,6 +467,13 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
     # this file: it reports the same number over a tree with no gates in it at
     # all, so it can satisfy a floor while nothing has been run. A probe counts
     # once both of its verdicts came back from an actual subprocess.
+    #
+    # This invariant is exempt from the gates-only-tree rule, and the exemption
+    # is the reason rather than a convenience: its subject IS the gate directory,
+    # so on a tree holding nothing else that tree is its complete corpus and a
+    # clean verdict over it is honest. The floor still separates the two cases —
+    # it counts probes that produced two verdicts, so "this is my whole corpus"
+    # reads differently from "I reached fewer gates than I should have".
     EXAMINED["every gate is observed to reject and to accept"] = observed
     return problems
 
@@ -494,12 +502,6 @@ MD_CODE = re.compile(r"`([^`\n]+)`")
 # Where the gates themselves live. Content here is the suite's own source, and a
 # denominator made of it is a gate measuring itself.
 GATE_DIR = "scripts"
-
-# Not content. Build artefacts and caches are present on a developer machine and
-# absent from a fresh checkout, so a law that counted them would hold in one
-# place and not the other.
-NOT_CONTENT = {".git", ".ruff_cache", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
-
 
 # Whether a gate can LOOK, which is a different question from whether it can
 # JUDGE, and the one that goes unasked.
@@ -662,17 +664,14 @@ def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
     is present on a developer machine and absent from a fresh checkout, and a
     law that a cache directory can satisfy is not one.
     """
+    err = require_git(root)
+    if err:
+        EXAMINED["the tree holds content outside the gate directory"] = 0
+        return [err]
     tracked = subprocess.run(
         ["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=False,
     )
-    if tracked.returncode == 0 and tracked.stdout.strip():
-        paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
-    else:
-        paths = [
-            pathlib.PurePosixPath(f.relative_to(root).as_posix())
-            for f in root.rglob("*")
-            if f.is_file() and not NOT_CONTENT.intersection(f.relative_to(root).parts)
-        ]
+    paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
     outside = [str(f) for f in paths if f.parts and f.parts[0] != GATE_DIR]
     EXAMINED["the tree holds content outside the gate directory"] = len(outside)
     if not outside:
@@ -854,6 +853,33 @@ def scrape_surfaces_are_on(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+def require_git(root: pathlib.Path) -> str | None:
+    """git is an authority, not merely a convenience.
+
+    Two checks here scope their population to the tracked set, so git is not
+    something this suite runs alongside its work — it is what tells the suite
+    what it is meant to examine. An authority that is absent must fail, exactly
+    as a missing sibling checkout does, and it must fail by saying so: without
+    this the first `git` call raises FileNotFoundError, which exits non-zero like
+    a refusal and names the binary rather than what could not be determined.
+
+    A tree that is not a repository is the same failure by a different route. The
+    fallback that used to cover it walked the filesystem instead, silently
+    grading whatever happened to be in the directory — which is the behaviour
+    scoping to the tracked set was introduced to stop.
+    """
+    if shutil.which("git") is None:
+        return ("git is not on PATH. This suite scopes what it examines to the tracked set, "
+                "so without git it cannot determine its own population and any verdict it "
+                "gave would be over an unknown corpus.")
+    inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                            capture_output=True, text=True, check=False)
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return (f"{root} is not a git repository, so the tracked set does not exist and the "
+                f"population this suite examines is undefined.")
+    return None
+
+
 def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
     """The shell scripts THIS repository owns.
 
@@ -869,10 +895,7 @@ def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
     """
     out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "*.sh"],
                          capture_output=True, text=True, check=False)
-    if out.returncode == 0:
-        return sorted(root / f for f in out.stdout.split("\0") if f)
-    return sorted(s for s in root.glob("**/*.sh") if not any(
-        part.startswith(".") for part in s.relative_to(root).parts))
+    return sorted(root / f for f in out.stdout.split("\0") if f)
 
 
 def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
@@ -1283,6 +1306,26 @@ def controls() -> int:
     # minimum. A floor that lives in a table and is never exercised is a comment
     # about a floor: it cannot tell you it stopped firing, and the run that
     # would have needed it is the run that finds out.
+    # git as an authority, exercised rather than described. Both routes to an
+    # undefined population: the binary missing, and a tree that is not a
+    # repository. Neither may reach a verdict.
+    real_path = os.environ.get("PATH", "")
+    with tempfile.TemporaryDirectory() as no_git:
+        os.environ["PATH"] = no_git
+        try:
+            absent = require_git(pathlib.Path(no_git))
+        finally:
+            os.environ["PATH"] = real_path
+    not_a_repo = require_git(pathlib.Path(tempfile.mkdtemp(prefix="kx-not-a-repo-")))
+    if not absent or "git is not on PATH" not in absent:
+        print("  GIT OPEN    require_git accepted a PATH with no git on it.")
+        failures += 1
+    elif not not_a_repo or "not a git repository" not in not_a_repo:
+        print("  GIT OPEN    require_git accepted a directory that is not a repository.")
+        failures += 1
+    else:
+        print("  control ok  git absent and not-a-repository are both refused, by name")
+
     # Measured as a DIFFERENCE, because every simpler form of this control passes
     # for the wrong reason. A tree small enough to sit below every floor also
     # violates invariants that have nothing to do with floors, so "the suite
@@ -1314,13 +1357,28 @@ def controls() -> int:
               f"only because of a floor]")
 
     by_label = dict(CHECKS)
-    ran = 0
+    # Three quantities, because the interesting one is the smallest. `seen` is
+    # cases entered, `accounted` is cases that recorded a verdict either way, and
+    # `proven` is cases that completed a proof. Counting at the top of the loop
+    # measures cases SEEN, which is a property of the table rather than of what
+    # ran — the same substitution as counting gates shipped instead of controls
+    # completed. Every count below happens after the last assertion, so a path
+    # that leaves early cannot contribute to it.
+    seen = accounted = proven = 0
     for label, cases in sorted(CONTROLS.items()):
         check = by_label.get(label)
         if check is None:
+            # Loud, not skipped. This is unreachable while the orphan check above
+            # holds, and "unreachable because something else is true" is the
+            # argument rather than the guarantee — a silent continue is exactly
+            # the shape being guarded against here.
+            print(f"  UNRESOLVED  {label} — has {len(cases)} control case(s) and no check to "
+                  f"run them against, so none of them can prove anything.")
+            failures += 1
+            seen += len(cases)
             continue
         for case in cases:
-            ran += 1
+            seen += 1
             name, broken, clean = case[0], case[1], case[2]
             must_say = case[3] if len(case) > 3 else None
             # Assert the mutation happened, by comparing the fixtures rather
@@ -1332,23 +1390,31 @@ def controls() -> int:
                 print(f"  NOT MUTATED {name} — the broken and clean fixtures are identical, "
                       f"so this control proves nothing.")
                 failures += 1
+                accounted += 1
                 continue
             if check(_tree(clean)):
                 print(f"  UNSOUND     {name} — the gate already fails on the clean tree, so "
                       f"failing on the mutation would prove nothing.")
                 failures += 1
+                accounted += 1
                 continue
             reported = check(_tree(broken))
             if not reported:
                 print(f"  FAILS OPEN  {name} — the gate accepted it.")
                 failures += 1
+                accounted += 1
             elif must_say and not any(must_say in r for r in reported):
                 print(f"  MIS-CITED   {name} — expected {must_say!r} in the report, got:")
                 for r in reported:
                     print(f"                {r}")
                 failures += 1
+                accounted += 1
             else:
                 print(f"  control ok  {name}")
+                # Last statement in the body, after reject, name-the-mutation and
+                # citation have all been checked. This counts a proof, not a case.
+                proven += 1
+                accounted += 1
     # The floor's own control, which the (broken, clean) table cannot express:
     # every synthetic tree is "bad" to that check, because GATE_PROBES names
     # real gates a fixture tree does not contain. So this writes a throwaway
@@ -1394,7 +1460,17 @@ def controls() -> int:
         else:
             print(f"  {'caught  ' if expect_caught else 'allowed '}  {label}")
 
-    return failures + _report_control_total(ran)
+    # The half that a table emptied of cases does not reach: a case entered and
+    # left without recording anything. Emptying the table is caught by the case
+    # floor below; a single control slipping out of the loop is not, and the
+    # closed half looks like the whole thing.
+    silent = seen - accounted
+    if silent:
+        print(f"  SILENT SKIP {silent} control case(s) left the loop without proving or "
+              f"failing anything, so this run licenses nothing.")
+        failures += 1
+
+    return failures + _report_control_total(proven)
 
 
 def run(root: pathlib.Path = ROOT) -> int:
@@ -1443,6 +1519,16 @@ def _report_control_total(ran: int) -> int:
 
 
 def main() -> int:
+    # Before the controls, not inside the checks. The controls build fixture
+    # repositories and the checks scope to the tracked set, so git is upstream of
+    # both: its absence is a fact about this entire run rather than about one
+    # invariant, and discovering it partway through means a traceback out of
+    # whichever call reached it first.
+    err = require_git(ROOT)
+    if err:
+        print(f"check-slice-integrity: {err}", file=sys.stderr)
+        print("Refusing to report on a population that cannot be determined.", file=sys.stderr)
+        return 1
     bad = controls()
     if bad:
         print(f"\ncheck-slice-integrity: {bad} control(s) wrong. Refusing to report on the "
