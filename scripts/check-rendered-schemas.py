@@ -25,6 +25,8 @@ ServiceMonitors are validated by prometheus-operator-crds' CRD — so nothing ca
 be validated until every slice has rendered.
 """
 
+import contextlib
+import io
 import json
 import pathlib
 import re
@@ -331,11 +333,39 @@ def self_test():
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('admitted  ',))),
+    }
+
+
 def main():
     if len(sys.argv) != 2:
         die("usage: check-rendered-schemas.py {<render-dir>|--self-test}")
     if sys.argv[1] == "--self-test":
         return self_test()
+    # Always, before validating anything. This gate's whole thesis is that a
+    # skip counts as success, so a gate that stopped rejecting would report the
+    # same clean summary it reports when everything is genuinely valid.
+    if self_test() != 0:
+        die("refusing to validate a render with a gate that has not proven it rejects", code=1)
+    print()
     return gate(sys.argv[1])
 
 

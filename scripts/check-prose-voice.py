@@ -24,6 +24,8 @@ without a verdict.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -165,9 +167,40 @@ def self_test() -> int:
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('flagged   ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('spared    ',))),
+    }
+
+
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
+    # Always. This gate asserts nothing about the tree, but a marker that has
+    # stopped matching would quietly stop surfacing the lines it exists to show.
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        proven = self_test()
+    if proven != 0:
+        print(buf.getvalue(), file=sys.stderr)
+        print("check-prose-voice: markers are not behaving as specified.", file=sys.stderr)
+        return 1
     base = sys.argv[1] if len(sys.argv) > 1 else "origin/main"
     lines = added_prose(base)
     if not lines:

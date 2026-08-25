@@ -260,11 +260,40 @@ def self_test() -> int:
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('passed    ',))),
+    }
+
+
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
     if "--sync" in sys.argv:
         return sync()
+    # Always, before either check reports. The offline half is a set comparison
+    # that would return no problems if it stopped comparing, and print the same
+    # OK line it prints when every pin really is recorded.
+    if self_test() != 0:
+        print("\nRefusing to report with a gate that has not proven it rejects.")
+        return 1
+    print()
     if "--live" in sys.argv:
         return check_live()
     return check_offline(pins(), load_records())

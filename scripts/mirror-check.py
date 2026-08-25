@@ -42,6 +42,8 @@ because Renovate merged in another repository — `freshness` asks it on a
 schedule.
 """
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -490,9 +492,37 @@ def self_test() -> int:
     return 0
 
 
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('passed    ',))),
+    }
+
+
 def main():
     if "--self-test" in sys.argv:
         sys.exit(self_test())
+    # Always, before reading either side. A comparison that stopped reporting
+    # returns empty lists and prints a clean verdict, so the proof runs on every
+    # invocation rather than behind a flag a workflow can forget.
+    if self_test() != 0:
+        die("refusing to compare with a gate that has not proven it rejects")
+    print()
     commands = {"check": cmd_check, "sync": cmd_sync, "freshness": cmd_freshness}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
         die("usage: mirror-check.py {check|sync|freshness|--self-test}")

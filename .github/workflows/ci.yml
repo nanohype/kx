@@ -117,22 +117,6 @@ jobs:
       # renovate.json — and a customManager whose regex matches nothing is valid
       # config watching nothing. renovate-config-validator passes it: the schema
       # is fine and the pattern never runs against a file.
-      - name: Prove the coverage gate still rejects
-        run: python3 scripts/check-renovate-coverage.py --self-test
-
-      - name: Prove the prose markers still match
-        run: python3 scripts/check-prose-voice.py --self-test
-
-      # Three invariants that each close a class the sweep found once and fixed
-      # everywhere: an unbounded helm install, a gate with no proof it rejects,
-      # and a manifest in an addon directory that nothing applies. Fixing every
-      # instance leaves the class open for the next slice added.
-      - name: Prove the slice invariants still reject
-        run: python3 scripts/check-slice-integrity.py --self-test
-
-      - name: Slice invariants hold
-        run: python3 scripts/check-slice-integrity.py
-
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
 
@@ -157,7 +141,6 @@ jobs:
         run: |
           pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/check-chart-deprecation.py
-          python3 scripts/check-chart-deprecation.py --self-test
 
   mirror:
     name: Mirror the eks-gitops catalog
@@ -182,12 +165,6 @@ jobs:
           path: .sibling/eks-gitops
           fetch-depth: 0
           persist-credentials: false
-
-      # No checkout needed: the comparison is pure over the two parsed sides, so
-      # this proves it still reports a divergence before the step below reads a
-      # real catalog and reports none.
-      - name: Prove the mirror comparison still rejects
-        run: python3 scripts/mirror-check.py --self-test
 
       - name: Compare every chart pin against the catalog
         env:
@@ -255,18 +232,21 @@ jobs:
       # gate its input, so an extraction that quietly lifted the wrong command
       # would hand that gate a clean verdict over something the installer never
       # runs — a tested consumer over an unproven producer.
-      - name: Prove the render extraction still lifts the right command
-        run: ./scripts/render-check.sh --self-test
-
-      - name: Prove the schema gate still rejects
+      # Three invariants, each closing a class the sweep found once and fixed
+      # everywhere: an unbounded helm install, a manifest in an addon directory
+      # that nothing applies, and a gate that can no longer reject. It runs its
+      # own positive controls before reporting, so there is no separate step to
+      # forget.
+      #
+      # In this job because the third invariant RUNS every gate in the suite and
+      # observes what it does, rather than reading its source for the word
+      # "control" — and the schema gate's controls need kubeconform, installed
+      # above. A floor that cannot observe a gate refuses to certify it, so this
+      # has to run where every gate can run.
+      - name: Slice invariants hold, and every gate still rejects
         run: |
           pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
-          python3 scripts/check-rendered-schemas.py --self-test
-
-      # Runs as a pipe inside render-check.sh on every slice, so it executes on
-      # every run — which is not the same as still being able to reject.
-      - name: Prove the mount gate still rejects
-        run: python3 scripts/check-rendered-mounts.py --self-test
+          python3 scripts/check-slice-integrity.py
 
       - name: helm template each slice at its pinned version
         env:
@@ -277,8 +257,13 @@ jobs:
       # Same render, second pass. A custom resource in one slice is defined by a
       # CRD shipped in another, so nothing can be validated until every slice has
       # rendered — which is why this is a step here rather than its own job.
+      # Every gate below runs its own positive controls before it reports, so a
+      # gate that has stopped rejecting fails on its own invocation rather than
+      # in a step somebody has to remember to add.
       - name: Validate every rendered resource against a schema
-        run: python3 scripts/check-rendered-schemas.py "${{ runner.temp }}/render"
+        run: |
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          python3 scripts/check-rendered-schemas.py "${{ runner.temp }}/render"
 
   merge-gate:
     name: merge gate

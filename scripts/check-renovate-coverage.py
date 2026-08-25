@@ -18,7 +18,10 @@ them would pass this check and silently match nothing in production.
 
 from __future__ import annotations
 
+import contextlib
 import glob
+import io
+import subprocess
 import json
 import pathlib
 import re
@@ -38,6 +41,52 @@ RE2_UNSUPPORTED = [
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+
+def strip_comments(text: str) -> str:
+    """Source with `#` comment bodies blanked, quote-aware.
+
+    A `#` opens a comment only at the start of a word and only outside quotes,
+    so a URL fragment and a quoted hash both survive.
+
+    Which view a check reads is a per-check decision, not a blanket rule:
+
+      raw       when the thing being looked for IS an annotation. Renovate reads
+                whole files, so a question of the form "would Renovate match
+                this?" has to be asked of the text Renovate actually sees.
+      stripped  when a comment must not be able to satisfy a code reference — a
+                pin, a call, a filename something applies.
+
+    Reading one view for both purposes is the defect. A gate that strips
+    everywhere goes blind to annotations, which are comments by construction;
+    a gate that strips nowhere lets a comment stand in for an implementation.
+    """
+    out = []
+    for line in text.splitlines():
+        buf, quote, i = [], None, 0
+        while i < len(line):
+            c = line[i]
+            if quote:
+                buf.append(c)
+                if c == "\\" and quote == '"' and i + 1 < len(line):
+                    buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+                buf.append(c)
+            elif c == "#" and (not buf or buf[-1].isspace()):
+                # Blanked to the line's end rather than truncated, so every line
+                # keeps its length and a file:line citation stays true.
+                buf.append(" " * (len(line) - i))
+                break
+            else:
+                buf.append(c)
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
+
 # What makes a script pin-bearing. Classified by what the script installs, not
 # by whether it contains the string this gate looks for: filtering on
 # `--version` would derive the verdict from the set that survived the filter,
@@ -52,7 +101,11 @@ PINNED = re.compile(r"helm repo add|oci://|releases/download/")
 # What a version looks like in a script claimed to carry none. Deliberately
 # wider than PINNED — its job is to catch a pin PINNED failed to recognise.
 VERSION_SHAPED = re.compile(
-    r"^.*(--version\s+\S|[A-Z][A-Z0-9_]*_VERSION=|releases/download/v[0-9]).*$",
+    # [ \t]+ rather than \s+, and this matters against a comment-blanked view:
+    # a blanked comment line is all spaces, so \s would cross the newline and
+    # swallow the blanked line above or below the match — reporting a line that
+    # is not the one the pin is on. Nothing about that failure announces itself.
+    r"^.*(--version[ \t]+\S|[A-Z][A-Z0-9_]*_VERSION=|releases/download/v[0-9]).*$",
     re.M,
 )
 
@@ -91,6 +144,22 @@ def compile_patterns(cfg) -> list:
     return patterns
 
 
+def manager_scopes(cfg) -> list:
+    """One (scope, patterns) pair per manager, scope compiled from its own config."""
+    out = []
+    for m in cfg.get("customManagers") or []:
+        scopes = []
+        for raw in m.get("managerFilePatterns") or []:
+            # Renovate spells a regex file pattern as /re/; anything else is a
+            # glob, which this repo does not use.
+            if not (raw.startswith("/") and raw.endswith("/")):
+                fail(f"managerFilePatterns entry {raw!r} is not a /regex/ — this gate reads "
+                     f"only the regex form that renovate.json uses.")
+            scopes.append(re.compile(raw[1:-1]))
+        out.append((scopes, compile_patterns({"customManagers": [m]})))
+    return out
+
+
 def coverage(patterns, scripts, root=None, quiet=False) -> int:
     """0 when every pin in `scripts` is watched; 1 with a report when one is not."""
     root = root or ROOT
@@ -102,7 +171,7 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
 
     pins, no_chart = [], []
     for p in scripts:
-        (pins if PINNED.search(pathlib.Path(p).read_text()) else no_chart).append(p)
+        (pins if PINNED.search(strip_comments(pathlib.Path(p).read_text())) else no_chart).append(p)
     if not pins:
         say("FAIL  no install.sh pins a version — refusing to report full coverage "
             "over an empty set.")
@@ -116,7 +185,7 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
     unwatched = [
         (str(pathlib.Path(p).relative_to(root)), hit.group(0).strip())
         for p in no_chart
-        for hit in [VERSION_SHAPED.search(pathlib.Path(p).read_text())]
+        for hit in [VERSION_SHAPED.search(strip_comments(pathlib.Path(p).read_text()))]
         if hit
     ]
     if unwatched:
@@ -132,7 +201,7 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
     unmatched = []
     covered = []
     for p in pins:
-        src = pathlib.Path(p).read_text()
+        src = strip_comments(pathlib.Path(p).read_text())
         rel = str(pathlib.Path(p).relative_to(root))
 
         # Every pin in the file, not the first one. `search` returns one match, so
@@ -156,8 +225,10 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
 
         # The independent count of what SHOULD have matched. Derived from the file
         # rather than from the matcher, so a regex that stops matching cannot also
-        # revise the target it is measured against. Comment lines excluded: a pin
-        # discussed in prose is not a pin.
+        # revise the target it is measured against. Counted per pin rather than
+        # per file: one watched pin must not vouch for an unwatched pin beside
+        # it. `src` is already comment-stripped, so a pin discussed in prose is
+        # not a pin.
         # At least one, because this script installs a chart from a registry and
         # that is what put it in this set. Counting only `--version` lines would
         # take the floor from the same marker the patterns need: a chart carrying
@@ -165,7 +236,7 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
         # passes over a pin nothing watches.
         expected = max(1, sum(
             1 for line in src.splitlines()
-            if "--version" in line and not line.lstrip().startswith("#")
+            if "--version" in line
         ))
         if len(found) < expected:
             unmatched.append(
@@ -235,6 +306,49 @@ def self_test() -> int:
         else:
             print(f"  rejected  {label}")
 
+    # Deleting the config must fail the gate, not empty it. compile_patterns
+    # refuses a config with no customManagers — without that, an empty pattern
+    # list matches nothing, every file reports zero pins found against zero
+    # expected, and the gate passes over a tree it never looked at.
+    probe = subprocess.run(
+        [sys.executable, "-c",
+         "import importlib.util,sys;"
+         "s=importlib.util.spec_from_file_location('rc', sys.argv[1]);"
+         "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+         "m.compile_patterns({'customManagers': []})",
+         str(pathlib.Path(__file__).resolve())],
+        capture_output=True, text=True, check=False,
+    )
+    if probe.returncode == 0:
+        failures.append("a config with no customManagers is accepted")
+        print("  ACCEPTED  (positive) a renovate.json with every manager deleted")
+    else:
+        print("  rejected  (positive) a renovate.json with every manager deleted")
+
+    # A version that appears only in a comment is not a pin, so the file that
+    # carries it is correctly reported as carrying none. The opposite reading —
+    # treating prose as a pin — makes the exclusion assertion fire on a file
+    # that has nothing to watch.
+    root, scripts = tree({"s/a": WATCHED,
+                          "s/b": '# --version 9.9.9 was the old pin\nkubectl apply -f ./x.yaml\n'})
+    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+        failures.append("a version in a comment is not a pin")
+        print("  ACCEPTED  (positive) a version in a comment is treated as an unwatched pin")
+    else:
+        print("  spared    (positive) a version that appears only in a comment")
+
+    # A file whose only registry marker is in prose is not pin-bearing. Asserted
+    # as a positive, because the failure this guards is a false alarm rather
+    # than a miss, and a gate that cries wolf is one people learn to skip.
+    root, scripts = tree({"s/a": WATCHED,
+                          "s/b": '# this used to `helm repo add` but installs from a path now\n'
+                                 'helm upgrade --install b ./chart\n'})
+    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+        failures.append("a registry marker in a comment is not a pin")
+        print("  ACCEPTED  (positive) a `helm repo add` in a comment is treated as a pin")
+    else:
+        print("  spared    (positive) a registry marker that appears only in a comment")
+
     # The release-URL shape, which is why the third manager exists. Asserted as
     # a positive: a break-only suite passes just as happily when every pattern
     # matches nothing.
@@ -257,15 +371,85 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {len(failures)} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 2} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + 5} case(s) behave as specified.")
     return 0
 
 
+def no_dead_managers(cfg, root: pathlib.Path = ROOT) -> int:
+    """Every manager matches something somewhere in the real tree.
+
+    Coverage says every pin is watched; it does not say every manager watches
+    something. A rule matching nothing costs nothing to keep, so nobody removes
+    it, and it reads to the next author as a rule already covering the shape
+    they are about to add. Asked of the real corpus only — a synthetic fixture
+    exercises one shape by design, so the same question there means nothing.
+    """
+    tracked = [
+        str(f.relative_to(root))
+        for f in root.rglob("*")
+        if f.is_file() and ".git" not in f.parts
+    ]
+    dead = []
+    for i, (scopes, patterns) in enumerate(manager_scopes(cfg)):
+        in_scope = [f for f in tracked if any(s.search(f) for s in scopes)]
+        if not in_scope:
+            dead.append(f"customManagers[{i}] applies to no file in the tree. Its "
+                        f"managerFilePatterns match nothing.")
+            continue
+        # Raw: this asks whether RENOVATE would match, and Renovate reads whole
+        # files. A manager matching only an annotated line is alive.
+        texts = [(root / f).read_text(errors="ignore") for f in in_scope]
+        for j, pat in enumerate(patterns):
+            if not any(pat.search(x) for x in texts):
+                dead.append(
+                    f"customManagers[{i}].matchStrings[{j}] matches nothing in the "
+                    f"{len(in_scope)} file(s) it applies to:\n        {pat.pattern}"
+                )
+    if dead:
+        print(f"FAIL  {len(dead)} customManager pattern(s) match nothing:")
+        for d in dead:
+            print(f"        {d}")
+        print("\n      A rule matching nothing watches nothing. Either the shape it was "
+              "written for\n      has left the tree — remove it — or it never matched and "
+              "the coverage it\n      appears to provide has never existed.")
+        return 1
+    return 0
+
+
+def control_outcomes() -> dict:
+    """What the controls actually exercised, for the suite-wide floor.
+
+    Counted by running them and reading the outcome, never by matching source
+    text. A floor that decides whether a gate has controls by looking for the
+    word "control" is satisfied by a comment saying the controls were removed —
+    which is the same defect one level up from the one the controls exist for.
+
+    Both halves matter. A gate that rejects everything is as useless as one that
+    rejects nothing, and either count alone passes a one-sided check.
+    """
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = self_test()
+    lines = buf.getvalue().splitlines()
+    return {
+        "ok": rc == 0,
+        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
+        "accepted": sum(1 for line in lines if any(m in line for m in ('spared    ', 'matched   ', 'passed    '))),
+    }
+
+
 def main() -> int:
-    if "--self-test" in sys.argv:
-        return self_test()
+    # Always, before reporting on the tree. A gate that has not just proven it
+    # rejects is a gate being trusted rather than checked, and a proof behind a
+    # flag is a proof a workflow can forget to ask for.
+    if self_test() != 0:
+        print("\nRefusing to report coverage with a gate that has not proven it rejects.")
+        return 1
+    print()
     patterns = compile_patterns(json.loads((ROOT / "renovate.json").read_text()))
-    return coverage(patterns, sorted(glob.glob(str(ROOT / "stack/*/*/install.sh"))))
+    cfg = json.loads((ROOT / "renovate.json").read_text())
+    corpus = sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
+    return no_dead_managers(cfg) or coverage(patterns, corpus)
 
 
 if __name__ == "__main__":

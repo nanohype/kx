@@ -47,14 +47,15 @@
     {
       "description": [
         "kubeconform is fetched by release URL in ci.yml, not by `uses:`, so neither the github-actions manager nor the chart regexes above can see it. Left unwatched it is a version pinned somewhere no instrument looks, drifting until someone happens to read the line.",
-        "It is the schema gate's only external binary, and a gate whose validator silently ages is worse than no gate, because the green tick keeps arriving."
+        "It is the schema gate's only external binary, and a gate whose validator silently ages is worse than no gate, because the green tick keeps arriving.",
+        "The version is read from the env: entry rather than from the URL, because the URL interpolates it. Repository and version therefore sit on separate lines, which is why the pattern spans them."
       ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^\\.github/workflows/.+\\.yml$/"
       ],
       "matchStrings": [
-        "https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/(?<currentValue>v[0-9][^/]*)/"
+        "[A-Z][A-Z0-9_]*_VERSION:\\s*(?<currentValue>v[0-9][^\\s]*)[\\s\\S]*?https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/"
       ],
       "datasourceTemplate": "github-releases"
     },
@@ -65,7 +66,7 @@
         "/^stack/.+\\.yaml$/"
       ],
       "matchStrings": [
-        "image:\\s*(?<depName>[a-z0-9._/-]+):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)\\s*$"
+        "image:\\s*(?<depName>[a-z0-9._/-]+):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)\\s"
       ],
       "datasourceTemplate": "docker"
     }

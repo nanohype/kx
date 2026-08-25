@@ -84,6 +84,16 @@ if [[ "${1:-}" == "--self-test" ]]; then
   exit 0
 fi
 
+# Always, before rendering anything. This script feeds the schema gate its
+# input, so an extraction that silently lifted the wrong command would hand that
+# gate a clean verdict over something the installer never runs — and a proof
+# behind a flag is one the workflow can forget to ask for.
+if ! "${BASH_SOURCE[0]}" --self-test >/dev/null 2>&1; then
+  echo "FAIL  the extraction self-test does not pass — refusing to render." >&2
+  "${BASH_SOURCE[0]}" --self-test >&2 || true
+  exit 2
+fi
+
 # Slices with no `helm upgrade --install` block:
 # - gateway-api-crds is kubectl-apply only
 # - druid renders via helm template → filter → kubectl apply (Helm v4 dropped
@@ -91,6 +101,22 @@ fi
 # - bedrock-credentials installs no chart: it applies a Kyverno policy and an
 #   aggregated ClusterRole, both plain manifests the yaml lint already covers
 SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
+
+# The exemptions, asserted rather than described. An entry naming a slice that
+# no longer exists silently exempts whatever takes that path next, and an entry
+# naming a slice that HAS grown a helm block exempts a render nobody asked to
+# skip. Both rot toward permissive, which is why neither is left to a reader.
+for s in "${SKIP[@]}"; do
+  if [[ ! -f "$ROOT/$s/install.sh" ]]; then
+    echo "FAIL  SKIP names $s, which has no install.sh — an exemption that outlives its slice."
+    exit 2
+  fi
+  if grep -qE '^[[:space:]]*helm upgrade --install' "$ROOT/$s/install.sh"; then
+    echo "FAIL  SKIP names $s, but it does run \`helm upgrade --install\` — it would be rendered"
+    echo "      if it were not exempt, so the exemption is hiding a slice from this gate."
+    exit 2
+  fi
+done
 
 # An unmatched glob expands to the literal pattern, so every consumer below would
 # read a path that does not exist and fail on whichever tool opened it first.

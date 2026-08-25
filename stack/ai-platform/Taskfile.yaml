@@ -35,17 +35,15 @@ tasks:
     cmds:
       - bash {{.TASKFILE_DIR}}/bedrock-credentials/verify.sh
 
-  # The credential outlives the slice unless something withdraws it. Deleting
-  # the source Secret is what retracts the clones — the generate rule's
-  # synchronize owns them, so removing the policy first would strand a live AWS
-  # session token in every tenants-* namespace with nothing left watching it.
-  # Order here is source, then policy, then the grant the policy needed.
+  # The credential outlives the slice unless something withdraws it, and the
+  # copies outlive the policy unless something names them. uninstall.sh deletes
+  # the clones itself rather than waiting on Kyverno's background retraction,
+  # which has no barrier and which the last step of a teardown would race by
+  # revoking the Secret grant that controller needs.
   credentials:disable:
     desc: Withdraw the local Bedrock credentials and the rights they needed
     cmds:
-      - kubectl delete secret kx-bedrock-credentials -n kyverno --ignore-not-found
-      - kubectl delete clusterpolicy inject-local-bedrock-credentials --ignore-not-found
-      - kubectl delete clusterrole kyverno:bedrock-credentials-secrets --ignore-not-found
+      - bash {{.TASKFILE_DIR}}/bedrock-credentials/uninstall.sh
 
   # The only check here that sends traffic. Everything else — status phases,
   # the credentials verify, the render gate — reads a resource, and a gateway
