@@ -27,6 +27,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Full history, because the prose step diffs base...HEAD and a merge
+          # base needs a common ancestor on BOTH sides. Deepening only the base
+          # leaves the head shallow and the range still unresolvable — and the
+          # gate refuses rather than reporting an empty diff, so getting this
+          # wrong is a red job rather than a silent pass.
+          fetch-depth: 0
 
       - name: yamllint
         run: |
@@ -122,7 +128,9 @@ jobs:
           # parses it, so a branch named with a shell metacharacter would run.
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          # The checkout above takes full history, so the base ref only needs
+          # fetching; no deepening dance, and no silent empty range if it fails.
+          git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           python3 scripts/check-prose-voice.py "origin/$BASE_REF"
 
   renovate-coverage:
