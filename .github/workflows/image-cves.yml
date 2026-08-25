@@ -63,7 +63,8 @@ jobs:
           TRIVY_VERSION: v0.74.0
         run: |
           url="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
-          curl -sSfL --max-time 120 --retry 3 --retry-connrefused -o trivy.tar.gz "$url"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+            -o trivy.tar.gz "$url"
           tar -xz -C /usr/local/bin -f trivy.tar.gz trivy
           rm trivy.tar.gz
           trivy --version

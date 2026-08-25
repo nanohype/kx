@@ -244,13 +244,21 @@ jobs:
       # alongside the archive, so it catches corruption and substitution of the
       # asset; it does not attest the release itself, which would need the
       # upstream signing key.
+      #
+      # --retry-all-errors alongside --retry, because the other two do not cover
+      # the failure this download actually has. --retry covers transient HTTP
+      # and a timeout; --retry-connrefused adds a refused connection. A reset
+      # partway through the transfer is in neither set, so the first one ends
+      # the download — on the blocking path, over a fetch no change here can
+      # affect.
       - name: Install kubeconform
         env:
           KUBECONFORM_VERSION: v0.8.0
           KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
         run: |
           url="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
-          curl -sSfL --max-time 120 --retry 3 --retry-connrefused -o kubeconform.tar.gz "$url"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+            -o kubeconform.tar.gz "$url"
           echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
           tar -xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
           rm kubeconform.tar.gz
