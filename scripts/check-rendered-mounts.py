@@ -239,11 +239,14 @@ def main() -> int:
 
     label = sys.argv[1] if len(sys.argv) > 1 else "(stdin)"
     stream = sys.stdin.read()
-    # A stream that carried manifests but parsed to nothing means the parser and
-    # the render disagree, and the check silently examined an empty set. That is
-    # the failure this whole file exists to avoid, so it is an error, not a pass.
-    if stream.strip() and not [d for d in yaml.safe_load_all(stream) if isinstance(d, dict)]:
-        print(f"FAIL  {label} — rendered output parsed to zero manifests; the check examined nothing.")
+    # Zero manifests is an error, not a pass, and the emptiest stream is the one
+    # that most needs saying so. Guarding this on the stream being non-blank
+    # gated on whether there was TEXT while the check examines MANIFESTS, so a
+    # chart that rendered nothing at all skipped the floor entirely and the
+    # caller printed OK for that slice — the exact failure this file exists to
+    # avoid, reached by the shortest path to it.
+    if not [d for d in yaml.safe_load_all(stream) if isinstance(d, dict)]:
+        print(f"FAIL  {label} — rendered output contains zero manifests; the check examined nothing.")
         return 1
     hits = duplicates(stream)
     if hits:

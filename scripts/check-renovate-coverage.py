@@ -183,6 +183,12 @@ def manager_scopes(cfg) -> list:
     return out
 
 
+# The ways an install.sh carries a version, counted independently of the
+# customManager patterns so a regex that stops matching cannot also revise the
+# target it is measured against.
+PIN_MARKERS = ("--version", "releases/download/")
+
+
 def coverage(patterns, scripts, root=None, quiet=False) -> int:
     """0 when every pin in `scripts` is watched; 1 with a report when one is not."""
     root = root or ROOT
@@ -252,14 +258,17 @@ def coverage(patterns, scripts, root=None, quiet=False) -> int:
         # per file: one watched pin must not vouch for an unwatched pin beside
         # it. `src` is already comment-stripped, so a pin discussed in prose is
         # not a pin.
-        # At least one, because this script installs a chart from a registry and
-        # that is what put it in this set. Counting only `--version` lines would
-        # take the floor from the same marker the patterns need: a chart carrying
-        # its version in an OCI ref rather than a flag counts zero, and `0 < 0`
-        # passes over a pin nothing watches.
+        # At least one, because this script installs something versioned and that
+        # is what put it in this set.
+        #
+        # Every shape that carries a version, not just the helm flag. A file
+        # whose pins are release-URL shaped carries no `--version` at all, so a
+        # count taken from that marker alone collapses to the constant 1 and one
+        # matched pin then vouches for every unmatched pin beside it — the floor
+        # measuring a different quantity than the check examines.
         expected = max(1, sum(
             1 for line in src.splitlines()
-            if "--version" in line
+            if any(marker in line for marker in PIN_MARKERS)
         ))
         if len(found) < expected:
             unmatched.append(

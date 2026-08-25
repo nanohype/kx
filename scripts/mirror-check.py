@@ -65,9 +65,36 @@ def die(msg):
     sys.exit(1)
 
 
+# The keys every command reaches for. Asserted on load so a malformed manifest
+# is named once rather than surfacing as a KeyError from wherever it is read.
+REQUIRED_MANIFEST_KEYS = ("upstream",)
+
+
 def load_manifest():
-    with MANIFEST.open() as fh:
-        return json.load(fh)
+    # Named, not raised. Without this the gate exits non-zero through a
+    # traceback, which is indistinguishable from a refusal by exit status alone
+    # and says nothing a reader can act on — the precondition class this
+    # repository keeps finding one gate at a time.
+    if not MANIFEST.is_file():
+        die(f"no manifest at {MANIFEST} — this gate reads the pins it compares from there, "
+            f"so without it there is nothing to compare and no verdict to give")
+    try:
+        with MANIFEST.open() as fh:
+            manifest = json.load(fh)
+    except json.JSONDecodeError as e:
+        die(f"{MANIFEST} is not valid JSON ({e}) — refusing to compare against a manifest "
+            f"that cannot be read")
+    # Shape, named the same way. Reaching into a manifest that lacks the key
+    # raises a KeyError, which exits non-zero and reads as a refusal while
+    # naming a Python identifier rather than the thing that is wrong.
+    for key in REQUIRED_MANIFEST_KEYS:
+        if key not in manifest:
+            die(f"{MANIFEST} has no {key!r} — this gate reads the upstream ref and the "
+                f"declared differences from there, so it cannot compare anything without it")
+    if "ref" not in manifest["upstream"]:
+        die(f"{MANIFEST} has no 'upstream.ref' — that is the eks-gitops commit every "
+            f"comparison is made against")
+    return manifest
 
 
 def upstream_dir(manifest, ref):

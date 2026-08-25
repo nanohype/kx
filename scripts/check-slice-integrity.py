@@ -29,6 +29,8 @@ numbers and column offsets survive and a file:line citation stays true.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -117,6 +119,46 @@ def strip_comments(text: str) -> str:
 
 
 EXAMINED: dict[str, int] = {}
+
+# A floor on what each invariant EXAMINED, set well under the real count.
+#
+# Zero is the obvious vacuous run and the rare one. The common one is a corpus
+# that collapsed to a handful — a glob that stopped matching, a rename that put a
+# directory out of reach, a filter that grew one clause too many — where the
+# check still runs, still finds nothing wrong, and still reports success. Nothing
+# in a clean verdict distinguishes "looked at everything" from "looked at two of
+# forty", which is why the count is printed; printing it is not gating on it.
+#
+# Set well under the real count on purpose. A floor at the real count fails on
+# every ordinary addition and gets raised until it means nothing, so it is
+# calibrated to catch a corpus falling away rather than a single item leaving.
+# Raise one when the tree has grown enough that it can no longer fail.
+MINIMUM_EXAMINED = {
+    "every helm install names a timeout": 20,
+    "no helm repo add swallows its own failure": 18,
+    "every shell script runs on bash 3.2": 30,
+    "every scrape surface a values file names is enabled": 1,
+    "every file in an addon directory is applied": 25,
+    "every gate is observed to reject and to accept": 3,
+    "every path named in markdown resolves": 5,
+    # Unconditional: one file is the law, not a count sized to this tree.
+    "the tree holds content outside the gate directory": 1,
+    "every gate refuses when its authority is unavailable": 4,
+}
+
+# The suite itself is a corpus and can collapse the same way. With CHECKS and
+# CONTROLS both emptied, every per-check control has nothing to report on and
+# the run loop has nothing to iterate, so the whole gate exits 0 having asserted
+# nothing at all.
+MINIMUM_CHECKS = 9
+
+# And the control table, which is the corpus that licenses every other verdict
+# in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
+# controls examine is CASES EXECUTED. A key whose list is empty satisfies the
+# first and contributes nothing to the second, so emptying every list leaves the
+# suite printing that each invariant is proven to reject having run no proof at
+# all. Case count was also the one quantity here that was never printed.
+MINIMUM_CONTROL_CASES = 30
 
 
 def names_token(haystack: str, token: str) -> bool:
@@ -300,6 +342,10 @@ GATE_PROBES: dict[str, dict] = {
 # tree fails. These are observed by their own controls on every run, which is
 # weaker — a gate grading a fixture it wrote is testimony about a narrower
 # claim than a gate handed an input it did not choose.
+# Why a gate's VERDICT cannot be exercised from a fixture. Judgement only:
+# whether the same gate refuses when what it reads is missing is a separate
+# question, asked by AUTHORITY_PROBES above, and an entry here grants no
+# exemption from it.
 UNPROBEABLE: dict[str, str] = {
     "check-rendered-mounts.py":
         "reads a manifest stream on stdin rather than a path, so a probe would drive a "
@@ -342,6 +388,7 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
                 f"outlasts its gate proves nothing about whatever replaced it."
             )
 
+    observed = 0
     for name, probe in sorted(GATE_PROBES.items()):
         if name not in present:
             continue
@@ -400,6 +447,8 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
                 f"{name}: exited {verdict['good']} on the same tree with the violation removed. "
                 f"A gate that refuses everything is as useless as one that refuses nothing."
             )
+        if verdict.get("bad") is not None and verdict.get("good") is not None:
+            observed += 1
 
     unprobed = [n for n in present
                 if n not in GATE_PROBES and n not in UNPROBEABLE
@@ -413,7 +462,11 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
     for name in sorted(UNPROBEABLE):
         if name not in present:
             problems.append(f"UNPROBEABLE names scripts/{name}, which is not in the tree.")
-    EXAMINED["every gate is observed to reject and to accept"] = len(GATE_PROBES)
+    # Observations, not the size of the table. len(GATE_PROBES) is a property of
+    # this file: it reports the same number over a tree with no gates in it at
+    # all, so it can satisfy a floor while nothing has been run. A probe counts
+    # once both of its verdicts came back from an actual subprocess.
+    EXAMINED["every gate is observed to reject and to accept"] = observed
     return problems
 
 
@@ -430,7 +483,202 @@ NOT_A_PATH = re.compile(
     r"|^-"                             # a flag
     r"|^/"                             # an absolute path or a JSON pointer
     r"|:[0-9/]"                        # a URL or a host:port
+    r"|\.\.\."                         # an ellipsis, which is a placeholder like <slice>
 )
+
+# Inline code, the other way a document names a path. Ambiguous where a link is
+# not, so it is read through FIRST_SEGMENT_IS_REAL below.
+MD_CODE = re.compile(r"`([^`\n]+)`")
+
+
+# Where the gates themselves live. Content here is the suite's own source, and a
+# denominator made of it is a gate measuring itself.
+GATE_DIR = "scripts"
+
+# Not content. Build artefacts and caches are present on a developer machine and
+# absent from a fresh checkout, so a law that counted them would hold in one
+# place and not the other.
+NOT_CONTENT = {".git", ".ruff_cache", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
+
+
+# Whether a gate can LOOK, which is a different question from whether it can
+# JUDGE, and the one that goes unasked.
+#
+# UNPROBEABLE records why a gate's verdict cannot be exercised from a fixture.
+# Every reason in it is about judgement, and granting the exemption on that axis
+# silently granted it on this one: a gate may be unable to judge inside a
+# fixture and still be required to refuse when the thing it reads is not there.
+# A gate reporting "this change adds no prose" on every pull request was exempt
+# on the first axis and had never been asked about the second.
+#
+# The verdict required here is narrow and it is not a judgement about the tree:
+# a non-zero exit, and a sentence rather than a traceback. A crash also exits
+# non-zero, and a gate that blames the interpreter for a missing precondition
+# has not reported anything.
+AUTHORITY_PROBES: dict[str, dict] = {
+    "check-prose-voice.py": {
+        "authority": "git history reaching a merge base",
+        "argv": ["origin/a-ref-that-does-not-exist"],
+        "env": {},
+        "empty_path": False,
+    },
+    "check-rendered-schemas.py": {
+        "authority": "the kubeconform binary",
+        "argv": ["{root}"],
+        "env": {},
+        "empty_path": True,
+    },
+    "check-images.py": {
+        "authority": "the trivy binary",
+        "argv": ["--cves", "{root}"],
+        "env": {},
+        "empty_path": True,
+    },
+    "mirror-check.py": {
+        "authority": "an eks-gitops checkout",
+        "argv": ["check"],
+        "env": {"EKS_GITOPS_DIR": "{root}/not-a-checkout"},
+        "empty_path": False,
+    },
+}
+
+
+# Fixture gates for the authority control. Synthetic on purpose: the control has
+# to distinguish a gate that refuses without its authority from one that reports
+# clean, and the difference must be the only thing that varies between the two
+# trees.
+# The manifest shape mirror-check reads, so removing its checkout is the only
+# thing the probe removes. Built from the keys the gate names rather than copied
+# from the shipped file, which would make this fixture a second copy of a thing
+# that moves.
+AUTHORITY_FIXTURE_MANIFEST = json.dumps(
+    {
+        "upstream": {"repository": "example/upstream", "path": "applicationsets",
+                     "ref": "0" * 40},
+        "divergences": [],
+        "siblings": {},
+        "crdInstallers": {},
+    },
+    indent=2,
+) + "\n"
+
+REFUSES = ('import sys\n'
+           'print("cannot reach what this gate reads", file=sys.stderr)\n'
+           'sys.exit(1)\n')
+REPORTS_CLEAN = ('import sys\n'
+                 'print("nothing to report")\n'
+                 'sys.exit(0)\n')
+
+
+def _authority_tree(reporting_clean: str | None = None) -> dict[str, str]:
+    """Every gate AUTHORITY_PROBES names, refusing, except one named to report clean."""
+    return {
+        f"{GATE_DIR}/{name}": (REPORTS_CLEAN if name == reporting_clean else REFUSES)
+        for name in AUTHORITY_PROBES
+    }
+
+
+def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]:
+    """A gate whose authority is unavailable refuses instead of reporting clean.
+
+    The authority is whatever a gate reads that the commit does not contain: a
+    binary, a sibling checkout, git history. It is present on a developer
+    machine and can be absent in CI, which is what makes this class invisible
+    where it is introduced and live where it matters.
+
+    Exercised by removing the authority and reading the exit status, because the
+    shape being checked for is a gate that runs, finds nothing, and reports
+    success — there is no skip branch for a reader to find.
+    """
+    problems = []
+    scripts_dir = root / GATE_DIR
+    present = sorted(g.name for g in scripts_dir.glob("*.py")) if scripts_dir.is_dir() else []
+    if not present:
+        return [f"found no gate scripts under {GATE_DIR}/ — refusing to report that gates "
+                f"refuse over an empty set."]
+    for name in sorted(AUTHORITY_PROBES):
+        if name not in present:
+            problems.append(f"AUTHORITY_PROBES names {GATE_DIR}/{name}, which is not in the "
+                            f"tree — a probe that outlasts its gate proves nothing.")
+    observed = 0
+    with tempfile.TemporaryDirectory() as empty_bin:
+        for name, probe in sorted(AUTHORITY_PROBES.items()):
+            if name not in present:
+                continue
+            # Everything the gate needs except the one authority being removed.
+            # A fixture that also withholds an unrelated precondition tests that
+            # precondition instead, and scores the answer against this one.
+            fixture = _tree({
+                "stack/s/a/install.sh": BOUNDED,
+                "stack/upstream.json": AUTHORITY_FIXTURE_MANIFEST,
+            })
+            argv = [a.format(root=fixture) for a in probe["argv"]]
+            env = dict(os.environ, KX_GATE_ROOT=str(fixture))
+            env.update({k: v.format(root=fixture) for k, v in probe["env"].items()})
+            if probe["empty_path"]:
+                env["PATH"] = empty_bin
+            try:
+                proc = subprocess.run([sys.executable, str(scripts_dir / name), *argv],
+                                      capture_output=True, text=True, timeout=180,
+                                      check=False, env=env)
+            except subprocess.TimeoutExpired:
+                problems.append(f"{name}: did not finish within 180s without {probe['authority']}.")
+                continue
+            out = proc.stdout + proc.stderr
+            if proc.returncode == 0:
+                problems.append(
+                    f"{name}: exited 0 with {probe['authority']} unavailable. It reported a "
+                    f"verdict on a change it could not read."
+                )
+            elif "Traceback (most recent call last)" in out:
+                problems.append(
+                    f"{name}: crashed rather than refusing when {probe['authority']} was "
+                    f"unavailable. A traceback exits non-zero like a refusal does, so it "
+                    f"cannot count as one — the precondition wants naming."
+                )
+            else:
+                observed += 1
+    EXAMINED["every gate refuses when its authority is unavailable"] = observed
+    return problems
+
+
+def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
+    """A tree that is only the gate scripts is not a tree this suite can report on.
+
+    The unconditional half of the floor, and the two halves have to stay apart.
+
+    Every minimum in MINIMUM_EXAMINED is sized to this repository: true here,
+    not true of a fixture, and not a statement about trees in general. This one
+    is a law about any tree, which is what makes it the half that catches a
+    checkout containing nothing but the gates — where every gate runs, finds no
+    violation in its own source, and reports success on a denominator built from
+    its own comments.
+
+    Collapsed into one repo-sized number, the same floor rejects the
+    deliberately small fixtures the controls are built from, and a working suite
+    is then reported as one that fails everything.
+
+    Reads tracked files where the tree is a repository, because a build artefact
+    is present on a developer machine and absent from a fresh checkout, and a
+    law that a cache directory can satisfy is not one.
+    """
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=False,
+    )
+    if tracked.returncode == 0 and tracked.stdout.strip():
+        paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
+    else:
+        paths = [
+            pathlib.PurePosixPath(f.relative_to(root).as_posix())
+            for f in root.rglob("*")
+            if f.is_file() and not NOT_CONTENT.intersection(f.relative_to(root).parts)
+        ]
+    outside = [str(f) for f in paths if f.parts and f.parts[0] != GATE_DIR]
+    EXAMINED["the tree holds content outside the gate directory"] = len(outside)
+    if not outside:
+        return [f"every tracked file is under {GATE_DIR}/ — this is the suite's own source, so "
+                f"a clean verdict here reports that the gates do not violate themselves."]
+    return []
 
 
 def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
@@ -441,12 +689,20 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
     and every document that pointed at it keeps pointing, confidently, at
     nothing.
 
-    Scoped to markdown LINK targets carrying a directory separator, because a
-    link is an unambiguous claim: it is a thing the reader clicks. Inline code
-    is not. In this tree a backticked `install.sh` names the CONVENTION every
-    addon directory follows, and `karpenter.sh/capacity-type` is a label key —
-    reading either as a path buries the one real finding under thirty-six that
-    are correct prose. The narrow rule is the one that says something.
+    Two views, because a document names paths two ways and they need different
+    rules. A LINK target is an unambiguous claim — a thing the reader clicks —
+    so any target carrying a separator is checked. INLINE CODE is ambiguous:
+    `karpenter.sh/capacity-type` is a label key and `username/password/host` is
+    prose, so a token is read as a path only when its first segment is a real
+    entry at the repository root.
+
+    That discriminator bounds what this can catch, and the bound is worth
+    stating: it sees a file moving inside a directory that still exists, and it
+    does not see a whole top-level directory being removed, because a token
+    whose first segment is absent cannot be told apart from a label key or from
+    a directory the documentation says must never exist. Checking link targets
+    unconditionally is what covers the second case, and a link is the right way
+    to write a claim that must be checked that way.
 
     Reads the RAW markdown, because in a document the prose IS the target and
     the blanked view would leave nothing to check.
@@ -458,23 +714,42 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
         EXAMINED["every path named in markdown resolves"] = 0
         return ["found no markdown at the repository root — refusing to report every path "
                 "resolved over an empty set."]
+    tops = {entry.name for entry in root.iterdir()}
+
+    def check(ref: str, doc: pathlib.Path, n: int) -> None:
+        nonlocal examined
+        # Only a leading ./ is stripped. Stripping "." would turn
+        # .github/workflows/ci.yml into a path that does not exist —
+        # which is what the first version of this reported.
+        rel = ref[2:] if ref.startswith("./") else ref
+        examined += 1
+        if not (root / rel.rstrip("/")).exists():
+            problems.append(f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist.")
+
     for doc in docs:
         for n, line in enumerate(doc.read_text().splitlines(), 1):
             for m in MD_LINK.finditer(line):
-                if True:
-                    ref = m.group(1).strip()
-                    if not ref or "/" not in ref or NOT_A_PATH.search(ref):
-                        continue
-                    # Only a leading ./ is stripped. Stripping "." would turn
-                    # .github/workflows/ci.yml into a path that does not exist —
-                    # which is what the first version of this reported.
-                    rel = ref[2:] if ref.startswith("./") else ref
-                    examined += 1
-                    if not (root / rel.rstrip("/")).exists():
-                        problems.append(
-                            f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist."
-                        )
+                ref = m.group(1).strip()
+                if ref and "/" in ref and not NOT_A_PATH.search(ref):
+                    check(ref, doc, n)
+            for m in MD_CODE.finditer(line):
+                ref = m.group(1).strip()
+                if not ref or "/" not in ref or NOT_A_PATH.search(ref):
+                    continue
+                if ref.split("/")[0] in tops:
+                    check(ref, doc, n)
+
     EXAMINED["every path named in markdown resolves"] = examined
+    # Printing the denominator is not gating on it. Markdown that names no path
+    # at all is a tree this rule cannot speak about, and saying "every path
+    # resolves" over nothing is the vacuous pass the whole suite exists to
+    # refuse. The earlier floor counted markdown FILES, which is not the
+    # quantity examined: this tree has three of them and, under the link-only
+    # rule it replaced, zero paths — so it reported success having checked
+    # nothing.
+    if not problems and examined == 0:
+        return ["markdown is present but names no repo-relative path — refusing to report "
+                "every path resolved over an empty set."]
     return problems
 
 
@@ -639,6 +914,10 @@ CHECKS = [
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
     ("every path named in markdown resolves", markdown_paths_resolve),
+    ("the tree holds content outside the gate directory",
+     tree_has_content_outside_the_gates),
+    ("every gate refuses when its authority is unavailable",
+     gates_refuse_without_their_authority),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -741,7 +1020,53 @@ CONTROLS = {
         (
             "no markdown at all",
             {"scripts/x.py": "x\n"},
-            {"README.md": "nothing named here\n"},
+            {"README.md": "see `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "markdown that names no path at all",
+            {"README.md": "prose with no path in it\n", "scripts/real.py": "x\n"},
+            {"README.md": "see `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "an inline-code path that does not exist",
+            {"README.md": "run `scripts/does-not-exist.py`\n", "scripts/real.py": "x\n"},
+            {"README.md": "run `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "a label key in inline code is not read as a path",
+            {"README.md": "`scripts/gone.py` and `karpenter.sh/capacity-type`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py` and `karpenter.sh/capacity-type`\n",
+             "scripts/real.py": "x\n"},
+        ),
+        (
+            "an ellipsis placeholder is not read as a path",
+            {"README.md": "`scripts/gone.py`, never `stack/substitutes/...`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py`, never `stack/substitutes/...`\n",
+             "scripts/real.py": "x\n"},
+        ),
+        (
+            "an inline-code path whose first segment is not a repo entry is not a path",
+            {"README.md": "`scripts/gone.py` and `username/password/host`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py` and `username/password/host`\n",
+             "scripts/real.py": "x\n"},
+        ),
+    ],
+    "every gate refuses when its authority is unavailable": [
+        (
+            "a gate that reports clean with its authority unavailable",
+            _authority_tree(reporting_clean="check-prose-voice.py"),
+            _authority_tree(),
+            "exited 0",
+        ),
+    ],
+    "the tree holds content outside the gate directory": [
+        (
+            "a tree that is only the gate scripts",
+            {"scripts/check-x.py": "x\n"},
+            {"scripts/check-x.py": "x\n", "stack/s/a/install.sh": BOUNDED},
         ),
     ],
     "no helm repo add swallows its own failure": [
@@ -799,11 +1124,12 @@ CONTROLS = {
         ),
         (
             "a bash-4 construct in a sibling checkout is NOT this repo's finding",
-            # Both trees carry the violation only outside the tracked set. A
-            # fixture is not a git repository, so this exercises the fallback
-            # walk's dot-directory rule — the same scope the git path enforces.
-            {"s.sh": "declare -A M\n", ".sibling/other/x.sh": "declare -A M\n"},
-            {"s.sh": "echo ok\n", ".sibling/other/x.sh": "declare -A M\n"},
+            # Both trees carry the violation only outside the tracked set, as a
+            # real sibling checkout does: written to disk, never staged. What
+            # separates the two trees is the tracked file, which is the only
+            # thing this gate is scoped to examine.
+            {"s.sh": "declare -A M\n", "!.sibling/other/x.sh": "declare -A M\n"},
+            {"s.sh": "echo ok\n", "!.sibling/other/x.sh": "declare -A M\n"},
             "s.sh:1",
         ),
         (
@@ -871,12 +1197,40 @@ CONTROLS = {
 }
 
 
+# Prefix for a fixture file that is written but not staged. A sibling repository
+# checked out into the workspace is present on disk and absent from the tracked
+# set, and a fixture that stages it is modelling a different situation than the
+# one the gate was scoped for.
+UNTRACKED = "!"
+
+
 def _tree(files: dict[str, str]) -> pathlib.Path:
+    """A fixture tree, as a real repository.
+
+    Tracked, because checks scoped to `git ls-files` examine the tracked set and
+    a fixture outside that set tests nothing. A plain directory sends those
+    checks down their fallback instead, so the path that runs in CI is the one
+    path no control covers — and a fixture planted where the gate does not look
+    reads as the gate failing to reject, which is a defect reported against a
+    gate that is behaving correctly.
+
+    Files are staged by name. `git ls-files` reads the index, so staging is what
+    puts them in the population; no commit is needed.
+    """
     d = pathlib.Path(tempfile.mkdtemp(prefix="kx-integrity-"))
-    for rel, body in files.items():
+    staged = []
+    for key, body in files.items():
+        untracked = key.startswith(UNTRACKED)
+        rel = key[len(UNTRACKED):] if untracked else key
         f = d / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body)
+        if not untracked:
+            staged.append(rel)
+    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True)
+    if staged:
+        subprocess.run(["git", "-C", str(d), "add", "--", *staged], check=False,
+                       capture_output=True)
     return d
 
 
@@ -899,8 +1253,24 @@ def controls() -> int:
     names = {label for label, _ in CHECKS}
     failures = 0
 
+    if len(CHECKS) < MINIMUM_CHECKS:
+        print(f"  SUITE       {len(CHECKS)} check(s), below the floor of {MINIMUM_CHECKS}. "
+              f"An empty suite passes every control it has and asserts nothing.")
+        failures += 1
+    for label in sorted(names - set(MINIMUM_EXAMINED)):
+        print(f"  NO FLOOR    {label} — a check with no minimum can report a clean verdict "
+              f"over an empty corpus.")
+        failures += 1
+    for label in sorted(set(MINIMUM_EXAMINED) - names):
+        print(f"  ORPHANED    MINIMUM_EXAMINED names {label!r}, which is not a check.")
+        failures += 1
+
     for label in sorted(names - set(CONTROLS) - set(CONTROLLED_ELSEWHERE)):
         print(f"  NO CONTROL  {label} — a check with no positive control cannot be trusted.")
+        failures += 1
+    for label in sorted(k for k, v in CONTROLS.items() if not v):
+        print(f"  NO CONTROL  {label} — its control list is empty, which proves exactly as "
+              f"much as having no entry at all.")
         failures += 1
     for label in sorted(set(CONTROLLED_ELSEWHERE) - names):
         print(f"  ORPHANED    CONTROLLED_ELSEWHERE names {label!r}, which is not a check.")
@@ -909,12 +1279,48 @@ def controls() -> int:
         print(f"  ORPHANED    control for {label!r}, which is not a check any more.")
         failures += 1
 
+    # The floor, proven by running the whole suite over a tree far below every
+    # minimum. A floor that lives in a table and is never exercised is a comment
+    # about a floor: it cannot tell you it stopped firing, and the run that
+    # would have needed it is the run that finds out.
+    # Measured as a DIFFERENCE, because every simpler form of this control passes
+    # for the wrong reason. A tree small enough to sit below every floor also
+    # violates invariants that have nothing to do with floors, so "the suite
+    # failed" is satisfied by floors that gate nothing; and "the output mentions
+    # a floor" is satisfied by a floor downgraded to a warning, which still
+    # prints. Running the same tree with the floors removed isolates what they
+    # contribute to the verdict, which is the only thing that matters about them.
+    starved_tree = _tree({
+        "stack/s/a/install.sh": BOUNDED,
+        "README.md": "see `stack/s/a/install.sh`\n",
+    })
+    buf = io.StringIO()
+    saved = dict(MINIMUM_EXAMINED)
+    with contextlib.redirect_stdout(buf):
+        with_floors = run(starved_tree)
+        MINIMUM_EXAMINED.clear()
+        try:
+            without_floors = run(starved_tree)
+        finally:
+            MINIMUM_EXAMINED.update(saved)
+    if with_floors <= without_floors:
+        print(f"  FLOOR OPEN  a tree below every minimum fails {with_floors} invariant(s) with "
+              f"the floors and {without_floors} without them. The floors change no verdict, so "
+              f"they are reporting rather than gating.")
+        failures += 1
+    else:
+        print(f"  control ok  the examined-floor rejects a collapsed corpus "
+              f"[{with_floors} invariant(s) fired, {with_floors - without_floors} of them "
+              f"only because of a floor]")
+
     by_label = dict(CHECKS)
+    ran = 0
     for label, cases in sorted(CONTROLS.items()):
         check = by_label.get(label)
         if check is None:
             continue
         for case in cases:
+            ran += 1
             name, broken, clean = case[0], case[1], case[2]
             must_say = case[3] if len(case) > 3 else None
             # Assert the mutation happened, by comparing the fixtures rather
@@ -988,7 +1394,7 @@ def controls() -> int:
         else:
             print(f"  {'caught  ' if expect_caught else 'allowed '}  {label}")
 
-    return failures
+    return failures + _report_control_total(ran)
 
 
 def run(root: pathlib.Path = ROOT) -> int:
@@ -1004,18 +1410,36 @@ def run(root: pathlib.Path = ROOT) -> int:
         # The denominator, always. A check that found nothing to look at and a
         # check that looked at everything print the same clean line without it,
         # and the first is the one that needs saying.
+        floor = MINIMUM_EXAMINED.get(label)
         seen = "" if n is None else f"  [{n} examined]"
         if problems:
             failed += 1
             print(f"FAIL  {label}:{seen}")
             for p in problems:
                 print(f"        {p}")
-        elif n == 0:
-            print(f"  ok  {label}{seen} — nothing in the tree to check, so this asserts "
-                  f"nothing yet")
+        elif n is not None and floor is not None and n < floor:
+            # Not a warning. A clean verdict over a corpus this small is the
+            # thing the floor exists to refuse, so it exits the way a violation
+            # does.
+            failed += 1
+            print(f"FAIL  {label}:{seen}")
+            print(f"        examined {n}, below the floor of {floor}. The corpus this "
+                  f"invariant reads has fallen away, so a clean verdict over it says "
+                  f"nothing. Restore what it reads, or lower the floor deliberately.")
         else:
             print(f"  ok  {label}{seen}")
     return failed
+
+
+def _report_control_total(ran: int) -> int:
+    """The denominator for the controls, printed and gated on."""
+    print(f"\n  {ran} control case(s) ran.")
+    if ran < MINIMUM_CONTROL_CASES:
+        print(f"  BELOW FLOOR the control table holds {ran} case(s), under the floor of "
+              f"{MINIMUM_CONTROL_CASES}. Every verdict below rests on these, so a table this "
+              f"small cannot license them.")
+        return 1
+    return 0
 
 
 def main() -> int:
