@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: yamllint
         run: |
@@ -72,11 +74,33 @@ jobs:
       # thought of — so this surfaces the prose a change adds next to the rules
       # instead of claiming a verdict over it. Needs the base commit to diff
       # against, which the default shallow checkout does not fetch.
+      # The supply-chain scan, and it fails the build rather than warning. This
+      # repository ships no package manifest, so its dependency surface is the
+      # workflows themselves: the actions they call, the tokens they hold, and
+      # every `${{ }}` that reaches a run block. A branch name is attacker-
+      # controlled on a fork pull request, and an expansion is substituted into
+      # shell source before bash parses it.
+      - name: zizmor
+        run: |
+          pip install --quiet --timeout 60 --retries 3 zizmor==1.16.3
+          # --no-online-audits keeps the verdict a function of the commit under
+          # test, the same rule the mirror job states: the online audits ask
+          # GitHub whether an action has since been archived, which is a fact
+          # about the world on the day the job runs and would redden a pull
+          # request that did not cause it. It is also an unbounded network call
+          # inside a blocking gate.
+          zizmor --no-online-audits --persona=regular .github/workflows/
+
       - name: prose the change adds
         if: github.event_name == 'pull_request'
+        env:
+          # Through the environment, never interpolated into the run block: a
+          # `${{ }}` expansion is substituted into the shell source before bash
+          # parses it, so a branch named with a shell metacharacter would run.
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          python3 scripts/check-prose-voice.py "origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          python3 scripts/check-prose-voice.py "origin/$BASE_REF"
 
   renovate-coverage:
     name: Every chart pin is watched
@@ -84,6 +108,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every chart version in this repo is pinned inside an install.sh, because
       # explicit install scripts are the point here. Renovate ships no manager
@@ -97,6 +123,16 @@ jobs:
       - name: Prove the prose markers still match
         run: python3 scripts/check-prose-voice.py --self-test
 
+      # Three invariants that each close a class the sweep found once and fixed
+      # everywhere: an unbounded helm install, a gate with no proof it rejects,
+      # and a manifest in an addon directory that nothing applies. Fixing every
+      # instance leaves the class open for the next slice added.
+      - name: Prove the slice invariants still reject
+        run: python3 scripts/check-slice-integrity.py --self-test
+
+      - name: Slice invariants hold
+        run: python3 scripts/check-slice-integrity.py
+
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
 
@@ -106,6 +142,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Offline half only. Whether a chart went deprecated upstream overnight is
       # not a function of this commit, and gating merges on it would redden pull
@@ -127,6 +165,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # At the pinned ref, never at eks-gitops' default branch. The verdict has
       # to be a function of the commit under test — reading upstream's head
@@ -141,6 +181,7 @@ jobs:
           repository: nanohype/eks-gitops
           path: .sibling/eks-gitops
           fetch-depth: 0
+          persist-credentials: false
 
       # No checkout needed: the comparison is pure over the two parsed sides, so
       # this proves it still reports a divergence before the step below reads a
@@ -163,6 +204,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The operator slice installs the sibling eks-agent-platform checkout's
       # chart against kx's values — give it one to render from.
@@ -182,6 +225,7 @@ jobs:
           repository: nanohype/eks-agent-platform
           path: .sibling/eks-agent-platform
           ref: ${{ steps.sibling.outputs.ref }}
+          persist-credentials: false
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 

@@ -29,7 +29,9 @@ fi
 # Build for the kind node arch (the host arch — kind nodes match the host) and
 # load it into the cluster; the image is never pushed to a registry locally.
 echo "Building operator image ${IMAGE} from ${OPERATOR_REPO}/operators ..."
+BEFORE="$(docker image inspect --format '{{.Id}}' "${IMAGE}" 2>/dev/null || echo none)"
 docker build -t "${IMAGE}" --build-arg VERSION=dev "${OPERATOR_REPO}/operators"
+AFTER="$(docker image inspect --format '{{.Id}}' "${IMAGE}")"
 kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 
 kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl apply -f -
@@ -50,3 +52,19 @@ helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/oper
   --namespace eks-agent-platform \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 180s
+
+# The tag is fixed at `dev` and the pull policy is IfNotPresent, so a rebuild
+# produces a Deployment helm renders byte-identically: no new ReplicaSet, no
+# rollout, and the running pod keeps executing the previous binary while every
+# later check reads a cluster the source no longer describes. Restarting on a
+# changed image id is what makes this slice a dev loop rather than a one-shot
+# install. Keyed on the id rather than restarting unconditionally so that
+# re-running with no source change stays a no-op, which is what makes the script
+# safe to re-run.
+if [ "${BEFORE}" != "${AFTER}" ]; then
+  echo "Operator image changed — rolling the Deployment onto it ..."
+  kubectl -n eks-agent-platform rollout restart deployment/eks-agent-platform-operator
+  kubectl -n eks-agent-platform rollout status deployment/eks-agent-platform-operator --timeout=180s
+else
+  echo "Operator image unchanged (${AFTER#sha256:}) — nothing to roll."
+fi

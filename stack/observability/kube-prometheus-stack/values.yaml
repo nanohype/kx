@@ -31,6 +31,50 @@ grafana:
   # thing between this password and anyone on the same wifi.
   adminPassword: admin
 
+  # The read path for the two signals the otel-collector slice writes. Without
+  # these, logs reach Loki and traces reach Tempo and neither is queryable —
+  # every panel a project might build has a datasource picker with one entry in
+  # it, and the slice looks healthy the whole time because writing and reading
+  # fail independently.
+  #
+  # The endpoints are this slice's own Services, not values an operator supplies:
+  # the same two names are already hardcoded in the collector's exporters, and a
+  # rename has to move both. Prometheus needs no entry here — the chart wires its
+  # own.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki.monitoring.svc.cluster.local:3100
+      jsonData:
+        # Follows a trace id out of a log line into Tempo. The regex is Loki's
+        # derived-field matcher, not a value to tune: it names the field the
+        # OTLP log exporter writes the id into.
+        derivedFields:
+          - name: TraceID
+            matcherRegex: '"?trace_?id"?[=:]\s*"?([a-f0-9]{32})"?'
+            url: '$${__value.raw}'
+            datasourceUid: tempo
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc.cluster.local:3100
+      jsonData:
+        # The other direction: from a span to the logs of the pod that emitted
+        # it, keyed on the resource attributes the collector's k8s_attributes
+        # processor adds.
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -1h
+          spanEndTimeShift: 1h
+          tags:
+            - key: service.name
+              value: service_name
+        serviceMap:
+          datasourceUid: Prometheus
+
 prometheus:
   prometheusSpec:
     replicas: 1

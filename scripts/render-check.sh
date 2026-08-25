@@ -148,7 +148,24 @@ for script in "${scripts[@]}"; do
   # OPERATOR_REPO sibling-checkout path) — the helm block may reference them.
   # SCRIPT_DIR is excluded: the scripts derive it from BASH_SOURCE, which
   # doesn't survive eval; this script sets it to the slice dir itself.
-  assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' || true)"
+  #
+  # Assignments containing a command substitution are excluded too, and that is
+  # a correctness rule rather than a precaution: this runs on a clusterless CI
+  # runner, so a `$(docker ...)`, `$(kubectl ...)` or `$(git ...)` lifted out of
+  # an installer executes here against a machine that has none of those things.
+  # A helm block cannot reference one of these anyway — a chart reference
+  # resolved by asking the local docker daemon is not a pin this gate could
+  # check. Reported rather than dropped, because a silent exclusion is how a
+  # gate ends up rendering something other than what it claims.
+  # shellcheck disable=SC2016  # `$(` is the pattern to match, not one to expand
+  assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' | grep -v '\$(' || true)"
+  # shellcheck disable=SC2016  # same pattern, matched rather than expanded
+  runtime_assignments="$(grep -E '^[A-Z_]+=' "$script" | grep -v '^SCRIPT_DIR=' | grep '\$(' || true)"
+  if [[ -n "$runtime_assignments" ]]; then
+    while IFS= read -r a; do
+      echo "      note: ${slice} — not lifting ${a%%=*}=, it runs a command at install time"
+    done <<<"$runtime_assignments"
+  fi
 
   # The render is piped into the mount check rather than discarded. A chart that
   # starts providing a volume a values file already hand-rolls renders two mounts
