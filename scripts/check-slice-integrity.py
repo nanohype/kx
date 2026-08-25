@@ -101,6 +101,18 @@ def strip_comments(text: str) -> str:
 EXAMINED: dict[str, int] = {}
 
 
+def names_token(haystack: str, token: str) -> bool:
+    """Whether `token` appears as a whole token rather than inside a longer one.
+
+    Substring containment is the wrong test for both callers here and escaped
+    both of them: `my-values.yaml` in an installer vouched for a `values.yaml`
+    nothing applies, and `--timeout-seconds` satisfied a check for `--timeout`.
+    A token ends at anything that is not a name character, so the boundary is
+    what distinguishes the two.
+    """
+    return re.search(r"(?<![\w.-])" + re.escape(token) + r"(?![\w.-])", haystack) is not None
+
+
 def helm_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
     """helm's own default is five minutes, which is the wrong number here.
 
@@ -118,7 +130,7 @@ def helm_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
     for script in scripts:
         for line, cmd in helm_invocations(strip_comments(script.read_text())):
             checked += 1
-            if "--timeout" not in cmd:
+            if not names_token(cmd, "--timeout"):
                 problems.append(
                     f"{script.relative_to(root)}:{line} runs `helm upgrade --install` with no "
                     f"--timeout, so it takes helm's implicit 5m — short enough that a cold "
@@ -162,7 +174,7 @@ def addon_files_are_reached(root: pathlib.Path = ROOT) -> list[str]:
             if entry.name == "install.sh" and entry.parent == addon:
                 continue
             examined += 1
-            if entry.name not in text:
+            if not names_token(text, entry.name):
                 what = "directory" if entry.is_dir() else "file"
                 problems.append(
                     f"{entry.relative_to(root)} — nothing names this {what} outside a comment, "
@@ -373,6 +385,12 @@ CONTROLS = {
             "install.sh:4",
         ),
         (
+            "a longer flag containing --timeout does not satisfy it",
+            {"stack/s/a/install.sh":
+             "helm upgrade --install a x/a --version 1 --wait --timeout-seconds 30\n"},
+            {"stack/s/a/install.sh": BOUNDED},
+        ),
+        (
             "an unbounded helm install beside an unrelated --timeout",
             {"stack/s/a/install.sh": BOUNDED.replace(" --timeout 10m", "")
                                      + "kubectl wait --for=condition=Ready --timeout=300s pod/x\n"},
@@ -504,6 +522,15 @@ CONTROLS = {
             {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/pre/a.yaml"\n',
              "stack/s/a/pre/a.yaml": "kind: A\n"},
             "pre/orphan.yaml",
+        ),
+        (
+            "a filename that is a substring of one the installer does apply",
+            {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/my-values.yaml"\n',
+             "stack/s/a/my-values.yaml": "a: 1\n",
+             "stack/s/a/values.yaml": "b: 2\n"},
+            {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/my-values.yaml"\n',
+             "stack/s/a/my-values.yaml": "a: 1\n"},
+            "values.yaml",
         ),
         (
             "an addon file named only in a comment",
