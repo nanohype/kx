@@ -579,6 +579,27 @@ def scrape_surfaces_are_on(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
+    """The shell scripts THIS repository owns.
+
+    `git ls-files`, because a bare `**/*.sh` walk grades whatever else happens to
+    be in the working directory. In the render job that is a sibling repository
+    checked out into the workspace to render one slice against — so the gate
+    examined 47 files where the tree has 43, reported a real bash-4 construct in
+    somebody else's installer, and failed this repository's build for it.
+
+    A gate that grades a neighbour is wrong even when its finding is right: the
+    seat that can fix it is not the one being stopped. Falls back to a walk for
+    a fixture tree, which is not a git repository.
+    """
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "*.sh"],
+                         capture_output=True, text=True, check=False)
+    if out.returncode == 0:
+        return sorted(root / f for f in out.stdout.split("\0") if f)
+    return sorted(s for s in root.glob("**/*.sh") if not any(
+        part.startswith(".") for part in s.relative_to(root).parts))
+
+
 def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
     """No tracked shell script uses a construct bash 3.2 lacks.
 
@@ -591,8 +612,7 @@ def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
     A comment naming a defect class is a memorial, not a control.
     """
     problems = []
-    scripts = sorted(root.glob("**/*.sh"))
-    scripts = [s for s in scripts if ".git" not in s.parts]
+    scripts = tracked_shell_scripts(root)
     if not scripts:
         return ["found no shell scripts — refusing to report bash 3.2 compatibility over an "
                 "empty set."]
@@ -776,6 +796,15 @@ CONTROLS = {
             "the construct named only in a comment",
             {"s.sh": "mapfile -t X < <(echo a)\n"},
             {"s.sh": "# mapfile is deliberately not used here\necho ok\n"},
+        ),
+        (
+            "a bash-4 construct in a sibling checkout is NOT this repo's finding",
+            # Both trees carry the violation only outside the tracked set. A
+            # fixture is not a git repository, so this exercises the fallback
+            # walk's dot-directory rule — the same scope the git path enforces.
+            {"s.sh": "declare -A M\n", ".sibling/other/x.sh": "declare -A M\n"},
+            {"s.sh": "echo ok\n", ".sibling/other/x.sh": "declare -A M\n"},
+            "s.sh:1",
         ),
         (
             "no shell scripts at all",
