@@ -430,7 +430,12 @@ NOT_A_PATH = re.compile(
     r"|^-"                             # a flag
     r"|^/"                             # an absolute path or a JSON pointer
     r"|:[0-9/]"                        # a URL or a host:port
+    r"|\.\.\."                         # an ellipsis, which is a placeholder like <slice>
 )
+
+# Inline code, the other way a document names a path. Ambiguous where a link is
+# not, so it is read through FIRST_SEGMENT_IS_REAL below.
+MD_CODE = re.compile(r"`([^`\n]+)`")
 
 
 def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
@@ -441,12 +446,20 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
     and every document that pointed at it keeps pointing, confidently, at
     nothing.
 
-    Scoped to markdown LINK targets carrying a directory separator, because a
-    link is an unambiguous claim: it is a thing the reader clicks. Inline code
-    is not. In this tree a backticked `install.sh` names the CONVENTION every
-    addon directory follows, and `karpenter.sh/capacity-type` is a label key —
-    reading either as a path buries the one real finding under thirty-six that
-    are correct prose. The narrow rule is the one that says something.
+    Two views, because a document names paths two ways and they need different
+    rules. A LINK target is an unambiguous claim — a thing the reader clicks —
+    so any target carrying a separator is checked. INLINE CODE is ambiguous:
+    `karpenter.sh/capacity-type` is a label key and `username/password/host` is
+    prose, so a token is read as a path only when its first segment is a real
+    entry at the repository root.
+
+    That discriminator bounds what this can catch, and the bound is worth
+    stating: it sees a file moving inside a directory that still exists, and it
+    does not see a whole top-level directory being removed, because a token
+    whose first segment is absent cannot be told apart from a label key or from
+    a directory the documentation says must never exist. Checking link targets
+    unconditionally is what covers the second case, and a link is the right way
+    to write a claim that must be checked that way.
 
     Reads the RAW markdown, because in a document the prose IS the target and
     the blanked view would leave nothing to check.
@@ -458,23 +471,42 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
         EXAMINED["every path named in markdown resolves"] = 0
         return ["found no markdown at the repository root — refusing to report every path "
                 "resolved over an empty set."]
+    tops = {entry.name for entry in root.iterdir()}
+
+    def check(ref: str, doc: pathlib.Path, n: int) -> None:
+        nonlocal examined
+        # Only a leading ./ is stripped. Stripping "." would turn
+        # .github/workflows/ci.yml into a path that does not exist —
+        # which is what the first version of this reported.
+        rel = ref[2:] if ref.startswith("./") else ref
+        examined += 1
+        if not (root / rel.rstrip("/")).exists():
+            problems.append(f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist.")
+
     for doc in docs:
         for n, line in enumerate(doc.read_text().splitlines(), 1):
             for m in MD_LINK.finditer(line):
-                if True:
-                    ref = m.group(1).strip()
-                    if not ref or "/" not in ref or NOT_A_PATH.search(ref):
-                        continue
-                    # Only a leading ./ is stripped. Stripping "." would turn
-                    # .github/workflows/ci.yml into a path that does not exist —
-                    # which is what the first version of this reported.
-                    rel = ref[2:] if ref.startswith("./") else ref
-                    examined += 1
-                    if not (root / rel.rstrip("/")).exists():
-                        problems.append(
-                            f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist."
-                        )
+                ref = m.group(1).strip()
+                if ref and "/" in ref and not NOT_A_PATH.search(ref):
+                    check(ref, doc, n)
+            for m in MD_CODE.finditer(line):
+                ref = m.group(1).strip()
+                if not ref or "/" not in ref or NOT_A_PATH.search(ref):
+                    continue
+                if ref.split("/")[0] in tops:
+                    check(ref, doc, n)
+
     EXAMINED["every path named in markdown resolves"] = examined
+    # Printing the denominator is not gating on it. Markdown that names no path
+    # at all is a tree this rule cannot speak about, and saying "every path
+    # resolves" over nothing is the vacuous pass the whole suite exists to
+    # refuse. The earlier floor counted markdown FILES, which is not the
+    # quantity examined: this tree has three of them and, under the link-only
+    # rule it replaced, zero paths — so it reported success having checked
+    # nothing.
+    if not problems and examined == 0:
+        return ["markdown is present but names no repo-relative path — refusing to report "
+                "every path resolved over an empty set."]
     return problems
 
 
@@ -741,7 +773,38 @@ CONTROLS = {
         (
             "no markdown at all",
             {"scripts/x.py": "x\n"},
-            {"README.md": "nothing named here\n"},
+            {"README.md": "see `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "markdown that names no path at all",
+            {"README.md": "prose with no path in it\n", "scripts/real.py": "x\n"},
+            {"README.md": "see `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "an inline-code path that does not exist",
+            {"README.md": "run `scripts/does-not-exist.py`\n", "scripts/real.py": "x\n"},
+            {"README.md": "run `scripts/real.py`\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "a label key in inline code is not read as a path",
+            {"README.md": "`scripts/gone.py` and `karpenter.sh/capacity-type`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py` and `karpenter.sh/capacity-type`\n",
+             "scripts/real.py": "x\n"},
+        ),
+        (
+            "an ellipsis placeholder is not read as a path",
+            {"README.md": "`scripts/gone.py`, never `stack/substitutes/...`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py`, never `stack/substitutes/...`\n",
+             "scripts/real.py": "x\n"},
+        ),
+        (
+            "an inline-code path whose first segment is not a repo entry is not a path",
+            {"README.md": "`scripts/gone.py` and `username/password/host`\n",
+             "scripts/real.py": "x\n"},
+            {"README.md": "`scripts/real.py` and `username/password/host`\n",
+             "scripts/real.py": "x\n"},
         ),
     ],
     "no helm repo add swallows its own failure": [
