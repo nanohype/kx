@@ -131,6 +131,17 @@ if [[ ${#scripts[@]} -eq 0 ]]; then
   exit 2
 fi
 
+# helm is an authority, not a convenience: this gate reaches its verdict BY
+# rendering, so without helm there is no verdict to give. Unasserted, the first
+# invocation exits 127 naming the binary — non-zero, so the direction is right,
+# but it names what was missing rather than what could not be determined, and
+# the failure lands partway through a loop that has already printed OK lines.
+if ! command -v helm >/dev/null 2>&1; then
+  echo "FAIL  helm is not on PATH. This gate renders every slice to reach its verdict, so"
+  echo "      without helm it cannot report on any of them."
+  exit 2
+fi
+
 # Register every chart repo the scripts reference, once, then refresh
 # exactly those (a bare `helm repo update` would also touch unrelated repos
 # in the runner's helm config).
