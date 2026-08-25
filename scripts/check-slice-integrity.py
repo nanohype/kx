@@ -143,13 +143,22 @@ MINIMUM_EXAMINED = {
     "every path named in markdown resolves": 5,
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
+    "every gate refuses when its authority is unavailable": 4,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 8
+MINIMUM_CHECKS = 9
+
+# And the control table, which is the corpus that licenses every other verdict
+# in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
+# controls examine is CASES EXECUTED. A key whose list is empty satisfies the
+# first and contributes nothing to the second, so emptying every list leaves the
+# suite printing that each invariant is proven to reject having run no proof at
+# all. Case count was also the one quantity here that was never printed.
+MINIMUM_CONTROL_CASES = 30
 
 
 def names_token(haystack: str, token: str) -> bool:
@@ -333,6 +342,10 @@ GATE_PROBES: dict[str, dict] = {
 # tree fails. These are observed by their own controls on every run, which is
 # weaker — a gate grading a fixture it wrote is testimony about a narrower
 # claim than a gate handed an input it did not choose.
+# Why a gate's VERDICT cannot be exercised from a fixture. Judgement only:
+# whether the same gate refuses when what it reads is missing is a separate
+# question, asked by AUTHORITY_PROBES above, and an entry here grants no
+# exemption from it.
 UNPROBEABLE: dict[str, str] = {
     "check-rendered-mounts.py":
         "reads a manifest stream on stdin rather than a path, so a probe would drive a "
@@ -486,6 +499,147 @@ GATE_DIR = "scripts"
 # absent from a fresh checkout, so a law that counted them would hold in one
 # place and not the other.
 NOT_CONTENT = {".git", ".ruff_cache", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
+
+
+# Whether a gate can LOOK, which is a different question from whether it can
+# JUDGE, and the one that goes unasked.
+#
+# UNPROBEABLE records why a gate's verdict cannot be exercised from a fixture.
+# Every reason in it is about judgement, and granting the exemption on that axis
+# silently granted it on this one: a gate may be unable to judge inside a
+# fixture and still be required to refuse when the thing it reads is not there.
+# A gate reporting "this change adds no prose" on every pull request was exempt
+# on the first axis and had never been asked about the second.
+#
+# The verdict required here is narrow and it is not a judgement about the tree:
+# a non-zero exit, and a sentence rather than a traceback. A crash also exits
+# non-zero, and a gate that blames the interpreter for a missing precondition
+# has not reported anything.
+AUTHORITY_PROBES: dict[str, dict] = {
+    "check-prose-voice.py": {
+        "authority": "git history reaching a merge base",
+        "argv": ["origin/a-ref-that-does-not-exist"],
+        "env": {},
+        "empty_path": False,
+    },
+    "check-rendered-schemas.py": {
+        "authority": "the kubeconform binary",
+        "argv": ["{root}"],
+        "env": {},
+        "empty_path": True,
+    },
+    "check-images.py": {
+        "authority": "the trivy binary",
+        "argv": ["--cves", "{root}"],
+        "env": {},
+        "empty_path": True,
+    },
+    "mirror-check.py": {
+        "authority": "an eks-gitops checkout",
+        "argv": ["check"],
+        "env": {"EKS_GITOPS_DIR": "{root}/not-a-checkout"},
+        "empty_path": False,
+    },
+}
+
+
+# Fixture gates for the authority control. Synthetic on purpose: the control has
+# to distinguish a gate that refuses without its authority from one that reports
+# clean, and the difference must be the only thing that varies between the two
+# trees.
+# The manifest shape mirror-check reads, so removing its checkout is the only
+# thing the probe removes. Built from the keys the gate names rather than copied
+# from the shipped file, which would make this fixture a second copy of a thing
+# that moves.
+AUTHORITY_FIXTURE_MANIFEST = json.dumps(
+    {
+        "upstream": {"repository": "example/upstream", "path": "applicationsets",
+                     "ref": "0" * 40},
+        "divergences": [],
+        "siblings": {},
+        "crdInstallers": {},
+    },
+    indent=2,
+) + "\n"
+
+REFUSES = ('import sys\n'
+           'print("cannot reach what this gate reads", file=sys.stderr)\n'
+           'sys.exit(1)\n')
+REPORTS_CLEAN = ('import sys\n'
+                 'print("nothing to report")\n'
+                 'sys.exit(0)\n')
+
+
+def _authority_tree(reporting_clean: str | None = None) -> dict[str, str]:
+    """Every gate AUTHORITY_PROBES names, refusing, except one named to report clean."""
+    return {
+        f"{GATE_DIR}/{name}": (REPORTS_CLEAN if name == reporting_clean else REFUSES)
+        for name in AUTHORITY_PROBES
+    }
+
+
+def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]:
+    """A gate whose authority is unavailable refuses instead of reporting clean.
+
+    The authority is whatever a gate reads that the commit does not contain: a
+    binary, a sibling checkout, git history. It is present on a developer
+    machine and can be absent in CI, which is what makes this class invisible
+    where it is introduced and live where it matters.
+
+    Exercised by removing the authority and reading the exit status, because the
+    shape being checked for is a gate that runs, finds nothing, and reports
+    success — there is no skip branch for a reader to find.
+    """
+    problems = []
+    scripts_dir = root / GATE_DIR
+    present = sorted(g.name for g in scripts_dir.glob("*.py")) if scripts_dir.is_dir() else []
+    if not present:
+        return [f"found no gate scripts under {GATE_DIR}/ — refusing to report that gates "
+                f"refuse over an empty set."]
+    for name in sorted(AUTHORITY_PROBES):
+        if name not in present:
+            problems.append(f"AUTHORITY_PROBES names {GATE_DIR}/{name}, which is not in the "
+                            f"tree — a probe that outlasts its gate proves nothing.")
+    observed = 0
+    with tempfile.TemporaryDirectory() as empty_bin:
+        for name, probe in sorted(AUTHORITY_PROBES.items()):
+            if name not in present:
+                continue
+            # Everything the gate needs except the one authority being removed.
+            # A fixture that also withholds an unrelated precondition tests that
+            # precondition instead, and scores the answer against this one.
+            fixture = _tree({
+                "stack/s/a/install.sh": BOUNDED,
+                "stack/upstream.json": AUTHORITY_FIXTURE_MANIFEST,
+            })
+            argv = [a.format(root=fixture) for a in probe["argv"]]
+            env = dict(os.environ, KX_GATE_ROOT=str(fixture))
+            env.update({k: v.format(root=fixture) for k, v in probe["env"].items()})
+            if probe["empty_path"]:
+                env["PATH"] = empty_bin
+            try:
+                proc = subprocess.run([sys.executable, str(scripts_dir / name), *argv],
+                                      capture_output=True, text=True, timeout=180,
+                                      check=False, env=env)
+            except subprocess.TimeoutExpired:
+                problems.append(f"{name}: did not finish within 180s without {probe['authority']}.")
+                continue
+            out = proc.stdout + proc.stderr
+            if proc.returncode == 0:
+                problems.append(
+                    f"{name}: exited 0 with {probe['authority']} unavailable. It reported a "
+                    f"verdict on a change it could not read."
+                )
+            elif "Traceback (most recent call last)" in out:
+                problems.append(
+                    f"{name}: crashed rather than refusing when {probe['authority']} was "
+                    f"unavailable. A traceback exits non-zero like a refusal does, so it "
+                    f"cannot count as one — the precondition wants naming."
+                )
+            else:
+                observed += 1
+    EXAMINED["every gate refuses when its authority is unavailable"] = observed
+    return problems
 
 
 def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
@@ -762,6 +916,8 @@ CHECKS = [
     ("every path named in markdown resolves", markdown_paths_resolve),
     ("the tree holds content outside the gate directory",
      tree_has_content_outside_the_gates),
+    ("every gate refuses when its authority is unavailable",
+     gates_refuse_without_their_authority),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -898,6 +1054,14 @@ CONTROLS = {
              "scripts/real.py": "x\n"},
         ),
     ],
+    "every gate refuses when its authority is unavailable": [
+        (
+            "a gate that reports clean with its authority unavailable",
+            _authority_tree(reporting_clean="check-prose-voice.py"),
+            _authority_tree(),
+            "exited 0",
+        ),
+    ],
     "the tree holds content outside the gate directory": [
         (
             "a tree that is only the gate scripts",
@@ -960,11 +1124,12 @@ CONTROLS = {
         ),
         (
             "a bash-4 construct in a sibling checkout is NOT this repo's finding",
-            # Both trees carry the violation only outside the tracked set. A
-            # fixture is not a git repository, so this exercises the fallback
-            # walk's dot-directory rule — the same scope the git path enforces.
-            {"s.sh": "declare -A M\n", ".sibling/other/x.sh": "declare -A M\n"},
-            {"s.sh": "echo ok\n", ".sibling/other/x.sh": "declare -A M\n"},
+            # Both trees carry the violation only outside the tracked set, as a
+            # real sibling checkout does: written to disk, never staged. What
+            # separates the two trees is the tracked file, which is the only
+            # thing this gate is scoped to examine.
+            {"s.sh": "declare -A M\n", "!.sibling/other/x.sh": "declare -A M\n"},
+            {"s.sh": "echo ok\n", "!.sibling/other/x.sh": "declare -A M\n"},
             "s.sh:1",
         ),
         (
@@ -1032,12 +1197,40 @@ CONTROLS = {
 }
 
 
+# Prefix for a fixture file that is written but not staged. A sibling repository
+# checked out into the workspace is present on disk and absent from the tracked
+# set, and a fixture that stages it is modelling a different situation than the
+# one the gate was scoped for.
+UNTRACKED = "!"
+
+
 def _tree(files: dict[str, str]) -> pathlib.Path:
+    """A fixture tree, as a real repository.
+
+    Tracked, because checks scoped to `git ls-files` examine the tracked set and
+    a fixture outside that set tests nothing. A plain directory sends those
+    checks down their fallback instead, so the path that runs in CI is the one
+    path no control covers — and a fixture planted where the gate does not look
+    reads as the gate failing to reject, which is a defect reported against a
+    gate that is behaving correctly.
+
+    Files are staged by name. `git ls-files` reads the index, so staging is what
+    puts them in the population; no commit is needed.
+    """
     d = pathlib.Path(tempfile.mkdtemp(prefix="kx-integrity-"))
-    for rel, body in files.items():
+    staged = []
+    for key, body in files.items():
+        untracked = key.startswith(UNTRACKED)
+        rel = key[len(UNTRACKED):] if untracked else key
         f = d / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body)
+        if not untracked:
+            staged.append(rel)
+    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True)
+    if staged:
+        subprocess.run(["git", "-C", str(d), "add", "--", *staged], check=False,
+                       capture_output=True)
     return d
 
 
@@ -1074,6 +1267,10 @@ def controls() -> int:
 
     for label in sorted(names - set(CONTROLS) - set(CONTROLLED_ELSEWHERE)):
         print(f"  NO CONTROL  {label} — a check with no positive control cannot be trusted.")
+        failures += 1
+    for label in sorted(k for k, v in CONTROLS.items() if not v):
+        print(f"  NO CONTROL  {label} — its control list is empty, which proves exactly as "
+              f"much as having no entry at all.")
         failures += 1
     for label in sorted(set(CONTROLLED_ELSEWHERE) - names):
         print(f"  ORPHANED    CONTROLLED_ELSEWHERE names {label!r}, which is not a check.")
@@ -1117,11 +1314,13 @@ def controls() -> int:
               f"only because of a floor]")
 
     by_label = dict(CHECKS)
+    ran = 0
     for label, cases in sorted(CONTROLS.items()):
         check = by_label.get(label)
         if check is None:
             continue
         for case in cases:
+            ran += 1
             name, broken, clean = case[0], case[1], case[2]
             must_say = case[3] if len(case) > 3 else None
             # Assert the mutation happened, by comparing the fixtures rather
@@ -1195,7 +1394,7 @@ def controls() -> int:
         else:
             print(f"  {'caught  ' if expect_caught else 'allowed '}  {label}")
 
-    return failures
+    return failures + _report_control_total(ran)
 
 
 def run(root: pathlib.Path = ROOT) -> int:
@@ -1230,6 +1429,17 @@ def run(root: pathlib.Path = ROOT) -> int:
         else:
             print(f"  ok  {label}{seen}")
     return failed
+
+
+def _report_control_total(ran: int) -> int:
+    """The denominator for the controls, printed and gated on."""
+    print(f"\n  {ran} control case(s) ran.")
+    if ran < MINIMUM_CONTROL_CASES:
+        print(f"  BELOW FLOOR the control table holds {ran} case(s), under the floor of "
+              f"{MINIMUM_CONTROL_CASES}. Every verdict below rests on these, so a table this "
+              f"small cannot license them.")
+        return 1
+    return 0
 
 
 def main() -> int:
