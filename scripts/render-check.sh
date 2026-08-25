@@ -111,9 +111,22 @@ for s in "${SKIP[@]}"; do
     echo "FAIL  SKIP names $s, which has no install.sh — an exemption that outlives its slice."
     exit 2
   fi
-  if grep -qE '^[[:space:]]*helm upgrade --install' "$ROOT/$s/install.sh"; then
+  # The status is read rather than the condition being taken, because grep has
+  # three answers and `if grep` has two. 0 is a match, 1 is a definite no match,
+  # and anything above that is grep declining to answer — 2 for a file it cannot
+  # read, 127 for a grep that is not there. Written as a condition, every one of
+  # those reads as "no match" and the exemption stands unexamined: a guard
+  # against an exemption hiding a slice, removed by the absence of the tool it
+  # asks with. Only a definite no-match may let an exemption through.
+  rc=0
+  grep -qE '^[[:space:]]*helm upgrade --install' "$ROOT/$s/install.sh" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
     echo "FAIL  SKIP names $s, but it does run \`helm upgrade --install\` — it would be rendered"
     echo "      if it were not exempt, so the exemption is hiding a slice from this gate."
+    exit 2
+  elif [[ "$rc" -ne 1 ]]; then
+    echo "FAIL  could not determine whether $s runs \`helm upgrade --install\` — grep exited $rc."
+    echo "      The exemption is unexamined, so it cannot be allowed to stand."
     exit 2
   fi
 done
