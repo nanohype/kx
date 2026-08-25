@@ -159,19 +159,51 @@ HELM_INSTALL = re.compile(r"^helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
 VERSION_FLAG = re.compile(r"--version\s+(\S+)")
 
 
+# Slices that install a chart from a path rather than a pinned remote, so there
+# is no version for the mirror to compare. Named, because the alternative is a
+# silent drop: the verdict below is a count over whatever the parser recognised,
+# and a slice that falls out of the population is reported as neither matching
+# nor diverging.
+NO_REMOTE_PIN = {
+    "stack/ai-platform/operator": "installs the chart from the sibling eks-agent-platform "
+                                  "checkout, so the version is that working tree",
+    "stack/data/druid": "renders the eks-gitops chart from a sibling checkout through a "
+                        "post-renderer; the catalog pins the chart, not kx",
+}
+
+
 def kx_pins():
-    """{chart: (version, install_script)} for every kx slice with a helm pin."""
+    """{chart: (version, install_script)} for every kx slice with a helm pin.
+
+    Dies on a slice that installs a chart with no comparable version and is not
+    named in NO_REMOTE_PIN. Skipping it silently would shrink the set the
+    verdict is computed over without shrinking the verdict.
+    """
     pins = {}
+    unpinned = []
     for script in sorted(ROOT.glob("stack/*/*/install.sh")):
+        slice_name = str(script.parent.relative_to(ROOT))
         text = script.read_text()
         install = HELM_INSTALL.search(text)
         if not install:
-            continue  # kubectl-apply slices (gateway-api-crds) and local builds
-        chart = install.group(2).split("/")[-1]
+            continue  # applies manifests rather than installing a chart
         version = VERSION_FLAG.search(text)
         if not version:
+            if slice_name not in NO_REMOTE_PIN:
+                unpinned.append(slice_name)
             continue
+        chart = install.group(2).split("/")[-1]
         pins[chart] = (version.group(1), script)
+    if unpinned:
+        for slice_name in unpinned:
+            print(f"mirror-check: {slice_name} installs a chart with no --version — "
+                  f"nothing to compare against the catalog", file=sys.stderr)
+        die(f"{len(unpinned)} slice(s) install a chart this parser cannot pin. Either pin "
+            "them, or record why they have no remote pin in NO_REMOTE_PIN.")
+    stale = sorted(s for s in NO_REMOTE_PIN if not (ROOT / s / "install.sh").is_file())
+    if stale:
+        die(f"NO_REMOTE_PIN names {', '.join(stale)}, which no longer exists — an exemption "
+            "that outlives its slice silently exempts whatever takes that path next.")
     if not pins:
         die("read no chart pins out of stack/*/*/install.sh — the parser and the tree disagree")
     return pins
@@ -204,13 +236,20 @@ def stale_divergences(declared, upstream, local):
 
 
 def crd_installers(gitops):
-    """{appset filename: (repo, path, revision)} for every CRD-only Application.
+    """{appset filename: (repo, path, revision)} for git-source Applications whose path names CRDs.
 
-    These carry NO `chart` key — they are git sources pointing at a directory of
+    Matched by the path containing `crd`, which is how the catalog names them.
+    That is a convention rather than a guarantee: an installer under a path
+    called `definitions/` or `bootstrap/` is not seen here, so a catalog that
+    renames one moves it out of this comparison without either side reporting
+    it. Widen the match when upstream adopts another name — do not assume this
+    finds installers it has no way to recognise.
+
+    These carry no `chart` key — they are git sources pointing at a directory of
     CRD manifests — so upstream_pins() cannot see them and neither direction of
-    compare() has ever walked them. The gap is real: eks-gitops installs the argoproj.io CRDs from a git source
-    because the chart's default fetches them from raw.githubusercontent.com at
-    sync time — and neither fact is visible to a version comparison.
+    compare() walks them. The catalog installs the argoproj.io CRDs this way
+    because the chart's own default fetches them from raw.githubusercontent.com
+    at sync time, and neither fact is visible to a version comparison.
 
     A CRD installer is a decision about how a kind reaches the cluster, and kx
     has to make the same decision by a different mechanism (it has no ArgoCD and
@@ -246,12 +285,13 @@ def unanswered_crd_installers(manifest, gitops):
     return missing, stale
 
 
-def compare(manifest, gitops):
-    """(mismatched, missing_here, extra_here, stale) after applying declared divergences."""
-    declared = {d["chart"]: d for d in manifest.get("divergences", [])}
-    upstream = upstream_pins(gitops)
-    local = kx_pins()
+def compare_pins(declared, upstream, local):
+    """(mismatched, missing_here, extra_here, stale) over three dicts.
 
+    Pure, so the self-test exercises this rather than a copy of it: a suite
+    written against a restatement of the comparison passes while the shipped one
+    is broken, which is the failure the suite exists to catch.
+    """
     mismatched, missing_here, extra_here = [], [], []
 
     # Direction 1 — what kx pins, against upstream. Catches kx falling behind.
@@ -271,6 +311,15 @@ def compare(manifest, gitops):
             missing_here.append((chart, version))
 
     return mismatched, missing_here, extra_here, stale_divergences(declared, upstream, local)
+
+
+def compare(manifest, gitops):
+    """compare_pins over the two sides read from disk."""
+    return compare_pins(
+        {d["chart"]: d for d in manifest.get("divergences", [])},
+        upstream_pins(gitops),
+        kx_pins(),
+    )
 
 
 def report(manifest, gitops):
@@ -386,10 +435,67 @@ def cmd_sync(manifest):
         print("mirror-check: now run: ./scripts/render-check.sh")
 
 
+def self_test() -> int:
+    """Prove the comparison still reports a divergence, without a checkout.
+
+    compare_pins() is pure over three dicts, so the breaks below drive the
+    shipped function directly with no checkout. That is the half worth proving:
+    the parsers die loudly when they read nothing, while a comparison that
+    stopped reporting would return empty lists and print a clean verdict.
+    """
+    upstream = {"cert-manager": "v1.21.1", "cilium": "1.19.6"}
+    local = {"cert-manager": ("v1.21.1", Path("x")), "cilium": ("1.19.6", Path("x"))}
+
+    def cmp(declared, up=None, loc=None):
+        return compare_pins(
+            declared,
+            upstream if up is None else up,
+            local if loc is None else loc,
+        )
+
+    breaks = [
+        ("kx pinned behind the catalog", cmp({}, up={**upstream, "cilium": "1.20.0"})),
+        ("a catalog chart with no kx slice", cmp({}, up={**upstream, "velero": "12.1.0"})),
+        ("a kx chart the catalog does not pin",
+         cmp({}, loc={**local, "ingress-nginx": ("4.15.1", Path("x"))})),
+        ("a divergence declared gitops-only that kx now has",
+         cmp({"cilium": {"chart": "cilium", "kind": "gitops-only"}})),
+        ("a divergence declared kx-only that the catalog now pins",
+         cmp({"cert-manager": {"chart": "cert-manager", "kind": "kx-only"}})),
+        ("a version divergence whose pins agree",
+         cmp({"cilium": {"chart": "cilium", "kind": "version"}})),
+        ("a divergence naming a chart neither side pins",
+         cmp({"ghost": {"chart": "ghost", "kind": "version"}})),
+    ]
+
+    failures = 0
+    for label, (mismatched, missing, extra, stale) in breaks:
+        if not (mismatched or missing or extra or stale):
+            print(f"  ACCEPTED  {label}   <-- not caught")
+            failures += 1
+        else:
+            print(f"  rejected  {label}")
+
+    control = cmp({})
+    if any(control):
+        print(f"  ACCEPTED  (control) two agreeing sides are reported as diverging: {control}")
+        failures += 1
+    else:
+        print("  passed    (control) two agreeing sides")
+
+    if failures:
+        print(f"\nFAIL  {failures} case(s) wrong.")
+        return 1
+    print(f"\nOK    {len(breaks) + 1} case(s) behave as specified.")
+    return 0
+
+
 def main():
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
     commands = {"check": cmd_check, "sync": cmd_sync, "freshness": cmd_freshness}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        die("usage: mirror-check.py {check|sync|freshness}")
+        die("usage: mirror-check.py {check|sync|freshness|--self-test}")
     commands[sys.argv[1]](load_manifest())
 
 

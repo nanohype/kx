@@ -67,6 +67,17 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 ruff==0.16.4
           ruff check scripts/
 
+      # Advisory, and exits 0 whatever it finds. Prose conformance is read
+      # rather than matched — a pattern finds only the phrasings its author
+      # thought of — so this surfaces the prose a change adds next to the rules
+      # instead of claiming a verdict over it. Needs the base commit to diff
+      # against, which the default shallow checkout does not fetch.
+      - name: prose the change adds
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python3 scripts/check-prose-voice.py "origin/${{ github.base_ref }}"
+
   renovate-coverage:
     name: Every chart pin is watched
     runs-on: ubuntu-latest
@@ -82,6 +93,9 @@ jobs:
       # is fine and the pattern never runs against a file.
       - name: Prove the coverage gate still rejects
         run: python3 scripts/check-renovate-coverage.py --self-test
+
+      - name: Prove the prose markers still match
+        run: python3 scripts/check-prose-voice.py --self-test
 
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
@@ -127,6 +141,12 @@ jobs:
           repository: nanohype/eks-gitops
           path: .sibling/eks-gitops
           fetch-depth: 0
+
+      # No checkout needed: the comparison is pure over the two parsed sides, so
+      # this proves it still reports a divergence before the step below reads a
+      # real catalog and reports none.
+      - name: Prove the mirror comparison still rejects
+        run: python3 scripts/mirror-check.py --self-test
 
       - name: Compare every chart pin against the catalog
         env:

@@ -33,6 +33,8 @@ import sys
 PROSE_LINE = re.compile(r"^\+\s*(#|//|--\s)|^\+\s*[A-Za-z(\"'`]|^\+\s*desc:|^\+\s*description:")
 CODE_ONLY = re.compile(r"^\+\s*[a-zA-Z_.\"'-]+\s*[:=]\s*\S+\s*$")
 
+SELF = "scripts/check-prose-voice.py"
+
 MARKERS = [
     (
         # Spelled-out numbers as well as digits: the standard's own example of a
@@ -43,10 +45,16 @@ MARKERS = [
             # Up to two words between the count and the noun: the tally is
             # "five SILENT drops", and requiring adjacency misses every tally
             # whose author reached for an adjective.
-            r"|\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+            # `\d+` only for the small spelled-out words' noun list: "two files"
+            # names a convention, "34 files" reports a measurement, and the
+            # difference is the digit.
+            r"|\b\d+\s+"
             r"(?:[a-z-]+\s+){0,2}"
             r"(findings?|hits?|files?|cases?|drops?|calls?|occurrences?|shapes?|problems?|"
-            r"resources?|manifests?|slices?|pins?|violations?|jobs?|gates?|scripts?)\b",
+            r"resources?|manifests?|slices?|pins?|violations?|jobs?|gates?|scripts?)\b"
+            # Spelled-out counts only where the noun is unambiguously a finding.
+            r"|\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+            r"(?:[a-z-]+\s+){0,2}(findings?|hits?|occurrences?|drops?|violations?)\b",
             re.I,
         ),
         "verification tally — state the requirement, or the command that answers it",
@@ -97,6 +105,12 @@ def added_prose(base: str) -> list[tuple[str, str]]:
     for line in diff.stdout.splitlines():
         if line.startswith("+++ b/"):
             path = line[6:]
+            # This file quotes the markers it looks for, so it matches itself on
+            # every run. Excluding it keeps the output about the change.
+            if path == SELF:
+                path = None
+        elif path is None:
+            continue
         elif line.startswith("+") and not line.startswith("+++"):
             if PROSE_LINE.search(line) and not CODE_ONLY.match(line):
                 out.append((path, line[1:].rstrip()))
@@ -166,7 +180,8 @@ def main() -> int:
 
     flagged = flag(lines)
     if flagged:
-        print("  Lines matching an enforceable marker:\n")
+        print("  Lines matching an enforceable marker. A hit is a prompt to look,")
+        print("  not a verdict — these patterns over-match by design:\n")
         for path, text, why in flagged:
             print(f"    {path}\n      {text.strip()}\n      -> {why}\n")
     else:
