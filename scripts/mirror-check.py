@@ -157,8 +157,65 @@ def upstream_pins(gitops):
     return pins
 
 
-HELM_INSTALL = re.compile(r"^helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
-VERSION_FLAG = re.compile(r"--version\s+(\S+)")
+HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
+VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
+
+
+def helm_block(text):
+    """(span, command) for the `helm upgrade --install` invocation, or None.
+
+    Scoped to the invocation rather than the file, and the file is read with
+    comment bodies blanked first. Both matter here, and the second one bit:
+    VERSION_FLAG is unanchored, so a superseded pin left in a comment ABOVE the
+    live one won the search. The chart name was read correctly — that pattern is
+    line-anchored — while the version came from the dead copy, so `check`
+    compared a version the installer never runs and `sync` rewrote the comment
+    and left the real pin alone, then reported the slice re-pinned.
+    """
+    blanked = strip_comments(text)
+    m = HELM_INSTALL.search(blanked)
+    if not m:
+        return None
+    start = m.start()
+    end = len(blanked)
+    for line_start in range(start, len(blanked)):
+        if blanked[line_start] == "\n" and not blanked[:line_start].rstrip("\n").endswith("\\"):
+            end = line_start
+            break
+    return (start, end), blanked[start:end]
+
+
+def strip_comments(text):
+    """Source with `#` comment bodies blanked, quote-aware.
+
+    Blanked rather than dropped so every offset in the result is the offset in
+    the original — `sync` rewrites by span, and a shifted span rewrites the
+    wrong bytes.
+    """
+    out = []
+    for line in text.splitlines():
+        buf, quote, i = [], None, 0
+        while i < len(line):
+            c = line[i]
+            if quote:
+                buf.append(c)
+                if c == "\\" and quote == '"' and i + 1 < len(line):
+                    buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+                buf.append(c)
+            elif c == "#" and (not buf or buf[-1].isspace()):
+                buf.append(" " * (len(line) - i))
+                break
+            else:
+                buf.append(c)
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
 
 
 # Slices that install a chart from a path rather than a pinned remote, so there
@@ -186,10 +243,12 @@ def kx_pins():
     for script in sorted(ROOT.glob("stack/*/*/install.sh")):
         slice_name = str(script.parent.relative_to(ROOT))
         text = script.read_text()
-        install = HELM_INSTALL.search(text)
-        if not install:
+        block = helm_block(text)
+        if not block:
             continue  # applies manifests rather than installing a chart
-        version = VERSION_FLAG.search(text)
+        _, cmd = block
+        install = HELM_INSTALL.search(cmd)
+        version = VERSION_FLAG.search(cmd)
         if not version:
             if slice_name not in NO_REMOTE_PIN:
                 unpinned.append(slice_name)
@@ -413,12 +472,19 @@ def cmd_sync(manifest):
         if upstream[chart] == version:
             continue
         text = script.read_text()
-        # Rewrite only the version this slice's own helm block declares. The
-        # flag appears once per install.sh; count=1 keeps an unrelated later
-        # match (a comment, a second chart) from being rewritten silently.
-        new_text, n = VERSION_FLAG.subn(f"--version {upstream[chart]}", text, count=1)
+        # Rewrite inside the helm invocation's own span. Substituting over the
+        # whole file with count=1 rewrote whichever `--version` came first,
+        # which is the superseded one whenever a comment records it above the
+        # live pin — leaving the real pin untouched and reporting success.
+        block = helm_block(text)
+        if not block:
+            die(f"{script.relative_to(ROOT)}: has a pin but no helm block to rewrite")
+        (start, end), cmd = block
+        new_cmd, n = VERSION_FLAG.subn(f"--version {upstream[chart]}", cmd, count=1)
         if n != 1:
-            die(f"{script.relative_to(ROOT)}: expected one --version flag, rewrote {n}")
+            die(f"{script.relative_to(ROOT)}: expected one --version flag in the helm "
+                f"invocation, rewrote {n}")
+        new_text = text[:start] + new_cmd + text[end:]
         script.write_text(new_text)
         print(f"  ↻ {chart}: {version} → {upstream[chart]}  ({script.relative_to(ROOT)})")
         changed += 1
@@ -478,6 +544,30 @@ def self_test() -> int:
         else:
             print(f"  rejected  {label}")
 
+    # The dead-declaration class, both directions. A superseded pin in a comment
+    # above the live one must not be what gets read, and must not be what gets
+    # rewritten. Fixtures are literals, so there is no did-the-edit-land
+    # question to defend against.
+    shadowed = ("# helm upgrade --install a old/a --version 0.0.1\n"
+                "helm repo add new https://new.example\n"
+                "helm upgrade --install a new/a --version 9.9.9\n")
+    got = helm_block(shadowed)
+    if not got or VERSION_FLAG.search(got[1]).group(1) != "9.9.9":
+        read = VERSION_FLAG.search(got[1]).group(1) if got else "nothing"
+        print(f"  ACCEPTED  a commented-out pin above the live one was read as the pin "
+              f"({read}, live is 9.9.9)")
+        failures += 1
+    else:
+        print("  rejected  a commented-out pin above the live one is not read as the pin")
+
+    (start, end), cmd = got
+    rewritten = shadowed[:start] + VERSION_FLAG.sub("--version 1.2.3", cmd, count=1) + shadowed[end:]
+    if "old/a --version 0.0.1" not in rewritten or "new/a --version 1.2.3" not in rewritten:
+        print("  ACCEPTED  a rewrite landed on the commented-out pin instead of the live one")
+        failures += 1
+    else:
+        print("  rejected  a rewrite lands on the live pin, not the commented-out one")
+
     control = cmp({})
     if any(control):
         print(f"  ACCEPTED  (control) two agreeing sides are reported as diverging: {control}")
@@ -488,7 +578,7 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {failures} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 1} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + 3} case(s) behave as specified.")
     return 0
 
 

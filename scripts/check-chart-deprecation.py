@@ -52,9 +52,43 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RECORDS = ROOT / "stack" / "chart-provenance.json"
 
-REPO_ADD = re.compile(r"^helm repo add\s+(\S+)\s+(\S+)", re.M)
-HELM_INSTALL = re.compile(r"^helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
-VERSION_FLAG = re.compile(r"--version\s+(\S+)")
+REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
+HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
+VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
+
+
+def strip_comments(text: str) -> str:
+    """Source with `#` comment bodies blanked, quote-aware.
+
+    A superseded pin recorded in a comment above the live one would otherwise
+    win an unanchored search, and this file records what a chart WAS pinned for
+    — so reading the dead version puts the wrong description on the record and
+    every later comparison is against a chart nobody installs.
+    """
+    out = []
+    for line in text.splitlines():
+        buf, quote, i = [], None, 0
+        while i < len(line):
+            c = line[i]
+            if quote:
+                buf.append(c)
+                if c == "\\" and quote == '"' and i + 1 < len(line):
+                    buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+                buf.append(c)
+            elif c == "#" and (not buf or buf[-1].isspace()):
+                buf.append(" " * (len(line) - i))
+                break
+            else:
+                buf.append(c)
+            i += 1
+        out.append("".join(buf))
+    return "\n".join(out)
 
 
 def die(msg: str) -> None:
@@ -66,7 +100,7 @@ def pins() -> dict[str, dict]:
     """{chart: {repo, version, source}} for every helm pin in stack/*/*/install.sh."""
     found: dict[str, dict] = {}
     for script in sorted(ROOT.glob("stack/*/*/install.sh")):
-        text = script.read_text()
+        text = strip_comments(script.read_text())
         install = HELM_INSTALL.search(text)
         version = VERSION_FLAG.search(text)
         if not install or not version:
