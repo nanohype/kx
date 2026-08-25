@@ -69,6 +69,12 @@ FLOATING = {"latest", "main", "master", "stable", "edge", "dev", "nightly"}
 # repository cannot rebuild and a HIGH-gated schedule would be red permanently
 # for findings nobody here can close. But a passing line now carries its HIGH
 # count, so "ok" cannot be read as "nothing found".
+#
+# Direction, stated because a flag is easy to mistake for a tightening: trivy's
+# default reports every tier including UNKNOWN, LOW and MEDIUM, so `--severity`
+# here NARROWS what is looked at. It is a deliberate reduction to the two tiers
+# worth acting on for images this repository does not build, not a stricter
+# setting — the strictest setting is passing no flag at all.
 SCANNED = ("HIGH", "CRITICAL")
 FAIL_ON = ("CRITICAL",)
 
