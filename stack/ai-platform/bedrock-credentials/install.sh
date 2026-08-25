@@ -44,8 +44,19 @@ REGION="${AWS_REGION:-us-east-1}"
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"
 
-if ! kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
-  echo "Kyverno is not installed — run 'task stack:security:enable' first." >&2
+# The message names a remedy, so it has to be sure of the cause. `kubectl get`
+# exits non-zero for a missing CRD and for an unreachable cluster alike, and
+# asserting the first while discarding the evidence sends an operator to install
+# Kyverno when nothing is listening.
+if ! kyverno_err="$(kubectl get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
+  if printf '%s' "${kyverno_err}" | grep -qiE 'not found|NotFound'; then
+    echo "Kyverno is not installed — run 'task stack:security:enable' first." >&2
+  else
+    echo "Could not determine whether Kyverno is installed — kubectl said:" >&2
+    printf '%s\n' "${kyverno_err}" | sort -u | sed 's/^/  /' >&2
+    echo "Fix that first; enabling the security slice will not help until kubectl" >&2
+    echo "can reach the cluster." >&2
+  fi
   exit 1
 fi
 

@@ -153,8 +153,13 @@ def addon_files_are_reached(root: pathlib.Path = ROOT) -> list[str]:
         text = strip_comments(install.read_text())
         if taskfile.is_file():
             text += "\n" + strip_comments(taskfile.read_text())
-        for entry in sorted(addon.iterdir()):
-            if entry.name == "install.sh":
+        # rglob, not iterdir. A directory name is not an oracle for what is
+        # inside it: naming `pre-install/` in an installer vouched for every
+        # file under it, so a manifest could be added there and reach nothing
+        # while the gate stayed green. The name of a directory is checked as
+        # well, because a directory nothing names is dead whatever it holds.
+        for entry in sorted(addon.rglob("*")):
+            if entry.name == "install.sh" and entry.parent == addon:
                 continue
             examined += 1
             if entry.name not in text:
@@ -417,6 +422,15 @@ CONTROLS = {
             {"stack/s/a/install.sh": BOUNDED, "stack/s/a/orphan.yaml": "kind: ClusterRole\n"},
             {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/orphan.yaml"\n',
              "stack/s/a/orphan.yaml": "kind: ClusterRole\n"},
+        ),
+        (
+            "a file inside a named directory that nothing applies",
+            {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/pre/a.yaml"\n',
+             "stack/s/a/pre/a.yaml": "kind: A\n",
+             "stack/s/a/pre/orphan.yaml": "kind: B\n"},
+            {"stack/s/a/install.sh": BOUNDED + 'kubectl apply -f "${SCRIPT_DIR}/pre/a.yaml"\n',
+             "stack/s/a/pre/a.yaml": "kind: A\n"},
+            "pre/orphan.yaml",
         ),
         (
             "an addon file named only in a comment",
