@@ -506,9 +506,103 @@ def repo_adds_do_not_swallow(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+# Constructs bash 3.2 does not have. macOS ships /bin/bash 3.2.57 and the
+# documented prerequisites install no newer bash, so any of these aborts at
+# runtime on the platform this workspace targets — and shellcheck, which parses
+# rather than executes, does not object.
+BASH4_ONLY = [
+    (re.compile(r"(?<![\w-])(mapfile|readarray)\b"), "mapfile/readarray", "a `while IFS= read -r` loop"),
+    (re.compile(r"(?<![\w-])coproc\b"), "coproc", "an explicit background process with a fifo"),
+    (re.compile(r"declare\s+-A\b"), "declare -A", "parallel indexed arrays, or a case statement"),
+    (re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^|,,)"), "${var^^} / ${var,,}", "tr"),
+]
+
+
+SCRAPE_KEY = re.compile(r"^(\s*)(serviceMonitor|podMonitor|prometheusRule):\s*$")
+
+
+def scrape_surfaces_are_on(root: pathlib.Path = ROOT) -> list[str]:
+    """A values file that names a scrape surface enables it.
+
+    prometheus-operator-crds is a core addon, so these CRDs exist on every kx
+    cluster and the resource applies whether or not the observability slice is
+    up — inert until a Prometheus reads it, picked up the moment one arrives.
+    Leaving one off makes the scrape a step the reader has to know to take,
+    which is the opt-in this workspace's always-complete rule exists to avoid.
+
+    The rule was stated in two values files and enforced in neither, which is
+    how the class stays open: a third addon added with the surface off ships
+    silently, and the two comments become a memorial.
+    """
+    problems = []
+    values = sorted(root.glob("stack/*/*/values*.yaml"))
+    if not values:
+        return ["found no values files under stack/*/*/ — refusing to report every scrape "
+                "surface enabled over an empty set."]
+    examined = 0
+    for path in values:
+        lines = strip_comments(path.read_text()).splitlines()
+        for n, line in enumerate(lines):
+            m = SCRAPE_KEY.match(line)
+            if not m:
+                continue
+            examined += 1
+            indent, key = m.group(1), m.group(2)
+            # The block's own keys, to the first line at or below its indent.
+            block = []
+            for nxt in lines[n + 1:]:
+                if nxt.strip() and not nxt.startswith(indent + " "):
+                    break
+                block.append(nxt)
+            body = "\n".join(block)
+            if "enabled:" in body and "enabled: true" not in body:
+                problems.append(
+                    f"{path.relative_to(root)}:{n + 1} sets {key}.enabled to something other "
+                    f"than true. The CRD is core, so this applies on every cluster and is "
+                    f"inert until a Prometheus reads it — leaving it off makes the scrape a "
+                    f"step the reader has to know to take."
+                )
+    EXAMINED["every scrape surface a values file names is enabled"] = examined
+    return problems
+
+
+def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
+    """No tracked shell script uses a construct bash 3.2 lacks.
+
+    This class was described in prose in two files and enforced in none, and a
+    second instance shipped anyway — into a teardown script whose sibling, in
+    the same directory and the same change, carries the comment explaining why
+    the construct cannot be used. That teardown aborted before its first delete
+    on a stock mac, stranding the credential it exists to remove.
+
+    A comment naming a defect class is a memorial, not a control.
+    """
+    problems = []
+    scripts = sorted(root.glob("**/*.sh"))
+    scripts = [s for s in scripts if ".git" not in s.parts]
+    if not scripts:
+        return ["found no shell scripts — refusing to report bash 3.2 compatibility over an "
+                "empty set."]
+    examined = 0
+    for script in scripts:
+        examined += 1
+        for n, line in enumerate(strip_comments(script.read_text()).splitlines(), 1):
+            for pattern, what, instead in BASH4_ONLY:
+                if pattern.search(line):
+                    problems.append(
+                        f"{script.relative_to(root)}:{n} uses {what}, which bash 3.2 does not "
+                        f"have — use {instead}. shellcheck parses rather than runs, so it "
+                        f"does not object."
+                    )
+    EXAMINED["every shell script runs on bash 3.2"] = examined
+    return problems
+
+
 CHECKS = [
     ("every helm install names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
+    ("every shell script runs on bash 3.2", shell_runs_on_bash_3),
+    ("every scrape surface a values file names is enabled", scrape_surfaces_are_on),
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
     ("every path named in markdown resolves", markdown_paths_resolve),
@@ -637,6 +731,52 @@ CONTROLS = {
             {"README.md": "nothing here\n"},
             {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
                                      + BOUNDED},
+        ),
+    ],
+    "every shell script runs on bash 3.2": [
+        (
+            "mapfile, the construct that shipped despite being described twice",
+            {"s.sh": "mapfile -t X < <(echo a)\n"},
+            {"s.sh": "while IFS= read -r x; do :; done < <(echo a)\n"},
+            "s.sh:1",
+        ),
+        (
+            "an associative array",
+            {"s.sh": "declare -A M\n"},
+            {"s.sh": "M_keys=()\n"},
+        ),
+        (
+            "case modification on a parameter",
+            {"s.sh": 'echo "${x^^}"\n'},
+            {"s.sh": 'echo "$x" | tr a-z A-Z\n'},
+        ),
+        (
+            "the construct named only in a comment",
+            {"s.sh": "mapfile -t X < <(echo a)\n"},
+            {"s.sh": "# mapfile is deliberately not used here\necho ok\n"},
+        ),
+        (
+            "no shell scripts at all",
+            {"README.md": "nothing\n"},
+            {"s.sh": "echo ok\n"},
+        ),
+    ],
+    "every scrape surface a values file names is enabled": [
+        (
+            "a serviceMonitor left disabled",
+            {"stack/s/a/values.yaml": "metrics:\n  serviceMonitor:\n    enabled: false\n"},
+            {"stack/s/a/values.yaml": "metrics:\n  serviceMonitor:\n    enabled: true\n"},
+            "values.yaml:2",
+        ),
+        (
+            "a podMonitor left disabled",
+            {"stack/s/a/values.yaml": "podMonitor:\n  enabled: false\n"},
+            {"stack/s/a/values.yaml": "podMonitor:\n  enabled: true\n"},
+        ),
+        (
+            "no values files at all",
+            {"README.md": "nothing\n"},
+            {"stack/s/a/values.yaml": "podMonitor:\n  enabled: true\n"},
         ),
     ],
     "every file in an addon directory is applied": [
