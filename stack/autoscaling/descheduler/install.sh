@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add descheduler https://kubernetes-sigs.github.io/descheduler/ >/dev/null 2>&1 || true
+helm repo add descheduler https://kubernetes-sigs.github.io/descheduler/ --force-update >/dev/null
 helm repo update descheduler >/dev/null
 
 helm upgrade --install descheduler descheduler/descheduler \

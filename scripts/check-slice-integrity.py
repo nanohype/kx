@@ -287,8 +287,50 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+REPO_ADD = re.compile(r"^[ \t]*helm repo add\b.*$", re.M)
+
+
+def repo_adds_do_not_swallow(root: pathlib.Path = ROOT) -> list[str]:
+    """No `helm repo add` suppresses its own failure.
+
+    `helm repo add` exits 0 when the alias already maps to the same URL, so the
+    idempotent case never needed suppressing. It fails on exactly one thing: the
+    alias existing against a DIFFERENT url — which is the case that must not be
+    ignored, because the install below then pulls a chart of the same name from
+    somewhere else. `|| true` suppressed only that.
+
+    `--force-update` is the shape that works: it resolves the collision in this
+    repository's favour, leaves the idempotent case at 0, and still exits
+    non-zero on an unreachable or malformed repository. Verified against helm
+    directly rather than assumed.
+    """
+    problems = []
+    scripts = sorted(root.glob("stack/*/*/install.sh"))
+    if not scripts:
+        return ["found no install.sh under stack/*/*/ — refusing to report every repo add "
+                "unsuppressed over an empty set."]
+    examined = 0
+    for script in scripts:
+        for n, line in enumerate(strip_comments(script.read_text()).splitlines(), 1):
+            if not REPO_ADD.match(line):
+                continue
+            examined += 1
+            if "|| true" in line or "2>&1" in line:
+                problems.append(
+                    f"{script.relative_to(root)}:{n} suppresses `helm repo add`'s failure. "
+                    f"The only thing it can fail on is the alias already pointing somewhere "
+                    f"else, which is the one case worth hearing about."
+                )
+    EXAMINED["no helm repo add swallows its own failure"] = examined
+    if not examined:
+        problems.append("no install.sh runs `helm repo add` — the parser and the tree "
+                        "disagree, so this check asserted nothing.")
+    return problems
+
+
 CHECKS = [
     ("every helm install names a timeout", helm_calls_are_bounded),
+    ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
     ("every path named in markdown resolves", markdown_paths_resolve),
@@ -414,6 +456,37 @@ CONTROLS = {
             {"scripts/check-x.py":
                 "def control_outcomes():\n"
                 "    return {'ok': True, 'rejected': 3, 'accepted': 2}\n"},
+        ),
+    ],
+    "no helm repo add swallows its own failure": [
+        (
+            "a repo add suppressed with || true",
+            {"stack/s/a/install.sh": "helm repo add x https://x >/dev/null 2>&1 || true\n"
+                                     + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a repo add whose stderr is redirected away",
+            {"stack/s/a/install.sh": "helm repo add x https://x 2>&1 >/dev/null\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a suppression cited at its own line",
+            {"stack/s/a/install.sh": "# one\n# two\n"
+                                     "helm repo add x https://x >/dev/null 2>&1 || true\n"
+                                     + BOUNDED},
+            {"stack/s/a/install.sh": "# one\n# two\n"
+                                     "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+            "install.sh:3",
+        ),
+        (
+            "no install.sh at all",
+            {"README.md": "nothing here\n"},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
         ),
     ],
     "every file in an addon directory is applied": [

@@ -4,7 +4,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
+helm repo add cilium https://helm.cilium.io --force-update >/dev/null
 helm repo update cilium >/dev/null
 
 helm upgrade --install cilium cilium/cilium \

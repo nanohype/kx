@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update >/dev/null
 helm repo update ingress-nginx >/dev/null
 
 kubectl create namespace ingress-nginx --dry-run=client -o yaml | kubectl apply -f -

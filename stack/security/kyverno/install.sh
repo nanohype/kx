@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update >/dev/null
 helm repo update kyverno >/dev/null
 
 kubectl create namespace kyverno --dry-run=client -o yaml | kubectl apply -f -

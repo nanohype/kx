@@ -12,7 +12,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add grafana-community https://grafana-community.github.io/helm-charts >/dev/null 2>&1 || true
+helm repo add grafana-community https://grafana-community.github.io/helm-charts --force-update >/dev/null
 helm repo update grafana-community >/dev/null
 
 kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -

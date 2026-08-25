@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-helm repo add nats https://nats-io.github.io/k8s/helm/charts/ >/dev/null 2>&1 || true
+helm repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
 helm repo update nats >/dev/null
 
 kubectl create namespace nats --dry-run=client -o yaml | kubectl apply -f -
