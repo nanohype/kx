@@ -30,7 +30,7 @@ jobs:
 
       - name: yamllint
         run: |
-          pip install --quiet --timeout 60 --retries 3 yamllint==1.37.1
+          pip install --quiet --timeout 60 --retries 3 yamllint==1.38.0
           yamllint .
 
       # Grafana ships a default password and is published as a NodePort on a
@@ -94,7 +94,12 @@ jobs:
       # shell source before bash parses it.
       - name: zizmor
         run: |
-          pip install --quiet --timeout 60 --retries 3 zizmor==1.16.3
+          # Pinned from the registry, not from a local resolver. A laptop on an
+          # older interpreter silently caps a pip install at the last version
+          # that supports it — zizmor resolved to 1.16.3 here against 1.29.0
+          # published, so the scanner CI ran was chosen by a workstation's
+          # python rather than by what the tool has released.
+          pip install --quiet --timeout 60 --retries 3 zizmor==1.29.0
           # --no-online-audits keeps the verdict a function of the commit under
           # test, the same rule the mirror job states: the online audits ask
           # GitHub whether an action has since been archived, which is a fact
