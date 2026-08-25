@@ -40,8 +40,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\b", re.M)
 
 
-def helm_invocations(text: str) -> list[str]:
-    """Each `helm upgrade --install` command, continuations folded in.
+def helm_invocations(text: str) -> list[tuple[int, str]]:
+    """Each `helm upgrade --install` command as (1-indexed line, folded command).
 
     Scoped to the command rather than the file for both halves. Anchoring to
     column 0 would miss an indented invocation and, worse, skip the whole file
@@ -52,14 +52,14 @@ def helm_invocations(text: str) -> list[str]:
     lines, out, i = text.splitlines(), [], 0
     while i < len(lines):
         if HELM_INSTALL.match(lines[i]):
-            cmd = []
+            start, cmd = i + 1, []
             while i < len(lines):
                 stripped = lines[i].rstrip()
                 cmd.append(stripped.rstrip("\\"))
                 if not stripped.endswith("\\"):
                     break
                 i += 1
-            out.append(" ".join(cmd))
+            out.append((start, " ".join(cmd)))
         i += 1
     return out
 
@@ -98,6 +98,9 @@ def strip_comments(text: str) -> str:
     return "\n".join(out)
 
 
+EXAMINED: dict[str, int] = {}
+
+
 def helm_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
     """helm's own default is five minutes, which is the wrong number here.
 
@@ -113,14 +116,15 @@ def helm_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
                 "call bounded over an empty set."]
     checked = 0
     for script in scripts:
-        for cmd in helm_invocations(strip_comments(script.read_text())):
+        for line, cmd in helm_invocations(strip_comments(script.read_text())):
             checked += 1
             if "--timeout" not in cmd:
                 problems.append(
-                    f"{script.relative_to(root)} runs `helm upgrade --install` with no "
+                    f"{script.relative_to(root)}:{line} runs `helm upgrade --install` with no "
                     f"--timeout, so it takes helm's implicit 5m — short enough that a cold "
                     f"image pull aborts the slice."
                 )
+    EXAMINED["every helm install names a timeout"] = checked
     if not checked:
         problems.append("no install.sh runs `helm upgrade --install` — the parser and the tree "
                         "disagree, so this check asserted nothing.")
@@ -142,6 +146,7 @@ def addon_files_are_reached(root: pathlib.Path = ROOT) -> list[str]:
     if not installs:
         return ["found no install.sh under stack/*/*/ — refusing to report every addon file "
                 "reached over an empty set."]
+    examined = 0
     for install in installs:
         addon = install.parent
         taskfile = addon.parent / "Taskfile.yaml"
@@ -151,12 +156,14 @@ def addon_files_are_reached(root: pathlib.Path = ROOT) -> list[str]:
         for entry in sorted(addon.iterdir()):
             if entry.name == "install.sh":
                 continue
+            examined += 1
             if entry.name not in text:
                 what = "directory" if entry.is_dir() else "file"
                 problems.append(
                     f"{entry.relative_to(root)} — nothing names this {what} outside a comment, "
                     f"so nothing applies it and it ships as documentation that reads as config."
                 )
+    EXAMINED["every file in an addon directory is applied"] = examined
     return problems
 
 
@@ -210,6 +217,68 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
         if not outcome.get("accepted"):
             problems.append(f"{rel} controls exercised no acceptance — a gate that refuses "
                             f"everything is as useless as one that refuses nothing.")
+    EXAMINED["every gate is observed to reject and to accept"] = len(gates)
+    return problems
+
+
+# A repo-relative path in prose, as markdown link targets and as inline code.
+# Anchored per line with [ \t] rather than \s for the reason stated above.
+MD_LINK = re.compile(r"\]\(([^)\s#]+)(?:#[^)]*)?\)")
+
+# Not a repo-relative path, though it has the shape of one. Each is a thing the
+# reader resolves somewhere other than this tree.
+NOT_A_PATH = re.compile(
+    r"^(https?:|mailto:|#|~)"          # links out, in-page anchors, a home dir
+    r"|^\.\./"                          # a sibling checkout, which may not be cloned
+    r"|[*{}<>=]"                       # a glob, a placeholder, or a key=value
+    r"|^-"                             # a flag
+    r"|^/"                             # an absolute path or a JSON pointer
+    r"|:[0-9/]"                        # a URL or a host:port
+)
+
+
+def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
+    """Every repo-relative path named in markdown exists.
+
+    The documentation rule made executable. Prose that names a thing is a claim
+    about the world, and the claim most likely to rot is a path: a file moves
+    and every document that pointed at it keeps pointing, confidently, at
+    nothing.
+
+    Scoped to markdown LINK targets carrying a directory separator, because a
+    link is an unambiguous claim: it is a thing the reader clicks. Inline code
+    is not. In this tree a backticked `install.sh` names the CONVENTION every
+    addon directory follows, and `karpenter.sh/capacity-type` is a label key —
+    reading either as a path buries the one real finding under thirty-six that
+    are correct prose. The narrow rule is the one that says something.
+
+    Reads the RAW markdown, because in a document the prose IS the target and
+    the blanked view would leave nothing to check.
+    """
+    problems = []
+    examined = 0
+    docs = sorted(root.glob("*.md")) + sorted(root.glob("docs/**/*.md"))
+    if not docs:
+        EXAMINED["every path named in markdown resolves"] = 0
+        return ["found no markdown at the repository root — refusing to report every path "
+                "resolved over an empty set."]
+    for doc in docs:
+        for n, line in enumerate(doc.read_text().splitlines(), 1):
+            for m in MD_LINK.finditer(line):
+                if True:
+                    ref = m.group(1).strip()
+                    if not ref or "/" not in ref or NOT_A_PATH.search(ref):
+                        continue
+                    # Only a leading ./ is stripped. Stripping "." would turn
+                    # .github/workflows/ci.yml into a path that does not exist —
+                    # which is what the first version of this reported.
+                    rel = ref[2:] if ref.startswith("./") else ref
+                    examined += 1
+                    if not (root / rel.rstrip("/")).exists():
+                        problems.append(
+                            f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist."
+                        )
+    EXAMINED["every path named in markdown resolves"] = examined
     return problems
 
 
@@ -217,6 +286,7 @@ CHECKS = [
     ("every helm install names a timeout", helm_calls_are_bounded),
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
+    ("every path named in markdown resolves", markdown_paths_resolve),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -249,6 +319,13 @@ CONTROLS = {
                                      "--timeout 10m\nfi\n"},
         ),
         (
+            "a violation under three comment lines is cited at its own line",
+            {"stack/s/a/install.sh": "# one\n# two\n# three\n"
+                                     "helm upgrade --install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh": "# one\n# two\n# three\n" + BOUNDED},
+            "install.sh:4",
+        ),
+        (
             "an unbounded helm install beside an unrelated --timeout",
             {"stack/s/a/install.sh": BOUNDED.replace(" --timeout 10m", "")
                                      + "kubectl wait --for=condition=Ready --timeout=300s pod/x\n"},
@@ -259,6 +336,37 @@ CONTROLS = {
             "no install.sh at all",
             {"README.md": "nothing here\n"},
             {"stack/s/a/install.sh": BOUNDED},
+        ),
+    ],
+    "every path named in markdown resolves": [
+        (
+            "a markdown link to a file that does not exist",
+            {"README.md": "see [the installer](stack/nope/install.sh) for details\n"},
+            {"README.md": "see [the gate](scripts/check-slice-integrity.py) for details\n",
+             "scripts/check-slice-integrity.py": "x\n"},
+        ),
+        (
+            "a link target that does not exist",
+            {"README.md": "run [the script](scripts/does-not-exist.py) first\n"},
+            {"README.md": "run [the script](scripts/real.py) first\n", "scripts/real.py": "x\n"},
+        ),
+        (
+            "a violation cited at its own line",
+            {"README.md": "one\ntwo\nthree\nsee [it](stack/nope/install.sh)\n"},
+            {"README.md": "one\ntwo\nthree\nsee [it](stack/yes/install.sh)\n",
+             "stack/yes/install.sh": "x\n"},
+            "README.md:4",
+        ),
+        (
+            "a dot-prefixed path that does exist is not reported",
+            {"README.md": "see [ci](.github/workflows/nope.yml)\n"},
+            {"README.md": "see [ci](.github/workflows/ci.yml)\n",
+             ".github/workflows/ci.yml": "x\n"},
+        ),
+        (
+            "no markdown at all",
+            {"scripts/x.py": "x\n"},
+            {"README.md": "nothing named here\n"},
         ),
     ],
     "every gate is observed to reject and to accept": [
@@ -352,7 +460,9 @@ def controls() -> int:
         check = by_label.get(label)
         if check is None:
             continue
-        for name, broken, clean in cases:
+        for case in cases:
+            name, broken, clean = case[0], case[1], case[2]
+            must_say = case[3] if len(case) > 3 else None
             # Assert the mutation happened, by comparing the fixtures rather
             # than by trusting the verdict. A mutation that silently fails to
             # mutate hands the gate an unbroken tree, the gate correctly passes
@@ -368,8 +478,14 @@ def controls() -> int:
                       f"failing on the mutation would prove nothing.")
                 failures += 1
                 continue
-            if not check(_tree(broken)):
+            reported = check(_tree(broken))
+            if not reported:
                 print(f"  FAILS OPEN  {name} — the gate accepted it.")
+                failures += 1
+            elif must_say and not any(must_say in r for r in reported):
+                print(f"  MIS-CITED   {name} — expected {must_say!r} in the report, got:")
+                for r in reported:
+                    print(f"                {r}")
                 failures += 1
             else:
                 print(f"  control ok  {name}")
@@ -380,13 +496,21 @@ def run(root: pathlib.Path = ROOT) -> int:
     failed = 0
     for label, check in CHECKS:
         problems = check(root)
+        n = EXAMINED.get(label)
+        # The denominator, always. A check that found nothing to look at and a
+        # check that looked at everything print the same clean line without it,
+        # and the first is the one that needs saying.
+        seen = "" if n is None else f"  [{n} examined]"
         if problems:
             failed += 1
-            print(f"FAIL  {label}:")
+            print(f"FAIL  {label}:{seen}")
             for p in problems:
                 print(f"        {p}")
+        elif n == 0:
+            print(f"  ok  {label}{seen} — nothing in the tree to check, so this asserts "
+                  f"nothing yet")
         else:
-            print(f"  ok  {label}")
+            print(f"  ok  {label}{seen}")
     return failed
 
 
