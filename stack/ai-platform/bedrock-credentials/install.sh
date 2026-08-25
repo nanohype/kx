@@ -30,19 +30,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROFILE="${AWS_PROFILE:-default}"
-# Defaults to us-east-1, overridable with AWS_REGION. This is the region the
-# gateway signs the upstream Bedrock call for, so it has to be one the profile's
-# account actually allows Bedrock in. An account with a region-lock policy
-# returns AccessDeniedException for any other region — indistinguishable from
-# the empty credential chain this slice exists to fill. us-east-1 is the anchor by design, not by accident: CloudFront's
-# ACM certificates must be issued there regardless, so anchoring anywhere else
-# would need a permanent carve-out for the one thing every venture does. The
-# `home_region` variable carries the full reasoning — read it there rather than
-# trusting this restatement.
+# The region the gateway signs the upstream Bedrock call for. It has to be one
+# the profile's account allows Bedrock in: an account carrying a region-lock
+# policy answers AccessDeniedException for every other region, which is the same
+# error an empty credential chain produces and is therefore indistinguishable
+# from the failure this slice exists to remove.
 #
-# A gateway signing for any other region gets AccessDeniedException: the exact
-# error this slice exists to remove, arriving from the guardrail instead of from
-# the empty credential chain.
+# us-east-1 is the default because it is the only region the llm-policy standard
+# lists as preferred, and that list is one element so a workload cannot drift
+# toward a region a service-control policy denies. Override with AWS_REGION when
+# the profile's account allows Bedrock somewhere else.
 REGION="${AWS_REGION:-us-east-1}"
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"
@@ -58,19 +55,35 @@ fi
 # producing a Secret full of empty strings that fails much later as a 403.
 echo "Resolving credentials from AWS profile '${PROFILE}' ..."
 CREDS_JSON="$(aws configure export-credentials --profile "${PROFILE}" --format process)"
-ACCESS_KEY="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["AccessKeyId"])')"
-SECRET_KEY="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["SecretAccessKey"])')"
-SESSION_TOKEN="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("SessionToken",""))')"
+AWS_ACCESS_KEY_ID="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["AccessKeyId"])')"
+AWS_SECRET_ACCESS_KEY="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["SecretAccessKey"])')"
+AWS_SESSION_TOKEN="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("SessionToken",""))')"
+AWS_REGION="${REGION}"
+# Exported rather than passed as arguments: the Secret below is built from the
+# environment so no credential reaches a command line.
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION
 
 kubectl create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl create secret generic "${SECRET}" \
-  --namespace "${SOURCE_NS}" \
-  --from-literal=AWS_ACCESS_KEY_ID="${ACCESS_KEY}" \
-  --from-literal=AWS_SECRET_ACCESS_KEY="${SECRET_KEY}" \
-  --from-literal=AWS_SESSION_TOKEN="${SESSION_TOKEN}" \
-  --from-literal=AWS_REGION="${REGION}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# Built on stdin rather than with --from-literal: that flag puts the secret key
+# and the session token in this process's argv, where `ps` shows them to every
+# other process on the workstation. python3 does the base64 and the quoting; it
+# is already required above to read the credential JSON.
+python3 - "${SECRET}" "${SOURCE_NS}" <<'PY' | kubectl apply -f -
+import base64, json, os, sys
+
+name, namespace = sys.argv[1], sys.argv[2]
+data = {k: base64.b64encode(os.environ[k].encode()).decode() for k in (
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"
+)}
+print(json.dumps({
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {"name": name, "namespace": namespace},
+    "type": "Opaque",
+    "data": data,
+}))
+PY
 
 kubectl apply -f "${SCRIPT_DIR}/policy.yaml"
 
@@ -88,4 +101,4 @@ echo "Gateways admitted from now on pick the credentials up. Existing ones are"
 echo "replaced by Envoy Gateway on its next reconcile; to take them now:"
 echo "  kubectl delete pod -A -l app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy"
 echo
-echo "Verify with:  bash ${SCRIPT_DIR}/verify.sh"
+echo "Verify with:  task stack:ai-platform:credentials:verify"

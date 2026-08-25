@@ -35,6 +35,18 @@ tasks:
     cmds:
       - bash {{.TASKFILE_DIR}}/bedrock-credentials/verify.sh
 
+  # The credential outlives the slice unless something withdraws it. Deleting
+  # the source Secret is what retracts the clones — the generate rule's
+  # synchronize owns them, so removing the policy first would strand a live AWS
+  # session token in every tenants-* namespace with nothing left watching it.
+  # Order here is source, then policy, then the grant the policy needed.
+  credentials:disable:
+    desc: Withdraw the local Bedrock credentials and the rights they needed
+    cmds:
+      - kubectl delete secret kx-bedrock-credentials -n kyverno --ignore-not-found
+      - kubectl delete clusterpolicy inject-local-bedrock-credentials --ignore-not-found
+      - kubectl delete clusterrole kyverno:bedrock-credentials-secrets --ignore-not-found
+
   # The only check here that sends traffic. Everything else — status phases,
   # the credentials verify, the render gate — reads a resource, and a gateway
   # that answers nothing looks identical to one that works in all of them.
@@ -55,9 +67,16 @@ tasks:
   disable:
     desc: Uninstall ai-platform slice
     cmds:
+      # Credentials first, and unconditionally: this task is the slice's only
+      # teardown entry point, and the two cluster-scoped objects the optional
+      # credentials task creates survive every namespace delete below.
+      - task: 'credentials:disable'
       - helm uninstall -n eks-agent-platform eks-agent-platform-operator || true
       - kubectl delete ns eks-agent-platform --ignore-not-found
       - helm uninstall -n envoy-gateway-system envoy-ai-gateway      || true
       - helm uninstall -n envoy-gateway-system envoy-gateway         || true
       - helm uninstall -n envoy-gateway-system envoy-ai-gateway-crds || true
+      # Cluster-scoped, so no namespace delete reaches it. Applied by
+      # envoy-ai-gateway/install.sh, which no helm release owns.
+      - kubectl delete gatewayclass envoy-ai-gateway --ignore-not-found
       - kubectl delete ns envoy-gateway-system --ignore-not-found
