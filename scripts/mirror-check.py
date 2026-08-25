@@ -44,6 +44,7 @@ schedule.
 
 import contextlib
 import io
+import tempfile
 import json
 import os
 import re
@@ -134,6 +135,19 @@ def walk(node):
             yield from walk(item)
 
 
+# A chart name the generator supplies rather than the file stating it. The name
+# comes from a list element one level of indirection away, so a static reader
+# cannot resolve it and the ApplicationSet is correct as written.
+#
+# Matched by FORM, and the form is asserted rather than assumed: a COMPLETE
+# template action is exempt, and a name that merely carries a brace is not.
+# Without that split, a chart reference that stops being templated and becomes
+# unreadable for some other reason is absorbed by the same branch and leaves the
+# comparison silently smaller than the catalog — the failure the skipped map
+# below exists to prevent, reached through the one field it did not cover.
+TEMPLATE_ACTION = re.compile(r"\{\{.+?\}\}")
+
+
 def upstream_pins(gitops):
     """{chart: version} for every chart the eks-gitops ApplicationSets pin.
 
@@ -153,12 +167,32 @@ def upstream_pins(gitops):
     # shape leaves the comparison silently smaller than upstream's catalog, and
     # the verdict is a count over whatever survived. Recorded here, checked below.
     skipped = {}
+    # Chart names the generator supplies, and names that are neither that nor a
+    # literal. Kept apart on purpose: the first is the catalog's own pattern and
+    # is exempt, the second is a reference this parser cannot account for.
+    generated: dict[str, str] = {}
+    malformed: list[str] = []
     for path in sorted(appsets.glob("*.yaml")):
         with path.open() as fh:
             for doc in yaml.safe_load_all(fh):
                 for node in walk(doc):
                     chart = node.get("chart")
-                    if not isinstance(chart, str) or "{{" in chart:
+                    if chart is None:
+                        continue
+                    if not isinstance(chart, str):
+                        malformed.append(
+                            f"{path.name}: chart is {type(chart).__name__}, not a name"
+                        )
+                        continue
+                    if TEMPLATE_ACTION.search(chart):
+                        generated.setdefault(chart, path.name)
+                        continue
+                    if "{" in chart or "}" in chart:
+                        malformed.append(
+                            f"{path.name}: chart name {chart!r} carries a brace but is not a "
+                            f"complete template action, so it is neither a literal this can "
+                            f"compare nor a name the generator supplies"
+                        )
                         continue
                     version = node.get("chartVersion") or node.get("targetRevision")
                     if not isinstance(version, str) or "{{" in version:
@@ -174,6 +208,16 @@ def upstream_pins(gitops):
                             f"({path.name}) — resolve upstream before mirroring it"
                         )
                     pins[chart] = version
+    if malformed:
+        for m in sorted(malformed):
+            print(f"mirror-check: {m}", file=sys.stderr)
+        die(f"{len(malformed)} chart reference(s) upstream are neither a literal nor a "
+            "template action. Skipping them would make the comparison a count over the ones "
+            "that happened to parse.")
+    if generated:
+        for name, where in sorted(generated.items()):
+            print(f"mirror-check: {where} names its chart as {name} — supplied by the "
+                  f"generator, so there is no literal to compare", file=sys.stderr)
     if not pins:
         die(f"read no chart pins out of {appsets} — the parser and the catalog disagree")
     unresolved = {c: why for c, why in skipped.items() if c not in pins}
@@ -579,7 +623,49 @@ def self_test() -> int:
          cmp({"ghost": {"chart": "ghost", "kind": "version"}})),
     ]
 
+    # Chart names, by form. Three outcomes from one field, and the two that are
+    # not a literal must not share a branch: the generator's own pattern is
+    # exempt, and a reference that is neither a literal nor a complete template
+    # action is a chart this parser cannot account for.
+    def upstream_from(docs):
+        d = Path(tempfile.mkdtemp(prefix="mirror-appsets-"))
+        (d / "applicationsets").mkdir()
+        for n, body in enumerate(docs):
+            (d / "applicationsets" / f"a{n}.yaml").write_text(body)
+        return d
+
+    def read(body):
+        """(pins, exit code) for one ApplicationSet, exercising the real reader."""
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                return upstream_pins(upstream_from([body])), 0
+        except SystemExit as e:
+            return {}, e.code
+
+    literal = ("spec:\n  template:\n    spec:\n      source:\n"
+               "        chart: cilium\n        targetRevision: 1.19.6\n")
+    templated = ("spec:\n  template:\n    spec:\n      source:\n"
+                 "        chart: '{{ .chart }}'\n        targetRevision: 1.19.6\n")
+    half_open = ("spec:\n  template:\n    spec:\n      source:\n"
+                 "        chart: '{{ .chart'\n        targetRevision: 1.19.6\n")
+
+    only_cilium = {"cilium": "1.19.6"}
+    name_cases = [
+        ("a literal chart name is compared",
+         read(literal), lambda r: r[0] == only_cilium),
+        ("a generated chart name is exempt, not an error",
+         read(literal + "---\n" + templated), lambda r: r[0] == only_cilium),
+        ("a brace that is not a complete template action is refused",
+         read(literal + "---\n" + half_open), lambda r: r[1] not in (0, None)),
+    ]
     failures = 0
+    for label, result, ok in name_cases:
+        if ok(result):
+            print(f"  {'rejected' if 'refused' in label else 'accepted'}  {label}")
+        else:
+            print(f"  WRONG     {label} — got {result!r}")
+            failures += 1
+
     for label, (mismatched, missing, extra, stale) in breaks:
         if not (mismatched or missing or extra or stale):
             print(f"  ACCEPTED  {label}   <-- not caught")
@@ -621,7 +707,7 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {failures} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 3} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + 3 + len(name_cases)} case(s) behave as specified.")
     return 0
 
 
