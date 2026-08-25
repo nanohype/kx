@@ -8,6 +8,13 @@ on:
 # Every job here only reads the tree. Declared explicitly rather than inherited:
 # the org default is already `read`, but a default is a setting someone can change
 # without touching this file, and the two sibling workflows declare it too.
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -94,7 +101,13 @@ jobs:
           # about the world on the day the job runs and would redden a pull
           # request that did not cause it. It is also an unbounded network call
           # inside a blocking gate.
-          zizmor --no-online-audits --persona=regular .github/workflows/
+          # --persona=auditor, not the default. The default persona does not
+          # RUN the excessive-permissions audit at all, so a workflow-level
+          # id-token: write — which every job added later silently inherits,
+          # with no diff that looks like a permission change — is not merely
+          # unreported, it is never looked for. A green tick from a check that
+          # skipped the audit is worse than no check.
+          zizmor --no-online-audits --persona=auditor .github/workflows/
 
       - name: prose the change adds
         if: github.event_name == 'pull_request'
@@ -275,12 +288,16 @@ jobs:
       # render is the input rather than the values files, because a values file
       # names the deltas and the chart supplies the rest.
       - name: Every image the pinned charts resolve to is immutable
-        run: python3 scripts/check-images.py --pins "${{ runner.temp }}/render"
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+        run: python3 scripts/check-images.py --pins "$RENDER_DIR"
 
       - name: Validate every rendered resource against a schema
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
         run: |
           pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
-          python3 scripts/check-rendered-schemas.py "${{ runner.temp }}/render"
+          python3 scripts/check-rendered-schemas.py "$RENDER_DIR"
 
   merge-gate:
     name: merge gate

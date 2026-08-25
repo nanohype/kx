@@ -30,6 +30,13 @@ on:
     - cron: "0 16 * * 1"
   workflow_dispatch:
 
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -73,4 +80,6 @@ jobs:
           ./scripts/render-check.sh
 
       - name: Scan every image the pinned charts resolve to
-        run: python3 scripts/check-images.py --cves "${{ runner.temp }}/render"
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+        run: python3 scripts/check-images.py --cves "$RENDER_DIR"

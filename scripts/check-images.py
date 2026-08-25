@@ -59,7 +59,18 @@ WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Replic
 # got.
 FLOATING = {"latest", "main", "master", "stable", "edge", "dev", "nightly"}
 
-SEVERITIES = ("CRITICAL",)
+# Scanned at both tiers, failed on one. The threshold is load-bearing and was
+# hiding a great deal: measured on three pinned images, CRITICAL-only reported
+# 2, 0 and 2 where HIGH+CRITICAL reported 42, 8 and 108 — so an image with no
+# CRITICAL printed "ok" while carrying eight HIGH findings, and the clean line
+# said nothing about them.
+#
+# CRITICAL remains what fails, because these are third-party chart images this
+# repository cannot rebuild and a HIGH-gated schedule would be red permanently
+# for findings nobody here can close. But a passing line now carries its HIGH
+# count, so "ok" cannot be read as "nothing found".
+SCANNED = ("HIGH", "CRITICAL")
+FAIL_ON = ("CRITICAL",)
 
 # Images no registry can serve, so no scanner can pull them. Asserted the same
 # way as the pin exemptions: an entry naming an image the render no longer
@@ -164,7 +175,7 @@ def exemptions_still_apply(images: dict[str, set[str]]) -> list[str]:
 def scan(image: str, timeout: int = 300) -> tuple[list[dict], str | None]:
     """(vulnerabilities at SEVERITIES, error). Bounded: trivy pulls over the network."""
     cmd = ["trivy", "image", "--quiet", "--scanners", "vuln",
-           "--severity", ",".join(SEVERITIES), "--format", "json", image]
+           "--severity", ",".join(SCANNED), "--format", "json", image]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
@@ -212,12 +223,17 @@ def check_cves(images: dict[str, set[str]]) -> list[str]:
             # suite exists to refuse.
             problems.append(f"{image} could not be scanned — {err}")
             continue
-        if vulns:
-            listed = ", ".join(sorted({f"{v['id']} ({v['pkg']})" for v in vulns})[:6])
-            more = "" if len(vulns) <= 6 else f", and {len(vulns) - 6} more"
-            problems.append(f"{image}: {len(vulns)} {'/'.join(SEVERITIES)} — {listed}{more}")
-        print(f"  {'FAIL' if vulns else '  ok'}  {image}"
-              f"{f'  ({len(vulns)})' if vulns else ''}", flush=True)
+        blocking = [v for v in vulns if v["severity"] in FAIL_ON]
+        other = len(vulns) - len(blocking)
+        if blocking:
+            listed = ", ".join(sorted({f"{v['id']} ({v['pkg']})" for v in blocking})[:6])
+            more = "" if len(blocking) <= 6 else f", and {len(blocking) - 6} more"
+            problems.append(f"{image}: {len(blocking)} {'/'.join(FAIL_ON)} — {listed}{more}")
+        # The HIGH count rides on every line, passing or failing. Without it an
+        # image with no CRITICAL prints a clean "ok" while carrying findings the
+        # threshold merely declined to fail on.
+        tail = f"  ({len(blocking)} critical, {other} high)" if vulns else "  (none)"
+        print(f"  {'FAIL' if blocking else '  ok'}  {image}{tail}", flush=True)
     return problems
 
 
@@ -372,7 +388,8 @@ def main() -> int:
               f"over an empty set. Either the render is empty or the extraction is wrong.")
         return 1
 
-    check, label = (check_pins, "pinned") if args.pins else (check_cves, "free of CRITICAL")
+    check, label = (check_pins, "pinned") if args.pins else (check_cves,
+                    f"free of {'/'.join(FAIL_ON)} (high findings are reported, not failed on)")
     print(f"check-images: {len(images)} image(s) across {len(set().union(*images.values()))} slice(s)")
     problems = exemptions_still_apply(images) + check(images)
     if problems:

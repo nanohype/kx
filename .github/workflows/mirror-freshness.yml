@@ -17,6 +17,13 @@ on:
     - cron: "0 15 * * 1"
   workflow_dispatch:
 
+# One run per ref. A push that lands on top of another leaves the first run
+# grading a tree nobody is proposing any more, and its verdict arrives against
+# the newer commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

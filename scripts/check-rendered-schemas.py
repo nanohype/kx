@@ -217,7 +217,26 @@ def summarise(output):
     return {"valid": valid, "invalid": invalid, "errors": errors, "skipped": skipped}
 
 
+def require_kubeconform():
+    """The validator has to exist before anything is reported about a render.
+
+    Without this the first subprocess raises FileNotFoundError and the gate dies
+    with a Python traceback — exit non-zero, so it reads as a rejection, while
+    blaming the interpreter for a missing tool. A gate that depends on a binary
+    asserts it, or it can fail in a way that looks like a verdict.
+    """
+    if shutil.which("kubeconform") is None:
+        die("kubeconform is not on PATH. This gate validates nothing without it, and "
+            "reporting a clean render would be worse than failing.", code=2)
+    probe = subprocess.run(["kubeconform", "-v"], capture_output=True, text=True,
+                           timeout=30, check=False)
+    if probe.returncode != 0:
+        die(f"kubeconform is on PATH but will not run: "
+            f"{(probe.stderr or probe.stdout).strip()[:200]}", code=2)
+
+
 def gate(render_dir):
+    require_kubeconform()
     render_dir = pathlib.Path(render_dir)
     if not render_dir.is_dir():
         die(f"{render_dir} is not a directory — run render-check.sh with KX_RENDER_OUT set.")
@@ -268,6 +287,7 @@ def gate(render_dir):
 
 def self_test():
     """Prove the gate rejects, and that its skip assertion actually fires."""
+    require_kubeconform()
     fixtures = ROOT / "tests" / "schema"
     failures = 0
     checked = 0
