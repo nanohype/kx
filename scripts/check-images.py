@@ -341,6 +341,7 @@ def control_outcomes() -> dict:
     lines = buf.getvalue().splitlines()
     return {
         "ok": failures == 0,
+        "lines": lines,
         "rejected": sum(1 for x in lines if "control ok" in x),
         "accepted": sum(1 for x in lines if "control ok" in x and "accepted" in x)
                     or sum(1 for x in lines if "is ignored" in x or "as clean" in x),

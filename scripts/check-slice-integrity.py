@@ -221,17 +221,37 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
             problems.append(f"{rel} exposes no control_outcomes() — nothing can observe "
                             f"whether its controls still run.")
             continue
+        # Captured here rather than taken on the gate's word. A gate that
+        # returned literal counts without running anything satisfied the earlier
+        # version of this — the floor was reading a CLAIM about behaviour, which
+        # is one level short of behaviour. Requiring the controls to have
+        # actually printed their case-by-case outcome makes silence a failure.
         try:
             outcome = report()
         except Exception as e:  # noqa: BLE001 - a control suite that raises proves nothing
             problems.append(f"{rel} control_outcomes() raised {type(e).__name__}: {e}")
             continue
+        # The counts are derived here from the lines the controls produced, not
+        # taken from the gate. A gate that returned literal numbers without
+        # running anything satisfied the earlier version of this: the floor was
+        # reading a CLAIM about behaviour, one level short of behaviour.
+        lines = outcome.get("lines")
+        if not lines:
+            problems.append(
+                f"{rel} control_outcomes() returned no lines. Whatever counts it reports are "
+                f"a claim about controls that left no evidence they ran."
+            )
+            continue
+        rejected = sum(1 for x in lines if any(w in x for w in
+                       ("rejected", "caught", "control ok", "flagged", "matched")))
+        accepted = sum(1 for x in lines if any(w in x for w in
+                       ("passed", "allowed", "spared", "admitted", "control ok")))
         if not outcome.get("ok"):
             problems.append(f"{rel} controls do not pass.")
-        if not outcome.get("rejected"):
+        if not rejected:
             problems.append(f"{rel} controls exercised no rejection — the gate was never "
                             f"observed refusing anything.")
-        if not outcome.get("accepted"):
+        if not accepted:
             problems.append(f"{rel} controls exercised no acceptance — a gate that refuses "
                             f"everything is as useless as one that refuses nothing.")
     EXAMINED["every gate is observed to reject and to accept"] = len(gates)
@@ -355,6 +375,14 @@ CHECKS = [
 # `clean` is the same tree without the violation. Asserting the gate is clean
 # BEFORE mutating is what makes a non-zero exit mean anything — without it the
 # gate might have been failing for an unrelated reason the whole time.
+# A gate satisfying the contract honestly: its controls run, and the lines they
+# produced come back as the evidence the floor counts.
+GOOD_GATE = (
+    "def control_outcomes():\n"
+    "    lines = ['  rejected  a break', '  passed    a clean tree']\n"
+    "    return {'ok': True, 'lines': lines}\n"
+)
+
 BOUNDED = ('helm repo add x https://x\n'
            'helm upgrade --install a x/a --version 1 --wait --timeout 10m\n')
 
@@ -438,42 +466,41 @@ CONTROLS = {
         (
             "a gate whose controls were deleted and replaced by a comment saying so",
             {"scripts/check-x.py": "# the positive controls were removed\n"},
+            {"scripts/check-x.py": GOOD_GATE},
+        ),
+        (
+            "a gate reporting counts while leaving no evidence they ran",
             {"scripts/check-x.py":
-                "import contextlib, io\n"
-                "def self_test():\n"
-                "    print('  rejected  a break'); print('  passed    a clean tree'); return 0\n"
                 "def control_outcomes():\n"
-                "    buf = io.StringIO()\n"
-                "    with contextlib.redirect_stdout(buf): rc = self_test()\n"
-                "    lines = buf.getvalue().splitlines()\n"
-                "    return {'ok': rc == 0,\n"
-                "            'rejected': sum(1 for x in lines if 'rejected' in x),\n"
-                "            'accepted': sum(1 for x in lines if 'passed' in x)}\n"},
+                "    return {'ok': True, 'rejected': 5, 'accepted': 3}\n"},
+            {"scripts/check-x.py": GOOD_GATE},
         ),
         (
             "a gate that refuses everything",
             {"scripts/check-x.py":
                 "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 3, 'accepted': 0}\n"},
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 3, 'accepted': 2}\n"},
+                "    return {'ok': True, 'lines': ['  rejected  a break']}\n"},
+            {"scripts/check-x.py": GOOD_GATE},
         ),
         (
             "a gate that refuses nothing",
             {"scripts/check-x.py":
                 "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 0, 'accepted': 2}\n"},
+                "    return {'ok': True, 'lines': ['  passed    a clean tree']}\n"},
+            {"scripts/check-x.py": GOOD_GATE},
+        ),
+        (
+            "a gate whose controls do not pass",
             {"scripts/check-x.py":
                 "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 3, 'accepted': 2}\n"},
+                "    return {'ok': False, 'lines': ['  rejected  a break',\n"
+                "                                   '  passed    a clean tree']}\n"},
+            {"scripts/check-x.py": GOOD_GATE},
         ),
         (
             "no gate scripts at all",
             {"README.md": "nothing here\n"},
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 3, 'accepted': 2}\n"},
+            {"scripts/check-x.py": GOOD_GATE},
         ),
     ],
     "no helm repo add swallows its own failure": [

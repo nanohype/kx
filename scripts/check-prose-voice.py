@@ -184,6 +184,10 @@ def control_outcomes() -> dict:
     lines = buf.getvalue().splitlines()
     return {
         "ok": rc == 0,
+        # The evidence, not just a tally of it. The floor derives the counts
+        # from these lines rather than trusting a number a gate could return
+        # without having run anything.
+        "lines": lines,
         "rejected": sum(1 for line in lines if any(m in line for m in ('flagged   ',))),
         "accepted": sum(1 for line in lines if any(m in line for m in ('spared    ',))),
     }
