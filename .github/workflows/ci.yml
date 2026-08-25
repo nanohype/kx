@@ -43,10 +43,27 @@ jobs:
           print(f"ok  {len(maps)} host port(s) bound to 127.0.0.1")
           PY
 
+      # `git ls-files` rather than a glob: a glob names one filename and silently
+      # excludes every other shell file in the tree, which is the reduced-corpus
+      # failure the gates in this repo assert against for their own inputs. An
+      # exclusion here has to be a `shellcheck disable` line carrying a reason,
+      # where the reader of the script sees it.
       - name: shellcheck
         run: |
           sudo apt-get install -y -qq shellcheck >/dev/null
-          shellcheck scripts/*.sh cluster/*.sh stack/*/*/install.sh
+          mapfile -t sh < <(git ls-files '*.sh')
+          if [ "${#sh[@]}" -eq 0 ]; then
+            echo "no shell files found — refusing to report a clean lint over nothing" >&2
+            exit 1
+          fi
+          echo "linting ${#sh[@]} shell file(s)"
+          shellcheck "${sh[@]}"
+
+      # The gate scripts are a third of this repo's code and nothing linted them.
+      - name: ruff
+        run: |
+          pip install --quiet ruff==0.16.4
+          ruff check scripts/
 
   renovate-coverage:
     name: Every chart pin is watched
@@ -60,6 +77,9 @@ jobs:
       # renovate.json — and a customManager whose regex matches nothing is valid
       # config watching nothing. renovate-config-validator passes it: the schema
       # is fine and the pattern never runs against a file.
+      - name: Prove the coverage gate still rejects
+        run: python3 scripts/check-renovate-coverage.py --self-test
+
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
 
@@ -133,8 +153,9 @@ jobs:
             | tar -xz -C /usr/local/bin kubeconform
           kubeconform -v
 
-      # Runs before the stack is validated, so a gate that has stopped rejecting
-      # fails here rather than reporting a green stack it never checked.
+      # Every gate this job runs proves it can still reject before the stack is
+      # validated, so a gate that has stopped rejecting fails here rather than
+      # reporting a green stack it never checked.
       # The producer, proven before the consumer. render-check.sh feeds the schema
       # gate its input, so an extraction that quietly lifted the wrong command
       # would hand that gate a clean verdict over something the installer never
@@ -146,6 +167,11 @@ jobs:
         run: |
           pip install --quiet pyyaml
           python3 scripts/check-rendered-schemas.py --self-test
+
+      # Runs as a pipe inside render-check.sh on every slice, so it executes on
+      # every run — which is not the same as still being able to reject.
+      - name: Prove the mount gate still rejects
+        run: python3 scripts/check-rendered-mounts.py --self-test
 
       - name: helm template each slice at its pinned version
         env:

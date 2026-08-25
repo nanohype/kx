@@ -1,6 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>nanohype/.github"],
+  "extends": [
+    "github>nanohype/.github"
+  ],
   "customManagers": [
     {
       "description": [
@@ -9,7 +11,9 @@
         "One `helm repo add` per file is what lets the URL and the chart be captured separately without a backreference. Renovate's regex engine is RE2, which has none."
       ],
       "customType": "regex",
-      "managerFilePatterns": ["/^stack/.+/install\\.sh$/"],
+      "managerFilePatterns": [
+        "/^stack/.+/install\\.sh$/"
+      ],
       "matchStrings": [
         "helm repo add \\S+ (?<registryUrl>https?://\\S+)[\\s\\S]*?helm upgrade --install \\S+ \\S+/(?<depName>[a-zA-Z0-9._-]+)[\\s\\S]*?--version (?<currentValue>\\S+)"
       ],
@@ -18,7 +22,9 @@
     {
       "description": "The same pins for charts pulled straight from an OCI registry, where there is no `helm repo add` line and the chart reference is the image path.",
       "customType": "regex",
-      "managerFilePatterns": ["/^stack/.+/install\\.sh$/"],
+      "managerFilePatterns": [
+        "/^stack/.+/install\\.sh$/"
+      ],
       "matchStrings": [
         "helm upgrade --install \\S+ oci://(?<depName>\\S+)[\\s\\S]*?--version (?<currentValue>\\S+)"
       ],
@@ -26,11 +32,27 @@
     },
     {
       "description": [
+        "Version pins in stack/*/*/install.sh that are not a chart. gateway-api-crds applies a release manifest by URL, so it carries a real pin with no `helm repo add`, no `oci://` and no `--version` flag — the shapes the two chart managers key on. Left unmatched it is a version fetched on every `task up` that nothing watches.",
+        "The version assignment and the repository are captured from separate lines because the URL interpolates the variable rather than spelling the version out. Ordered assignment-then-URL to match how the file reads; RE2 has no backreferences, so the two captures cannot be tied together any other way."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^stack/.+/install\\.sh$/"
+      ],
+      "matchStrings": [
+        "[A-Z][A-Z0-9_]*_VERSION=\"(?<currentValue>v[0-9][^\"]*)\"[\\s\\S]*?https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/"
+      ],
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": [
         "kubeconform is fetched by release URL in ci.yml, not by `uses:`, so neither the github-actions manager nor the chart regexes above can see it. Left unwatched it is a version pinned somewhere no instrument looks, drifting until someone happens to read the line.",
         "It is the schema gate's only external binary, and a gate whose validator silently ages is worse than no gate, because the green tick keeps arriving."
       ],
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.yml$/"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.yml$/"
+      ],
       "matchStrings": [
         "https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/(?<currentValue>v[0-9][^/]*)/"
       ],
@@ -43,7 +65,9 @@
         "Group the local stack's chart bumps so a slice moves in one PR rather than one per addon, the way the shared preset already groups helm charts elsewhere.",
         "Deliberately sets nothing but groupName. The preset warns that a consumer's packageRules are appended after its own and later rules win — a local rule setting automerge would defeat the security rule that must stay last. This sets no schedule either: the preset already extends schedule:weekly, and a schedule here would also land on CVE-triggered updates, which are meant to fire at any time."
       ],
-      "matchManagers": ["custom.regex"],
+      "matchManagers": [
+        "custom.regex"
+      ],
       "groupName": "kx-stack-charts"
     },
     {
@@ -53,8 +77,12 @@
         "dependencyDashboardApproval rather than enabled:false. The update stays on the Dependency Dashboard with a checkbox, visible and releasable the moment the catalog moves. Disabling the package makes the update silently stop existing, which is a worse failure than holding it in the open.",
         "This rule is placed after the grouping rule on purpose: a consumer's packageRules are appended after the preset's and later rules win, which is what lets groupName: null pull cilium back out of a group set above."
       ],
-      "matchDatasources": ["helm"],
-      "matchPackageNames": ["cilium"],
+      "matchDatasources": [
+        "helm"
+      ],
+      "matchPackageNames": [
+        "cilium"
+      ],
       "groupName": null,
       "dependencyDashboardApproval": true
     }

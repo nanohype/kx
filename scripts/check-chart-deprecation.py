@@ -39,6 +39,8 @@ the render gate stayed green. The description was the only field that moved.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import pathlib
 import re
@@ -104,7 +106,7 @@ def fetch(chart: str, repo: str, version: str) -> dict:
         cmd = ["helm", "show", "chart", repo, "--version", version]
     else:
         cmd = ["helm", "show", "chart", "--repo", repo, chart, "--version", version]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     if out.returncode != 0:
         tail = (out.stderr or out.stdout).strip().splitlines()
         return {"_error": tail[-1][:200] if tail else "no output"}
@@ -212,9 +214,6 @@ def sync() -> int:
 
 
 def self_test() -> int:
-    import contextlib
-    import io
-
     real_pins, real_records = pins(), load_records()
 
     def run(p, r):

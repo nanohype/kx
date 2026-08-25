@@ -52,10 +52,20 @@ class ManifestLoader(yaml.SafeLoader):
 ManifestLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
+# kubeconform resolves unknown kinds over the network, so this gate is not
+# hermetic and the two facts that follow from that are bounded rather than
+# ignored: the subprocess carries a timeout, and an unreachable host is reported
+# as an unreachable host instead of as a manifest failure.
+CRDS_CATALOG_HOST = "raw.githubusercontent.com"
 CRDS_CATALOG = (
-    "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/"
+    f"https://{CRDS_CATALOG_HOST}/datreeio/CRDs-catalog/main/"
     "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 )
+
+# Longer than a healthy run and far short of the runner's own ceiling. The
+# number that matters is that one exists: without it an unreachable schema host
+# holds the job open for six hours and the gate reports nothing at all.
+KUBECONFORM_TIMEOUT_S = 300
 SUMMARY_RE = re.compile(
     r"Valid:\s*(\d+).*?Invalid:\s*(\d+).*?Errors:\s*(\d+).*?Skipped:\s*(\d+)", re.S
 )
@@ -177,7 +187,19 @@ def run_kubeconform(schema_dir, targets, ignore_missing=False):
         "default",
     ]
     cmd += [str(t) for t in targets]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    # Bounded because kubeconform resolves unknown kinds over the network. An
+    # unreachable schema host would otherwise hold the job open to the runner's
+    # own six-hour ceiling, and a gate that hangs is a gate that reports nothing.
+    try:
+        p = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=KUBECONFORM_TIMEOUT_S, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return 1, (
+            f"kubeconform did not finish within {KUBECONFORM_TIMEOUT_S}s. It resolves "
+            f"unknown kinds over the network, so this is usually {CRDS_CATALOG_HOST} "
+            f"being unreachable rather than a manifest problem."
+        )
     return p.returncode, (p.stdout + p.stderr)
 
 

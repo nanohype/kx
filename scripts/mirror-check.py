@@ -45,6 +45,7 @@ schedule.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -68,8 +69,6 @@ def load_manifest():
 
 def upstream_dir(manifest, ref):
     """The eks-gitops checkout to read, verified to be at `ref` unless ref is None."""
-    import os
-
     path = Path(os.environ.get("EKS_GITOPS_DIR", ROOT.parent / "eks-gitops"))
     if not path.is_dir():
         die(
@@ -281,11 +280,11 @@ def report(manifest, gitops):
     unanswered, stale_installers = unanswered_crd_installers(manifest, gitops)
 
     for name, (repo, src, rev) in unanswered:
-        print(f"  \u2717 {name}: eks-gitops installs CRDs from {repo} ({src} @ {rev})")
-        print(f"      and stack/upstream.json says nothing about how kx gets those kinds.")
-        print(f"      Add a crdInstallers entry recording the local mechanism.")
+        print(f"  ✗ {name}: eks-gitops installs CRDs from {repo} ({src} @ {rev})")
+        print("      and stack/upstream.json says nothing about how kx gets those kinds.")
+        print("      Add a crdInstallers entry recording the local mechanism.")
     for name in stale_installers:
-        print(f"  \u2717 {name}: declared in crdInstallers but no longer exists upstream")
+        print(f"  ✗ {name}: declared in crdInstallers but no longer exists upstream")
 
     for chart, mine, theirs, script in mismatched:
         rel = script.relative_to(ROOT)

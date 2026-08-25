@@ -42,8 +42,10 @@ extract_helm_block() {
 if [[ "${1:-}" == "--self-test" ]]; then
   t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
   fails=0
+  checks=0
 
   check() { # name expected file
+    checks=$((checks + 1))
     got="$(extract_helm_block "$3")"
     if [[ "$got" != "$2" ]]; then
       echo "FAIL  $1"; echo "        want: [$2]"; echo "        got:  [$got]"
@@ -69,6 +71,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   # command. An extractor that ran to EOF would return something that still looks
   # like a helm invocation and renders, so the schema gate downstream would grade
   # output the installer never produces.
+  checks=$((checks + 1))
   got="$(extract_helm_block "$t/oci.sh")"
   if [[ "$got" == *kubectl* ]]; then
     echo "FAIL  extraction swallowed a following kubectl line"; fails=$((fails + 1))
@@ -77,7 +80,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   fi
 
   [[ "$fails" -eq 0 ]] || { echo "$fails extraction failure(s)."; exit 1; }
-  echo "OK    extraction behaves as specified over 5 shapes."
+  echo "OK    $checks shape(s) extract as specified."
   exit 0
 fi
 

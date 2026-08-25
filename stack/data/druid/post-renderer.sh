@@ -13,6 +13,7 @@
 # (Heredoc would consume stdin; using -c so python keeps sys.stdin as the pipe input.)
 set -euo pipefail
 
+# shellcheck disable=SC2016  # the filter is python source, not shell to expand
 exec python3 -c '
 import sys, yaml
 
