@@ -11,4 +11,4 @@ helm upgrade --install argo-workflows argo/argo-workflows \
   --namespace argo \
   --version 1.0.23 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -16,4 +16,4 @@ helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
   --namespace monitoring \
   --version 0.169.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -11,4 +11,4 @@ helm upgrade --install argo-events argo/argo-events \
   --namespace argo \
   --version 2.4.24 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

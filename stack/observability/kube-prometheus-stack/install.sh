@@ -12,4 +12,4 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
   --namespace monitoring \
   --version 88.2.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -57,6 +57,17 @@
         "https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/(?<currentValue>v[0-9][^/]*)/"
       ],
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "Container images in the manifests kx applies directly. These are not chart pins, so neither the helm managers above nor any Renovate preset sees them — and an image is the one dependency that changes what runs without changing anything a reader would diff.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^stack/.+\\.yaml$/"
+      ],
+      "matchStrings": [
+        "image:\\s*(?<depName>[a-z0-9._/-]+):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)\\s*$"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [

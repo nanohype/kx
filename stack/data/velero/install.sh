@@ -13,4 +13,4 @@ helm upgrade --install velero vmware-tanzu/velero \
   --namespace velero \
   --version 12.1.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -15,12 +15,13 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: yamllint
         run: |
-          pip install --quiet yamllint
+          pip install --quiet --timeout 60 --retries 3 yamllint==1.37.1
           yamllint .
 
       # The MinIO and Grafana default credentials are defensible only while these
@@ -50,6 +51,7 @@ jobs:
       # where the reader of the script sees it.
       - name: shellcheck
         run: |
+          sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck >/dev/null
           mapfile -t sh < <(git ls-files '*.sh')
           if [ "${#sh[@]}" -eq 0 ]; then
@@ -62,12 +64,13 @@ jobs:
       # The gate scripts are a third of this repo's code and nothing linted them.
       - name: ruff
         run: |
-          pip install --quiet ruff==0.16.4
+          pip install --quiet --timeout 60 --retries 3 ruff==0.16.4
           ruff check scripts/
 
   renovate-coverage:
     name: Every chart pin is watched
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -86,6 +89,7 @@ jobs:
   chart-provenance:
     name: Every chart pin is recorded
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -99,13 +103,14 @@ jobs:
       # covering something.
       - name: Every pin has a provenance record, and can fail
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/check-chart-deprecation.py
           python3 scripts/check-chart-deprecation.py --self-test
 
   mirror:
     name: Mirror the eks-gitops catalog
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -127,7 +132,7 @@ jobs:
         env:
           EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
           git -C "$EKS_GITOPS_DIR" checkout -q "$ref"
           python3 scripts/mirror-check.py check
@@ -135,22 +140,48 @@ jobs:
   render:
     name: Render every helm slice
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The operator slice installs the sibling eks-agent-platform checkout's
       # chart against kx's values — give it one to render from.
+      #
+      # At the ref stack/upstream.json records, for the reason the mirror job
+      # states: reading that repository's default branch makes this job's
+      # verdict a fact about a commit nobody here proposed, so a merge there
+      # reddens a pull request that did not cause it.
+      - name: Read the sibling ref
+        id: sibling
+        run: |
+          ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-agent-platform
           path: .sibling/eks-agent-platform
+          ref: ${{ steps.sibling.outputs.ref }}
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # Downloaded to a file and checked before it is unpacked onto PATH and run.
+      # Piping the response straight into tar executes whatever arrives: a
+      # truncated transfer, a proxy error page, or a replaced asset all reach
+      # the next step as a binary. The digest is the one the release publishes
+      # alongside the archive, so it catches corruption and substitution of the
+      # asset; it does not attest the release itself, which would need the
+      # upstream signing key.
       - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
         run: |
-          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin kubeconform
+          url="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused -o kubeconform.tar.gz "$url"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
+          rm kubeconform.tar.gz
           kubeconform -v
 
       # Every gate this job runs proves it can still reject before the stack is
@@ -165,7 +196,7 @@ jobs:
 
       - name: Prove the schema gate still rejects
         run: |
-          pip install --quiet pyyaml
+          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/check-rendered-schemas.py --self-test
 
       # Runs as a pipe inside render-check.sh on every slice, so it executes on
@@ -188,6 +219,7 @@ jobs:
   merge-gate:
     name: merge gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs:
       [
         lint,

@@ -44,6 +44,19 @@ eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`ek
 - **Secret shape:** the chart's helper expects a Secret named `<hostedId>-<release>-druid-metadata` with keys `username/password/host/dbname`. `install.sh` reads CNPG's generated `druid-metadata-app` Secret and rewrites it into this shape — do not change naming on either side without updating both.
 - **S3 endpoint:** `values-local.yaml`'s `runtime:` adds `druid.s3.endpoint.url=http://minio.minio.svc.cluster.local:9000` + path-style + http. If MinIO moves or the service name changes, update that block.
 
+## Labels on kx's own manifests
+
+The org `resource-tagging` standard's required k8s label tier binds tenant
+workloads — the three kinds the eks-gitops `require-labels` ClusterPolicy
+matches, Deployment, StatefulSet and DaemonSet, outside the platform-managed
+namespaces. kx's own manifests are cluster fixtures, not tenant workloads, and
+none of them is one of those kinds. A production cluster would not match them
+either, so stamping the org tier here would make kx diverge from the shape it
+exists to mirror.
+
+Upstream chart output carries whatever labels its chart carries; kx does not
+add to it.
+
 ## File conventions
 
 Every addon directory has exactly two files:

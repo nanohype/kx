@@ -13,7 +13,7 @@ helm upgrade --install envoy-ai-gateway oci://docker.io/envoyproxy/ai-gateway-he
   --create-namespace \
   --version 1.0.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m
 
 # The GatewayClass the operator's Gateways name. Neither chart ships one, so
 # without this every ModelGateway reconciles into a Gateway no controller

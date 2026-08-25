@@ -12,4 +12,4 @@ helm upgrade --install trivy-operator aqua/trivy-operator \
   --namespace trivy-system \
   --version 0.35.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

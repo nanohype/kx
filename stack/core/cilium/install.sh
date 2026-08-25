@@ -11,4 +11,4 @@ helm upgrade --install cilium cilium/cilium \
   --namespace kube-system \
   --version 1.19.6 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

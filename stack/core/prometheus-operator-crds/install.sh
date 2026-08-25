@@ -10,4 +10,4 @@ helm repo update prometheus-community >/dev/null
 helm upgrade --install prometheus-operator-crds prometheus-community/prometheus-operator-crds \
   --namespace kube-system \
   --version 31.0.0 \
-  --wait
+  --wait --timeout 10m

@@ -13,4 +13,4 @@ helm upgrade --install external-secrets external-secrets/external-secrets \
   --namespace external-secrets \
   --version 2.8.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

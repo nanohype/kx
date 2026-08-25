@@ -14,4 +14,4 @@ helm upgrade --install argocd argo/argo-cd \
   --namespace argocd \
   --version 10.3.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

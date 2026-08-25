@@ -12,4 +12,4 @@ helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --version v1.21.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

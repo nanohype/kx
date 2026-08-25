@@ -12,4 +12,4 @@ helm upgrade --install cloudnative-pg cnpg/cloudnative-pg \
   --namespace cnpg-system \
   --version 0.29.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

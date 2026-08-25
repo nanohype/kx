@@ -12,4 +12,4 @@ helm upgrade --install grafana-operator grafana/grafana-operator \
   --namespace monitoring \
   --version 5.24.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

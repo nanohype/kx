@@ -12,4 +12,4 @@ helm upgrade --install goldilocks fairwinds-stable/goldilocks \
   --namespace vpa \
   --version 10.5.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

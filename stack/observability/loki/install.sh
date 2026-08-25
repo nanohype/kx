@@ -19,4 +19,4 @@ helm upgrade --install loki grafana-community/loki \
   --namespace monitoring \
   --version 18.7.5 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

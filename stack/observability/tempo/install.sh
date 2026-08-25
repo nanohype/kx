@@ -21,4 +21,4 @@ helm upgrade --install tempo grafana-community/tempo \
   --namespace monitoring \
   --version 2.2.3 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

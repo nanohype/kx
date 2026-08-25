@@ -12,4 +12,4 @@ helm upgrade --install opencost opencost/opencost \
   --namespace monitoring \
   --version 2.5.29 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

@@ -12,4 +12,4 @@ helm upgrade --install minio minio/minio \
   --namespace minio \
   --version 5.4.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

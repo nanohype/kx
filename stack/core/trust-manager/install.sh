@@ -13,5 +13,5 @@ helm upgrade --install trust-manager jetstack/trust-manager \
   --namespace cert-manager \
   --version v0.24.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait \
+  --wait --timeout 10m \
   --hide-notes

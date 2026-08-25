@@ -12,4 +12,4 @@ helm upgrade --install vpa fairwinds-stable/vpa \
   --namespace vpa \
   --version 4.12.5 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

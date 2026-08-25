@@ -12,4 +12,4 @@ helm upgrade --install keda kedacore/keda \
   --namespace keda \
   --version 2.20.2 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m

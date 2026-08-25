@@ -13,4 +13,4 @@ helm upgrade --install falco falcosecurity/falco \
   --namespace falco \
   --version 9.1.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
-  --wait
+  --wait --timeout 10m
