@@ -141,13 +141,15 @@ MINIMUM_EXAMINED = {
     "every file in an addon directory is applied": 25,
     "every gate is observed to reject and to accept": 3,
     "every path named in markdown resolves": 5,
+    # Unconditional: one file is the law, not a count sized to this tree.
+    "the tree holds content outside the gate directory": 1,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 7
+MINIMUM_CHECKS = 8
 
 
 def names_token(haystack: str, token: str) -> bool:
@@ -373,6 +375,7 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
                 f"outlasts its gate proves nothing about whatever replaced it."
             )
 
+    observed = 0
     for name, probe in sorted(GATE_PROBES.items()):
         if name not in present:
             continue
@@ -431,6 +434,8 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
                 f"{name}: exited {verdict['good']} on the same tree with the violation removed. "
                 f"A gate that refuses everything is as useless as one that refuses nothing."
             )
+        if verdict.get("bad") is not None and verdict.get("good") is not None:
+            observed += 1
 
     unprobed = [n for n in present
                 if n not in GATE_PROBES and n not in UNPROBEABLE
@@ -444,7 +449,11 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
     for name in sorted(UNPROBEABLE):
         if name not in present:
             problems.append(f"UNPROBEABLE names scripts/{name}, which is not in the tree.")
-    EXAMINED["every gate is observed to reject and to accept"] = len(GATE_PROBES)
+    # Observations, not the size of the table. len(GATE_PROBES) is a property of
+    # this file: it reports the same number over a tree with no gates in it at
+    # all, so it can satisfy a floor while nothing has been run. A probe counts
+    # once both of its verdicts came back from an actual subprocess.
+    EXAMINED["every gate is observed to reject and to accept"] = observed
     return problems
 
 
@@ -467,6 +476,55 @@ NOT_A_PATH = re.compile(
 # Inline code, the other way a document names a path. Ambiguous where a link is
 # not, so it is read through FIRST_SEGMENT_IS_REAL below.
 MD_CODE = re.compile(r"`([^`\n]+)`")
+
+
+# Where the gates themselves live. Content here is the suite's own source, and a
+# denominator made of it is a gate measuring itself.
+GATE_DIR = "scripts"
+
+# Not content. Build artefacts and caches are present on a developer machine and
+# absent from a fresh checkout, so a law that counted them would hold in one
+# place and not the other.
+NOT_CONTENT = {".git", ".ruff_cache", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
+
+
+def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
+    """A tree that is only the gate scripts is not a tree this suite can report on.
+
+    The unconditional half of the floor, and the two halves have to stay apart.
+
+    Every minimum in MINIMUM_EXAMINED is sized to this repository: true here,
+    not true of a fixture, and not a statement about trees in general. This one
+    is a law about any tree, which is what makes it the half that catches a
+    checkout containing nothing but the gates — where every gate runs, finds no
+    violation in its own source, and reports success on a denominator built from
+    its own comments.
+
+    Collapsed into one repo-sized number, the same floor rejects the
+    deliberately small fixtures the controls are built from, and a working suite
+    is then reported as one that fails everything.
+
+    Reads tracked files where the tree is a repository, because a build artefact
+    is present on a developer machine and absent from a fresh checkout, and a
+    law that a cache directory can satisfy is not one.
+    """
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=False,
+    )
+    if tracked.returncode == 0 and tracked.stdout.strip():
+        paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
+    else:
+        paths = [
+            pathlib.PurePosixPath(f.relative_to(root).as_posix())
+            for f in root.rglob("*")
+            if f.is_file() and not NOT_CONTENT.intersection(f.relative_to(root).parts)
+        ]
+    outside = [str(f) for f in paths if f.parts and f.parts[0] != GATE_DIR]
+    EXAMINED["the tree holds content outside the gate directory"] = len(outside)
+    if not outside:
+        return [f"every tracked file is under {GATE_DIR}/ — this is the suite's own source, so "
+                f"a clean verdict here reports that the gates do not violate themselves."]
+    return []
 
 
 def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
@@ -702,6 +760,8 @@ CHECKS = [
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
     ("every path named in markdown resolves", markdown_paths_resolve),
+    ("the tree holds content outside the gate directory",
+     tree_has_content_outside_the_gates),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -836,6 +896,13 @@ CONTROLS = {
              "scripts/real.py": "x\n"},
             {"README.md": "`scripts/real.py` and `username/password/host`\n",
              "scripts/real.py": "x\n"},
+        ),
+    ],
+    "the tree holds content outside the gate directory": [
+        (
+            "a tree that is only the gate scripts",
+            {"scripts/check-x.py": "x\n"},
+            {"scripts/check-x.py": "x\n", "stack/s/a/install.sh": BOUNDED},
         ),
     ],
     "no helm repo add swallows its own failure": [
