@@ -14,7 +14,7 @@ Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https
 
 When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (ingress-nginx is `stack/core/ingress-nginx`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
 
-Local mappings (kept here for future Claude, not surfaced to user):
+Local mappings:
 
 | eks-gitops | kx | Note |
 |---|---|---|
@@ -59,11 +59,16 @@ add to it.
 
 ## File conventions
 
-Every addon directory has exactly two files:
-- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned. Idempotent. Read top-to-bottom by the user before running.
+Every addon directory has an `install.sh`, and every addon that overrides chart
+defaults has a `values.yaml` beside it:
+- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running.
 - `values.yaml` — local-only deltas from chart defaults. **Do not copy values from eks-gitops** — those assume IRSA, ENI, NLB, etc.
 
-The exception is `prometheus-operator-crds` which has no values.
+Two files is the shape to reach for, not a rule the tree satisfies everywhere.
+An addon that takes chart defaults whole carries no `values.yaml`, and an addon
+whose install applies manifests of its own carries those too. Anything beyond
+`install.sh` + `values.yaml` earns its place by being applied by that
+`install.sh` — a file in an addon directory that nothing applies is dead.
 
 ## Taskfile model
 
@@ -78,7 +83,7 @@ The exception is `prometheus-operator-crds` which has no values.
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
 - Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
 - Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
-- Don't add CI that needs a live cluster or cloud credentials. CI is lint (yamllint, shellcheck) plus a clusterless `helm template` render gate over every slice (`scripts/render-check.sh`) — anything that requires a running kind cluster stays a local `task` target
+- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered. The two questions whose answer changes without this repository changing — has a chart been deprecated upstream, has the catalog moved past the pin — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
 - Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 

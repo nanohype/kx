@@ -5,13 +5,11 @@
     python3 scripts/mirror-check.py sync        # rewrite kx's pins from upstream
     python3 scripts/mirror-check.py freshness   # has upstream moved past the pin? (scheduled)
 
-kx is the local kind workspace for the eks-gitops catalog. kx is the local kind workspace for the eks-gitops catalog. Nothing else holds
+kx is the local kind workspace for the eks-gitops catalog. Nothing else holds
 the two sides equal: eks-gitops has Renovate watching every chart pin and kx
 has none, so one side advances on its own. A mirror where only one side can
 advance drifts by construction, silently, in the direction of the side that
-moves. A mirror where only one
-side can advance drifts by construction, silently, in the direction of the side
-that moves.
+moves.
 
 The comparison runs in both directions, because they catch different failures:
 

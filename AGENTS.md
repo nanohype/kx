@@ -38,12 +38,17 @@ kx is the **mirror** of `eks-gitops`. Cloud-portable addons install from the sam
 - **Identity**: kx doesn't run IRSA. Pods that expect AWS credentials get them via mounted env vars or `~/.aws/credentials` — `aws.platformRoleArn` is set to `""` in local dev values, omitting the SA annotation entirely.
 - **Druid post-renderer**: `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) unmodified through a post-renderer that strips EKS-only resources (Karpenter `NodePool`/`EC2NodeClass`, `ExternalSecret`) and EKS node-selector labels.
 
-A chart that runs under kx runs on EKS once the tenant ServiceAccount carries its Pod Identity association.
+A chart that runs under kx is one that renders and schedules against the same
+chart shapes production pins. That is what kx proves and it is narrower than it
+sounds: `scripts/mirror-check.py` holds the two sides to the same chart PIN and
+deliberately never compares values, so an upstream change to resource bounds, a
+security context or a replica count leaves every check here green. Anything a
+chart needs from AWS is exercised nowhere in this workspace.
 
 ## Add an addon to the local stack
 
 1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
-2. Add `kx/stack/<slice>/<name>/` with exactly two files: `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time) and `values.yaml` (local-only deltas from chart defaults — don't copy eks-gitops values; those assume IRSA, ENI, NLB).
+2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself; nothing else belongs in the directory.
 3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
 4. Run `task stack:<slice>:enable` to apply.
 
@@ -70,7 +75,7 @@ task stack:ai-platform:enable   # builds the operator image from the sibling che
 kubectl apply -f /path/to/<app>/platform.yaml
 ```
 
-The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — same as production. The AWS-side reconcile (IAM role creation, KMS grants, S3 bucket policies) is skipped when the operator can't reach AWS (no IRSA on the operator pod itself in local mode).
+The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — same as production. The AWS-side reconcile (IAM role creation, KMS grants, S3 bucket policies) is switched off, not attempted and failed: `stack/ai-platform/operator/values.yaml` passes `--disable-aws`, because there is no Pod Identity association on the operator pod to authenticate it.
 
 ## Conventions
 
@@ -78,7 +83,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 - Default node count: 1 control-plane + 2 workers
 - Local ingress lands at `localhost:80` / `localhost:443` via ingress-nginx host-port mapping
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
-- Tear-down with `task down` cleans the cluster; data on `kind/`-mounted volumes is wiped
+- `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
 
 ## Pointers
 

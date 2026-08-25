@@ -1,20 +1,24 @@
 # argo-workflows — workflow / CI-style execution as DAGs of pods.
 
-# The chart's DEFAULT (crds.full: true) installs no CRD manifests at all. It
-# renders a Job that runs `kubectl apply --server-side -f https://raw.github
-# usercontent.com/...` once per CRD, so bringing the cluster up depends on live
-# GitHub egress at install time. The three modes render as:
+# The requirement: this slice installs the argoproj.io CRDs from the chart on
+# disk, and reaches the network for none of them.
 #
-#   default            0 CRD manifests, 8 raw.githubusercontent.com URLs
-#   crds.full: false   8 CRD manifests, 0 URLs
-#   crds.install:false 0 CRD manifests, 0 URLs
+# The chart's default (`crds.full: true`) does the opposite. It ships no CRD
+# manifests and instead renders a Job that applies each one from
+# raw.githubusercontent.com, so bringing the cluster up depends on live GitHub
+# egress. `crds.install: false` ships none either, which is what eks-gitops
+# uses because a separate Application installs them at an earlier sync wave —
+# kx has no ArgoCD and no waves, so that setting would leave the cluster with no
+# argoproj.io CRDs at all.
 #
-# eks-gitops takes the third and installs the CRDs from a separate Application
-# at an earlier sync wave. kx has no ArgoCD and no waves — helm installs this
-# slice directly — so `install: false` here would leave the cluster with no
-# argoproj.io CRDs at all. `full: false` is the local equivalent of the same
-# decision: the CRDs come from the chart that is already on disk, and nothing
-# reaches the network to bring the workflow engine up.
+# `full: false` is the only mode that ships the manifests and fetches nothing.
+# To check a chart bump has not changed that, render it and confirm the CRDs are
+# present and no raw.githubusercontent.com URL is:
+#
+#   helm template argo-workflows argo/argo-workflows --version <pin> \
+#     --values stack/argo-platform/argo-workflows/values.yaml \
+#     | grep -c 'kind: CustomResourceDefinition'   # must be non-zero
+#   helm template ... | grep raw.githubusercontent.com   # must match nothing
 crds:
   full: false
   install: true

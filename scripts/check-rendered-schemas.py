@@ -11,12 +11,13 @@ alone accepts a ServiceMonitor with a misspelled field and every check stays
 green until the API server refuses it on a cluster.
 
 The obvious way to add schema validation is the wrong one. `kubeconform
--ignore-missing-schemas` makes every unrecognised kind a SKIP, and a skip counts
-as success, so pointing it at a stack full of custom resources produces
-`Valid: 0, Invalid: 0, Skipped: 240` and exit 0 — a green check that validated
-nothing.  This
-gate therefore runs WITHOUT that flag: an unresolvable kind is an error, and the
-schemas for custom kinds are built from the CRDs the stack itself renders.
+-ignore-missing-schemas` makes every unrecognised kind a SKIP and a skip counts
+as success, so pointed at a stack of custom resources it reports every one of
+them skipped and exits 0 — a green check that validated nothing. This gate runs
+WITHOUT that flag: an unresolvable kind is an error, and the schemas for custom
+kinds are built from the CRDs the stack itself renders. `--self-test` restores
+the flag and asserts the skip count moves, so the claim is checked rather than
+believed.
 
 Two passes are required and the order is not incidental. A custom resource in
 one slice is defined by a CRD shipped in another — kube-prometheus-stack's
@@ -81,11 +82,10 @@ def check_crd_structure(doc):
     problem — every custom resource validated against it becomes meaningless.
 
     kubeconform cannot check these: the upstream schema store publishes no
-    CustomResourceDefinition schema (verified against master-standalone and
-    -strict; all candidate filenames 404). So this is the ONE kind excluded from
-    kubeconform, and excluded is not unchecked — the properties asserted here are
-    the ones the rest of the gate actually depends on. Every other unresolvable
-    kind stays a hard error.
+    CustomResourceDefinition schema, so a CRD is the ONE kind excluded from it.
+    Excluded is not unchecked — the properties asserted here are the ones the
+    rest of the gate depends on to build its schema store. Every other
+    unresolvable kind stays a hard error.
     """
     spec = doc.get("spec") or {}
     name = (doc.get("metadata") or {}).get("name", "<unnamed>")

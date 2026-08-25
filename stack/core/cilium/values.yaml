@@ -103,10 +103,10 @@ gatewayAPI:
 # workstation, where every millicore requested is one a project cannot schedule.
 # Requests are therefore small and limits stay meaningful.
 #
-# Do not "fix" the two missing CPU limits below. kx's kyverno slice ships no
-# resource-limit policy at all, so nothing here is out of compliance with
-# anything. If one is ever added, exclude kube-system rather than capping the
-# datapath — cilium installs into kube-system.
+# The two missing CPU limits below are the constraint stated above, not an
+# omission. A policy that requires CPU limits cluster-wide has to exclude
+# kube-system, where cilium installs, because capping the datapath is the
+# degradation the split exists to avoid.
 
 # cilium-agent — one per node, and every pod's networking depends on it.
 resources:
