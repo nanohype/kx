@@ -56,6 +56,14 @@ import yaml
 ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 RECORDS = ROOT / "stack" / "chart-provenance.json"
 
+# The tree this gate SHIPS in, which is not necessarily the tree it is checking.
+# KX_GATE_ROOT points ROOT at a corpus; the controls' subject is always this
+# repository, because a suite that mutates whatever a fixture happens to carry
+# is asserting nothing about the gate — and, when the fixture carries less than
+# the suite expects, crashes instead of reporting.
+SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
+SOURCE_RECORDS = SOURCE_ROOT / "stack" / "chart-provenance.json"
+
 REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
 HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
 VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
@@ -100,10 +108,11 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-def pins() -> dict[str, dict]:
+def pins(root: pathlib.Path | None = None) -> dict[str, dict]:
     """{chart: {repo, version, source}} for every helm pin in stack/*/*/install.sh."""
+    root = root or ROOT
     found: dict[str, dict] = {}
-    for script in sorted(ROOT.glob("stack/*/*/install.sh")):
+    for script in sorted(root.glob("stack/*/*/install.sh")):
         text = strip_comments(script.read_text())
         install = HELM_INSTALL.search(text)
         version = VERSION_FLAG.search(text)
@@ -120,23 +129,25 @@ def pins() -> dict[str, dict]:
             repo = urls.get(alias)
             if not repo:
                 die(
-                    f"{script.relative_to(ROOT)} installs {ref} but adds no repo "
+                    f"{script.relative_to(root)} installs {ref} but adds no repo "
                     f"named {alias!r} — the parser and the script disagree"
                 )
         found[chart] = {
             "repo": repo,
             "version": version.group(1),
-            "source": str(script.relative_to(ROOT)),
+            "source": str(script.relative_to(root)),
         }
     if not found:
         die("read no chart pins out of stack/*/*/install.sh — the parser and the tree disagree")
     return found
 
 
-def load_records() -> dict:
-    if not RECORDS.exists():
-        die(f"{RECORDS.relative_to(ROOT)} does not exist. Run --sync to create it.")
-    return json.loads(RECORDS.read_text()).get("charts", {})
+def load_records(records: pathlib.Path | None = None, root: pathlib.Path | None = None) -> dict:
+    records = records or RECORDS
+    root = root or ROOT
+    if not records.exists():
+        die(f"{records.relative_to(root)} does not exist. Run --sync to create it.")
+    return json.loads(records.read_text()).get("charts", {})
 
 
 def fetch(chart: str, repo: str, version: str) -> dict:
@@ -252,7 +263,12 @@ def sync() -> int:
 
 
 def self_test() -> int:
-    real_pins, real_records = pins(), load_records()
+    # SOURCE_ROOT: the controls prove this gate's logic against the tree it
+    # ships in. Driving them from a fixture makes them mutate a record set that
+    # may not contain what they are about to edit, which crashes rather than
+    # reporting — and a crash exits non-zero exactly like a rejection.
+    real_pins = pins(SOURCE_ROOT)
+    real_records = load_records(SOURCE_RECORDS, SOURCE_ROOT)
 
     def run(p, r):
         with contextlib.redirect_stdout(io.StringIO()):

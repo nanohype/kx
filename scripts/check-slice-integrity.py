@@ -363,6 +363,18 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
         # it could be refusing the fixture for an unrelated reason, and scoring
         # that as a catch is the same credulity the floor exists to remove one
         # level down. The rejection has to name the mutation.
+        # A crash also exits non-zero. Without this, a gate that blows up on the
+        # bad fixture — and whose traceback happens to quote the fixture path —
+        # is recorded as having caught what was planted. That is exit-code-
+        # conflates-causes occurring inside the thing built to check for it.
+        for kind in ("bad", "good"):
+            if "Traceback (most recent call last)" in output.get(kind, ""):
+                problems.append(
+                    f"{name}: crashed on its {kind} fixture rather than reporting a verdict. "
+                    f"A traceback exits non-zero like a rejection does, so this cannot count "
+                    f"as one."
+                )
+
         names = probe.get("names")
         if names and verdict.get("bad") not in (0, None) and names not in output.get("bad", ""):
             problems.append(
@@ -755,8 +767,16 @@ def controls() -> int:
               "    sys.exit(1)\n"
               "sys.exit(0)\n")
     liar = "import sys\nsys.exit(0)\n"
+    # Crashes only on the bad fixture, and names it — so exit status and the
+    # name rule both read as a clean catch. Only the traceback check sees it.
+    crasher = ("import os, pathlib, sys\n"
+               "root = pathlib.Path(os.environ['KX_GATE_ROOT'])\n"
+               "if (root / 'BAD').exists():\n"
+               "    raise RuntimeError('BAD')\n"
+               "sys.exit(0)\n")
     for label, body, expect_caught in (("a gate that reads its input", honest, False),
-                                       ("a gate that ignores its input", liar, True)):
+                                       ("a gate that ignores its input", liar, True),
+                                       ("a gate that crashes on the bad fixture", crasher, True)):
         probe = {"argv": [], "names": "BAD",
                  "bad": {"scripts/check-probe.py": body, "BAD": "x"},
                  "good": {"scripts/check-probe.py": body}}
@@ -764,8 +784,10 @@ def controls() -> int:
         try:
             fixture_root = _tree({**probe["bad"]})
             (fixture_root / "scripts").mkdir(exist_ok=True)
-            caught = bool([p for p in gates_reject_and_accept(fixture_root)
-                           if "exited 0 on a tree built to violate" in p])
+            reported = gates_reject_and_accept(fixture_root)
+            caught = bool([p for p in reported
+                           if "exited 0 on a tree built to violate" in p
+                           or "crashed on its" in p])
         finally:
             GATE_PROBES.pop("check-probe.py")
         if caught != expect_caught:
@@ -779,6 +801,11 @@ def controls() -> int:
 
 
 def run(root: pathlib.Path = ROOT) -> int:
+    # Cleared, not accumulated. A check that returns before setting its
+    # denominator would otherwise print a stale one from an earlier call —
+    # a count that describes a different run, which is the accurate-as-of
+    # defect this repository keeps finding in prose, in a number.
+    EXAMINED.clear()
     failed = 0
     for label, check in CHECKS:
         problems = check(root)
