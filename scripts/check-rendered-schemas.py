@@ -27,6 +27,7 @@ be validated until every slice has rendered.
 
 import contextlib
 import io
+import os
 import json
 import pathlib
 import re
@@ -37,7 +38,10 @@ import tempfile
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 
 
 class ManifestLoader(yaml.SafeLoader):

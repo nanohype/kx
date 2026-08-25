@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import json
 import pathlib
 import re
@@ -49,7 +50,10 @@ import sys
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 RECORDS = ROOT / "stack" / "chart-provenance.json"
 
 REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)

@@ -19,6 +19,7 @@ them would pass this check and silently match nothing in production.
 from __future__ import annotations
 
 import contextlib
+import os
 import glob
 import io
 import subprocess
@@ -39,7 +40,18 @@ RE2_UNSUPPORTED = [
     (r"\\k<", "named backreference"),
 ]
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = pathlib.Path(
+    os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent
+)
+
+# The repository this gate ships in, which is not necessarily the tree it checks.
+# KX_GATE_ROOT points ROOT at a corpus; the CONFIG under test is always this
+# repository's own renovate.json, because the controls prove the gate's logic
+# against the shipped rules rather than against whatever a fixture carries.
+SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def strip_comments(text: str) -> str:
@@ -273,7 +285,7 @@ def self_test() -> int:
     nothing fails here. The control at the end runs the real tree: a suite whose
     breaks are all caught but whose subject no longer passes proves nothing.
     """
-    patterns = compile_patterns(json.loads((ROOT / "renovate.json").read_text()))
+    patterns = compile_patterns(json.loads((SOURCE_ROOT / "renovate.json").read_text()))
     failures = []
 
     def tree(files):
@@ -375,6 +387,58 @@ def self_test() -> int:
     return 0
 
 
+# The keys a regex customManager must carry, and the ones Renovate knows about.
+# A typo in a required key is silent on both sides: Renovate ignores the manager
+# and this gate sees one fewer pattern, so a pin reads as covered by a rule that
+# does not exist.
+REQUIRED_MANAGER_KEYS = {"customType", "managerFilePatterns", "matchStrings"}
+KNOWN_MANAGER_KEYS = REQUIRED_MANAGER_KEYS | {
+    "description", "datasourceTemplate", "depNameTemplate", "versioningTemplate",
+    "registryUrlTemplate", "currentValueTemplate", "packageNameTemplate",
+    "extractVersionTemplate", "autoReplaceStringTemplate", "matchStringsStrategy",
+}
+
+
+def config_is_well_formed(cfg) -> int:
+    """Every customManager declares the keys Renovate needs to run it.
+
+    This gate READS renovate.json and applies its regexes, so a malformed
+    manager makes the gate assert coverage that Renovate would never provide.
+    Nothing else in this repository has ever checked that file is well formed.
+
+    PARTIAL by construction: this is a shape check, not schema validation. It
+    cannot tell that a datasourceTemplate names a datasource that does not
+    exist, or that a template field references a capture group no matchString
+    produces — that needs renovate-config-validator, which is a node tool this
+    repository does not otherwise depend on.
+    """
+    problems = []
+    managers = cfg.get("customManagers") or []
+    if not managers:
+        print("FAIL  renovate.json declares no customManagers.")
+        return 1
+    for i, mgr in enumerate(managers):
+        missing = sorted(REQUIRED_MANAGER_KEYS - set(mgr))
+        if missing:
+            problems.append(f"customManagers[{i}] is missing {', '.join(missing)} — Renovate "
+                            f"ignores a manager it cannot run, so whatever it appears to watch "
+                            f"is unwatched.")
+        unknown = sorted(set(mgr) - KNOWN_MANAGER_KEYS)
+        if unknown:
+            problems.append(f"customManagers[{i}] carries unrecognised key(s) "
+                            f"{', '.join(unknown)} — most likely a typo for a real one, which "
+                            f"Renovate drops silently.")
+        for key in ("matchStrings", "managerFilePatterns"):
+            if key in mgr and not mgr[key]:
+                problems.append(f"customManagers[{i}].{key} is empty.")
+    if problems:
+        print(f"FAIL  renovate.json is not well formed — {len(problems)} problem(s):")
+        for pr in problems:
+            print(f"        {pr}")
+        return 1
+    return 0
+
+
 def no_dead_managers(cfg, root: pathlib.Path = ROOT) -> int:
     """Every manager matches something somewhere in the real tree.
 
@@ -453,7 +517,7 @@ def main() -> int:
     patterns = compile_patterns(json.loads((ROOT / "renovate.json").read_text()))
     cfg = json.loads((ROOT / "renovate.json").read_text())
     corpus = sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
-    return no_dead_managers(cfg) or coverage(patterns, corpus)
+    return config_is_well_formed(cfg) or no_dead_managers(cfg) or coverage(patterns, corpus)
 
 
 if __name__ == "__main__":

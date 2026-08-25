@@ -53,7 +53,10 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
+# The tree this gate reads. Overridable so the suite-wide floor can point the
+# gate at a fixture it wrote and observe the real exit status, rather than
+# asking the gate to describe its own behaviour.
+ROOT = Path(os.environ.get("KX_GATE_ROOT", "") or Path(__file__).resolve().parent.parent)
 MANIFEST = ROOT / "stack" / "upstream.json"
 
 

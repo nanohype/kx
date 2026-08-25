@@ -19,7 +19,17 @@ GRANT="kyverno:bedrock-credentials-secrets"
 
 # Every namespace the clone rule targets. `|| true` on the listing because a
 # cluster with no tenant namespaces is the normal case, not an error.
-mapfile -t TENANTS < <(
+#
+# read -r rather than mapfile, for the reason verify.sh states beside it:
+# mapfile is a bash 4 builtin and the documented prerequisites install no bash,
+# so this runs under /bin/bash 3.2 on macOS. This script is the first command of
+# `credentials:disable`, which is the first command of `disable` — aborting here
+# stops the whole slice teardown before a single delete, leaving the credential
+# and its clones exactly where they were.
+TENANTS=()
+while IFS= read -r ns; do
+  [ -n "${ns}" ] && TENANTS+=("${ns}")
+done < <(
   kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
     | grep '^tenants-' || true
 )
@@ -38,11 +48,21 @@ kubectl delete clusterrole "${GRANT}" --ignore-not-found
 # The clone rule is gone, so a namespace created after this carries no copy.
 # Anything left is a copy this script could not see — report it rather than
 # reporting a clean teardown over a set that may have grown underneath us.
-mapfile -t LEFT < <(
-  kubectl get secrets -A \
-    -o jsonpath="{range .items[?(@.metadata.name=='${SECRET}')]}{.metadata.namespace}{\"\n\"}{end}" \
-    2>/dev/null || true
-)
+# The listing failing and the listing being empty are different facts: one means
+# nothing is left, the other means nobody looked. Reporting a clean teardown for
+# the second is the vacuous pass this script exists to refuse.
+if ! left_raw="$(kubectl get secrets -A \
+  -o jsonpath="{range .items[?(@.metadata.name=='${SECRET}')]}{.metadata.namespace}{\"\n\"}{end}" \
+  2>&1)"; then
+  echo "WARNING: could not list Secrets cluster-wide to confirm the teardown — kubectl said:" >&2
+  printf '%s\n' "${left_raw}" | sort -u | sed 's/^/  /' >&2
+  echo "Re-run this once kubectl can reach the cluster; clones may remain." >&2
+  exit 1
+fi
+LEFT=()
+while IFS= read -r ns; do
+  [ -n "${ns}" ] && LEFT+=("${ns}")
+done <<<"${left_raw}"
 if [ "${#LEFT[@]}" -gt 0 ]; then
   echo "WARNING: ${SECRET} still present in:" >&2
   printf '  %s\n' "${LEFT[@]}" >&2

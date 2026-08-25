@@ -29,13 +29,18 @@ numbers and column offsets survive and a file:line citation stays true.
 
 from __future__ import annotations
 
-import importlib.util
+import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Overridable so the suite-wide floor can point a gate at a fixture it wrote and
+# observe the real exit status instead of asking the gate about itself.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "")
+                    or pathlib.Path(__file__).resolve().parent.parent)
 
 HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\b", re.M)
 
@@ -184,77 +189,179 @@ def addon_files_are_reached(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+DEPLOY_WITH = """apiVersion: apps/v1
+kind: Deployment
+metadata: {name: x}
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: %s
+"""
+
+# The locally-built operator image, which check-images exempts from both the
+# immutability rule and the scan. A render without it makes those exemptions
+# look stale.
+# Built with json.dumps rather than written as a literal: a hand-escaped regex
+# inside a JSON string inside a Python string loses a backslash layer at every
+# hop, and the fixture then fails to parse — which the floor correctly reported
+# as the gate refusing its own clean tree.
+RENOVATE_ONE_MANAGER = json.dumps(
+    {
+        "customManagers": [
+            {
+                "customType": "regex",
+                "managerFilePatterns": [r"/^stack/.+/install\.sh$/"],
+                "matchStrings": [
+                    r"helm repo add \S+ (?<registryUrl>https?://\S+)"
+                    r"[\s\S]*?helm upgrade --install \S+ \S+/(?<depName>[a-zA-Z0-9._-]+)"
+                    r"[\s\S]*?--version (?<currentValue>\S+)"
+                ],
+                "datasourceTemplate": "helm",
+            }
+        ]
+    },
+    indent=2,
+) + "\n"
+
+OPERATOR_IMAGE = DEPLOY_WITH % "ghcr.io/nanohype/eks-agent-platform/operator:dev"
+
+BOUNDED_INSTALL = (
+    "helm repo add x https://x --force-update >/dev/null\n"
+    "helm upgrade --install a x/a --version 1.2.3 --wait --timeout 10m\n"
+)
+
+# What the floor feeds each gate, and how to invoke it. The gate's author
+# chooses the fixture; the FLOOR writes it to disk, runs the gate as a real
+# process, and reads the exit status. Nothing the gate reports about itself is
+# consulted, because that is testimony — a four-line gate returning a literal
+# {"ok": True, "lines": [...]} satisfied the two previous versions of this
+# floor with no checks behind it.
+GATE_PROBES: dict[str, dict] = {
+    "check-images.py": {
+        "argv": ["--pins", "{root}/render"],
+        # Both trees carry the operator image, because the gate asserts its
+        # own exemptions against the render it is handed and an exemption whose
+        # subject is absent is a finding in its own right. The fixture differs
+        # in exactly the property under test and nothing else.
+        "bad": {"render/s.yaml": DEPLOY_WITH % "r/x:latest" + "---\n" + OPERATOR_IMAGE},
+        "good": {"render/s.yaml": DEPLOY_WITH % "r/x:1.2.3" + "---\n" + OPERATOR_IMAGE},
+    },
+    "check-renovate-coverage.py": {
+        "argv": [],
+        # The bad tree pins a chart in a shape no manager matches; the good one
+        # pins it in the shape the shipped manager was written for.
+        "bad": {"renovate.json": RENOVATE_ONE_MANAGER,
+                "stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                        "helm upgrade --install a x/a --ver 1.2.3\n"},
+        "good": {"renovate.json": RENOVATE_ONE_MANAGER,
+                 "stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                         "helm upgrade --install a x/a --version 1.2.3\n"},
+    },
+    "check-chart-deprecation.py": {
+        "argv": [],
+        "bad": {"stack/s/a/install.sh": BOUNDED_INSTALL,
+                "stack/chart-provenance.json": '{"charts": {}}\n'},
+        "good": {"stack/s/a/install.sh": BOUNDED_INSTALL,
+                 "stack/chart-provenance.json":
+                     '{"charts": {"a": {"repo": "https://x", "description": "d",'
+                     ' "deprecated": false}}}\n'},
+    },
+}
+
+
+# Gates this floor cannot supply an input to, with the reason. Recorded rather
+# than silently skipped, and asserted: an entry naming a gate that has left the
+# tree fails. These are observed by their own controls on every run, which is
+# weaker — a gate grading a fixture it wrote is testimony about a narrower
+# claim than a gate handed an input it did not choose.
+UNPROBEABLE: dict[str, str] = {
+    "check-rendered-mounts.py":
+        "reads a manifest stream on stdin rather than a path, so a probe would drive a "
+        "different interface than the one render-check.sh uses",
+    "check-rendered-schemas.py":
+        "its verdict needs kubeconform and a reachable schema host, so a probe would make "
+        "this floor non-hermetic and fail on a network outage rather than on a defect",
+    "mirror-check.py":
+        "compares against an eks-gitops checkout, which a fixture tree cannot stand in for "
+        "without reimplementing the catalog's ApplicationSet shapes",
+    "check-prose-voice.py":
+        "diffs against a git ref, so a probe would need a fixture that is a git repository "
+        "with history",
+}
+
+
 def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
-    """Every gate in the suite is RUN, and observed to reject and to accept.
+    """Every probed gate is RUN by this floor, against trees this floor wrote.
 
-    Not read. A floor that decides whether a gate still has controls by looking
-    at its source is satisfied by a comment saying the controls were removed —
-    the same defect one level up from the one the controls exist for. This
-    imports each gate and calls the contract, so prose cannot satisfy it.
+    The floor supplies the input and reads the exit status. It does not ask a
+    gate how it did, because anything a subject authors about its own behaviour
+    is testimony rather than observation — the two previous versions of this
+    check consumed a count and then a list of lines, and a four-line gate
+    returning either as a literal satisfied both with nothing behind it.
 
-    Both halves, because a gate that rejects everything is exactly as useless as
-    one that rejects nothing and either count alone passes a one-sided check.
+    Both directions, and they cannot be satisfied by the same evidence: the
+    verdicts are two exit codes from two different trees.
     """
     problems = []
-    # Discovered, not listed. A hardcoded roster is a second place to forget a
-    # gate, and a roster naming a file that has left the tree is the exemption
-    # defect one level up.
-    gates = sorted(
-        g for g in (root / "scripts").glob("*.py")
-        if g.name != pathlib.Path(__file__).name
-    )
-    if not gates:
+    scripts_dir = root / "scripts"
+    present = sorted(g.name for g in scripts_dir.glob("*.py")) if scripts_dir.is_dir() else []
+    if not present:
         return ["found no gate scripts under scripts/ — refusing to report a proven suite "
                 "over an empty set."]
 
-    for gate in gates:
-        rel = gate.relative_to(root)
-        spec = importlib.util.spec_from_file_location(gate.stem.replace("-", "_"), gate)
-        module = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(module)
-        except Exception as e:  # noqa: BLE001 - any import failure is a dead gate
-            problems.append(f"{rel} does not import: {type(e).__name__}: {e}")
-            continue
-        report = getattr(module, "control_outcomes", None)
-        if report is None:
-            problems.append(f"{rel} exposes no control_outcomes() — nothing can observe "
-                            f"whether its controls still run.")
-            continue
-        # Captured here rather than taken on the gate's word. A gate that
-        # returned literal counts without running anything satisfied the earlier
-        # version of this — the floor was reading a CLAIM about behaviour, which
-        # is one level short of behaviour. Requiring the controls to have
-        # actually printed their case-by-case outcome makes silence a failure.
-        try:
-            outcome = report()
-        except Exception as e:  # noqa: BLE001 - a control suite that raises proves nothing
-            problems.append(f"{rel} control_outcomes() raised {type(e).__name__}: {e}")
-            continue
-        # The counts are derived here from the lines the controls produced, not
-        # taken from the gate. A gate that returned literal numbers without
-        # running anything satisfied the earlier version of this: the floor was
-        # reading a CLAIM about behaviour, one level short of behaviour.
-        lines = outcome.get("lines")
-        if not lines:
+    for name in sorted(GATE_PROBES):
+        if name not in present:
             problems.append(
-                f"{rel} control_outcomes() returned no lines. Whatever counts it reports are "
-                f"a claim about controls that left no evidence they ran."
+                f"GATE_PROBES names scripts/{name}, which is not in the tree — a probe that "
+                f"outlasts its gate proves nothing about whatever replaced it."
             )
+
+    for name, probe in sorted(GATE_PROBES.items()):
+        if name not in present:
             continue
-        rejected = sum(1 for x in lines if any(w in x for w in
-                       ("rejected", "caught", "control ok", "flagged", "matched")))
-        accepted = sum(1 for x in lines if any(w in x for w in
-                       ("passed", "allowed", "spared", "admitted", "control ok")))
-        if not outcome.get("ok"):
-            problems.append(f"{rel} controls do not pass.")
-        if not rejected:
-            problems.append(f"{rel} controls exercised no rejection — the gate was never "
-                            f"observed refusing anything.")
-        if not accepted:
-            problems.append(f"{rel} controls exercised no acceptance — a gate that refuses "
-                            f"everything is as useless as one that refuses nothing.")
-    EXAMINED["every gate is observed to reject and to accept"] = len(gates)
+        if probe["bad"] == probe["good"]:
+            problems.append(f"{name}: the probe's bad and good trees are identical, so running "
+                            f"them proves nothing.")
+            continue
+        gate = scripts_dir / name
+        verdict = {}
+        for kind in ("bad", "good"):
+            fixture = _tree(probe[kind])
+            argv = [a.format(root=fixture) for a in probe["argv"]]
+            env = dict(os.environ, KX_GATE_ROOT=str(fixture))
+            try:
+                proc = subprocess.run([sys.executable, str(gate), *argv], capture_output=True,
+                                      text=True, timeout=180, check=False, env=env)
+                verdict[kind] = proc.returncode
+            except subprocess.TimeoutExpired:
+                problems.append(f"{name}: did not finish within 180s on its {kind} fixture.")
+                verdict[kind] = None
+        if verdict.get("bad") == 0:
+            problems.append(
+                f"{name}: exited 0 on a tree built to violate the invariant it names. This "
+                f"floor wrote that tree and ran the gate over it — the gate accepted it."
+            )
+        if verdict.get("good") not in (0, None):
+            problems.append(
+                f"{name}: exited {verdict['good']} on the same tree with the violation removed. "
+                f"A gate that refuses everything is as useless as one that refuses nothing."
+            )
+
+    unprobed = [n for n in present
+                if n not in GATE_PROBES and n not in UNPROBEABLE
+                and n != pathlib.Path(__file__).name]
+    if unprobed:
+        problems.append(
+            "no probe for " + ", ".join(f"scripts/{n}" for n in unprobed) +
+            " — a gate this floor cannot run is a gate nothing observes. Add a probe, or "
+            "record in UNPROBEABLE why it cannot take one."
+        )
+    for name in sorted(UNPROBEABLE):
+        if name not in present:
+            problems.append(f"UNPROBEABLE names scripts/{name}, which is not in the tree.")
+    EXAMINED["every gate is observed to reject and to accept"] = len(GATE_PROBES)
     return problems
 
 
@@ -462,47 +569,6 @@ CONTROLS = {
             {"README.md": "nothing named here\n"},
         ),
     ],
-    "every gate is observed to reject and to accept": [
-        (
-            "a gate whose controls were deleted and replaced by a comment saying so",
-            {"scripts/check-x.py": "# the positive controls were removed\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-        (
-            "a gate reporting counts while leaving no evidence they ran",
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': True, 'rejected': 5, 'accepted': 3}\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-        (
-            "a gate that refuses everything",
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': True, 'lines': ['  rejected  a break']}\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-        (
-            "a gate that refuses nothing",
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': True, 'lines': ['  passed    a clean tree']}\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-        (
-            "a gate whose controls do not pass",
-            {"scripts/check-x.py":
-                "def control_outcomes():\n"
-                "    return {'ok': False, 'lines': ['  rejected  a break',\n"
-                "                                   '  passed    a clean tree']}\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-        (
-            "no gate scripts at all",
-            {"README.md": "nothing here\n"},
-            {"scripts/check-x.py": GOOD_GATE},
-        ),
-    ],
     "no helm repo add swallows its own failure": [
         (
             "a repo add suppressed with || true",
@@ -584,13 +650,30 @@ def _tree(files: dict[str, str]) -> pathlib.Path:
     return d
 
 
+# Checks controlled outside the (broken, clean) table, with the reason. The
+# table cannot express this one: every synthetic tree is "bad" to it, because
+# GATE_PROBES names real gates a fixture does not contain. Asserted below — an
+# entry naming a check that no longer exists fails, like every other exemption
+# in this repository.
+CONTROLLED_ELSEWHERE = {
+    "every gate is observed to reject and to accept":
+        "controlled at the end of controls(), by probing a throwaway gate that reads its "
+        "input and one that ignores it. It cannot probe ITSELF — every fixture tree it "
+        "writes lacks the gates GATE_PROBES names, so its own clean tree can never be "
+        "clean — and that is a stated limit rather than a covered case",
+}
+
+
 def controls() -> int:
     """Prove every check rejects the violation it exists to catch."""
     names = {label for label, _ in CHECKS}
     failures = 0
 
-    for label in sorted(names - set(CONTROLS)):
+    for label in sorted(names - set(CONTROLS) - set(CONTROLLED_ELSEWHERE)):
         print(f"  NO CONTROL  {label} — a check with no positive control cannot be trusted.")
+        failures += 1
+    for label in sorted(set(CONTROLLED_ELSEWHERE) - names):
+        print(f"  ORPHANED    CONTROLLED_ELSEWHERE names {label!r}, which is not a check.")
         failures += 1
     for label in sorted(set(CONTROLS) - names):
         print(f"  ORPHANED    control for {label!r}, which is not a check any more.")
@@ -630,6 +713,35 @@ def controls() -> int:
                 failures += 1
             else:
                 print(f"  control ok  {name}")
+    # The floor's own control, which the (broken, clean) table cannot express:
+    # every synthetic tree is "bad" to that check, because GATE_PROBES names
+    # real gates a fixture tree does not contain. So this writes a throwaway
+    # gate that genuinely inspects its tree, probes it through the same
+    # machinery, and observes the exit codes — including the case that matters,
+    # a gate that ignores its input and always succeeds.
+    honest = ("import os, pathlib, sys\n"
+              "root = pathlib.Path(os.environ['KX_GATE_ROOT'])\n"
+              "sys.exit(1 if (root / 'BAD').exists() else 0)\n")
+    liar = "import sys\nsys.exit(0)\n"
+    for label, body, expect_caught in (("a gate that reads its input", honest, False),
+                                       ("a gate that ignores its input", liar, True)):
+        probe = {"argv": [], "bad": {"scripts/check-probe.py": body, "BAD": "x"},
+                 "good": {"scripts/check-probe.py": body}}
+        GATE_PROBES["check-probe.py"] = probe
+        try:
+            fixture_root = _tree({**probe["bad"]})
+            (fixture_root / "scripts").mkdir(exist_ok=True)
+            caught = bool([p for p in gates_reject_and_accept(fixture_root)
+                           if "exited 0 on a tree built to violate" in p])
+        finally:
+            GATE_PROBES.pop("check-probe.py")
+        if caught != expect_caught:
+            print(f"  WRONG       {label} — {'caught' if caught else 'missed'}, expected "
+                  f"{'a catch' if expect_caught else 'clean'}")
+            failures += 1
+        else:
+            print(f"  {'caught  ' if expect_caught else 'allowed '}  {label}")
+
     return failures
 
 
