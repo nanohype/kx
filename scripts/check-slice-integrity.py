@@ -1340,6 +1340,28 @@ def controls() -> int:
     else:
         print("  control ok  git absent and not-a-repository are both refused, by name")
 
+    # The missing-denominator branch, exercised. It cannot fire from the real
+    # tree — every check records a count — so without this it is a branch that
+    # has never run, which is the same standing as a floor nobody has seen
+    # reject.
+    saved_checks, saved_floors = list(CHECKS), dict(MINIMUM_EXAMINED)
+    CHECKS.append(("a check that records no denominator", lambda root: []))
+    MINIMUM_EXAMINED["a check that records no denominator"] = 1
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            silent_count = run(_tree({"stack/s/a/install.sh": BOUNDED}))
+    finally:
+        CHECKS[:] = saved_checks
+        MINIMUM_EXAMINED.clear()
+        MINIMUM_EXAMINED.update(saved_floors)
+    if "reported clean without recording" not in buf.getvalue():
+        print("  COUNT OPEN  a check reporting clean with no denominator was not refused.")
+        failures += 1
+    else:
+        print("  control ok  a check that records no denominator is refused, not exempted")
+    del silent_count
+
     # Measured as a DIFFERENCE, because every simpler form of this control passes
     # for the wrong reason. A tree small enough to sit below every floor also
     # violates invariants that have nothing to do with floors, so "the suite
@@ -1507,6 +1529,21 @@ def run(root: pathlib.Path = ROOT) -> int:
             print(f"FAIL  {label}:{seen}")
             for p in problems:
                 print(f"        {p}")
+        elif floor is not None and n is None:
+            # A missing denominator is not a denominator of zero. It is a check
+            # that did not say, and the difference matters in the direction that
+            # bites: `n is not None` in the comparison below made an absent count
+            # SKIP the floor and print a clean line, so the one value that means
+            # "nothing was recorded" was the one value no floor applied to.
+            #
+            # Every check sets its count today, which is why this has never
+            # fired — and unreachable-because-something-else-is-true is the
+            # argument rather than the guarantee.
+            failed += 1
+            print(f"FAIL  {label}:")
+            print(f"        reported clean without recording how much it examined, so its "
+                  f"floor of {floor} could not be applied to anything. A count that was "
+                  f"never taken has to read as a violation, not as an exemption.")
         elif n is not None and floor is not None and n < floor:
             # Not a warning. A clean verdict over a corpus this small is the
             # thing the floor exists to refuse, so it exits the way a violation
