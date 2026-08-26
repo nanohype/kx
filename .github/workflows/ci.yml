@@ -203,6 +203,17 @@ jobs:
         run: |
           pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
+          # Asserted before use. A substitution that produced nothing is not a
+          # tree that pinned nothing, and `git checkout ""` is not a checkout of
+          # the pin. Tested with a bash conditional rather than a match against
+          # an external tool, so an absent tool cannot delete the assertion the
+          # way it would delete a grep.
+          if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL  upstream.ref read as '$ref', which is not a commit sha."
+            echo "      Comparing against an unresolved ref would grade the catalog at whatever"
+            echo "      the checkout happened to be on."
+            exit 1
+          fi
           git -C "$EKS_GITOPS_DIR" checkout -q "$ref"
           python3 scripts/mirror-check.py check
 
@@ -226,6 +237,17 @@ jobs:
         id: sibling
         run: |
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
+          # Asserted before it becomes a step output. An empty value here is not
+          # an error to actions/checkout — it is the instruction to take the
+          # DEFAULT BRANCH, which is exactly the reading the comment above says
+          # this job must not do. The failure is silent and the render still
+          # passes, against a commit nobody here proposed.
+          if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL  siblings.eks-agent-platform.ref read as '$ref', which is not a commit sha."
+            echo "      An empty ref makes the checkout take the sibling's default branch, so this"
+            echo "      job would render against a commit this change did not pin."
+            exit 1
+          fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
