@@ -705,6 +705,20 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
 
     Reads the RAW markdown, because in a document the prose IS the target and
     the blanked view would leave nothing to check.
+
+    The ellipsis exclusion is narrower than what it replaced, and the difference
+    is worth stating rather than leaving for someone to rediscover. It exists so
+    that prose naming a path PRECISELY BECAUSE IT MUST NOT EXIST — the
+    `stack/substitutes/...` this repository tells you not to create — is not
+    read as a claim that the path does. That is a complete answer for the case
+    it was built for.
+
+    What it costs is link coverage: a markdown link target containing an
+    ellipsis was checked before and is skipped now. No such link exists in this
+    tree, so nothing currently depends on it, and the wider rule is not
+    reinstated because doing so would trade a real false positive for a
+    hypothetical true one. The check is sufficient here rather than equivalent
+    to what came before.
     """
     problems = []
     examined = 0
