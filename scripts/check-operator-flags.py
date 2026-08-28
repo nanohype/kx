@@ -164,12 +164,13 @@ def flags_delivered(render_dir: pathlib.Path) -> tuple[set[str], int]:
     containers = 0
     for path in sorted(render_dir.glob("*.yaml")):
         text = path.read_text(errors="ignore")
-        # A file that never spells the image cannot hold a container running it,
-        # and parsing the whole stack to learn that costs about a minute. The
-        # direction is safe: a pre-filter that wrongly skipped the operator's own
-        # file leaves nothing to report on, which is the refusal below, not a
-        # clean verdict. Sound because a rendered `image:` value is a plain
-        # one-line scalar.
+        # A file that never spells the image cannot hold a container running it.
+        # Without this the work is proportional to the whole rendered stack
+        # rather than to the one Deployment being read, on a blocking step.
+        # The direction is safe: a pre-filter that wrongly skipped the operator's
+        # own file leaves nothing to report on, which is the refusal below rather
+        # than a clean verdict. Sound because a rendered `image:` value is a
+        # plain one-line scalar.
         if OPERATOR_IMAGE not in text:
             continue
         with contextlib.suppress(yaml.YAMLError):
