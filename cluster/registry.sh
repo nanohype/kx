@@ -12,12 +12,18 @@ REG_PORT="5001"
 #   - doesn't exist        → docker run
 #   - exists, stopped      → docker start (e.g. prior `task up` failed mid-flight)
 #   - exists, running      → no-op
+# Digest-pinned for the reason cluster/kind-config.yaml states for the node
+# image: a tag is a name the publisher can repoint, so a tag alone makes what
+# runs here a function of when it was pulled. The tag is kept beside the digest
+# because it is what a reader recognises; docker resolves the digest.
+REG_IMAGE="registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+
 if ! docker inspect "${REG_NAME}" >/dev/null 2>&1; then
   docker run -d --restart=always \
     -p "127.0.0.1:${REG_PORT}:5000" \
     --network bridge \
     --name "${REG_NAME}" \
-    registry:2 >/dev/null
+    "${REG_IMAGE}" >/dev/null
 elif [ "$(docker inspect -f '{{.State.Running}}' "${REG_NAME}")" != 'true' ]; then
   docker start "${REG_NAME}" >/dev/null
 fi

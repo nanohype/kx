@@ -75,16 +75,32 @@ kubectl -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300
 
 # ---- 2. Translate CNPG-generated app credentials into the chart-expected secret name + keys ----
 echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
-PG_USER=$(kubectl -n druid get secret druid-metadata-app -o jsonpath='{.data.username}' | base64 -d)
-PG_PASS=$(kubectl -n druid get secret druid-metadata-app -o jsonpath='{.data.password}' | base64 -d)
-PG_HOST=$(kubectl -n druid get secret druid-metadata-app -o jsonpath='{.data.host}' | base64 -d)
-PG_DB=$(kubectl -n druid get secret druid-metadata-app -o jsonpath='{.data.dbname}' | base64 -d)
-kubectl -n druid create secret generic kx-ds-druid-metadata \
-  --from-literal=username="${PG_USER}" \
-  --from-literal=password="${PG_PASS}" \
-  --from-literal=host="${PG_HOST}" \
-  --from-literal=dbname="${PG_DB}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# Re-keyed on stdin rather than with --from-literal. That flag puts the Postgres
+# password in this process's argv, where `ps` shows it to every other process on
+# the workstation for as long as the command runs. CNPG's own Secret already
+# holds these values base64-encoded, so they are copied across without being
+# decoded into an argument list at all.
+kubectl -n druid get secret druid-metadata-app -o json \
+  | python3 -c '
+import json, sys
+src = json.load(sys.stdin)["data"]
+# The chart helper reads exactly these four keys off a Secret named for the
+# release; CNPG publishes them under the same names, so this is a rename rather
+# than a translation. A key CNPG stops publishing fails here rather than
+# producing a Secret the chart mounts with a field missing.
+keys = ("username", "password", "host", "dbname")
+missing = [k for k in keys if k not in src]
+if missing:
+    sys.exit(f"druid: druid-metadata-app has no {\", \".join(missing)} — "
+             f"CNPG did not publish what the chart helper reads.")
+print(json.dumps({
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {"name": "kx-ds-druid-metadata", "namespace": "druid"},
+    "type": "Opaque",
+    "data": {k: src[k] for k in keys},
+}))' \
+  | kubectl apply -f -
 
 # ---- 3. Admin + system credential secrets ----
 kubectl apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"

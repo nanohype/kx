@@ -238,13 +238,19 @@ MINIMUM_EXAMINED = {
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
     "every gate refuses when its authority is unavailable": 5,
+    # Sized to the corpus, not to the finding: 41 tracked shell scripts today,
+    # and a floor that only a collapse can breach.
+    "no script hands a secret to a command on argv": 30,
+    # Three files both fetch and consume. Two is a floor a rename cannot pass
+    # through quietly while leaving the class unexamined.
+    "every fetched artifact is verified before it is used": 2,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 9
+MINIMUM_CHECKS = 11
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -1159,6 +1165,123 @@ def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+# A secret handed to a command as an argument. `kubectl create secret
+# --from-literal` is the shape this tree writes; the flag name is the subject
+# because the leak is the flag, not the tool.
+ARGV_SECRET = re.compile(r"--from-literal\b")
+
+
+def secrets_stay_off_argv(root: pathlib.Path = ROOT) -> list[str]:
+    """No script hands a secret to a command as an argument.
+
+    A process's argv is world-readable on the platforms this workspace targets,
+    so `ps` shows a `--from-literal=password=...` to every other process on the
+    workstation for as long as the command runs. The value is a live credential
+    in both places this tree creates one.
+
+    The rule was already written here, in the comment above the installer that
+    builds its Secret on stdin instead. A rule stated at the one site that
+    honours it is a rule the next site does not inherit — which is what happened
+    two directories away, where a Postgres password went onto argv under a
+    comment explaining the translation and saying nothing about the flag.
+    """
+    problems = []
+    scripts = tracked_shell_scripts(root)
+    if not scripts:
+        return ["found no tracked shell scripts — refusing to report every secret off argv "
+                "over an empty set."]
+    examined = 0
+    for script in scripts:
+        examined += 1
+        for n, line in enumerate(strip_comments(script.read_text()).splitlines(), 1):
+            if ARGV_SECRET.search(line):
+                problems.append(
+                    f"{script.relative_to(root)}:{n} passes a value with --from-literal, which "
+                    f"puts it in this process's argv where `ps` shows it to every other process "
+                    f"on the machine. Build the Secret on stdin instead."
+                )
+    EXAMINED["no script hands a secret to a command on argv"] = examined
+    return problems
+
+
+# A fetch that lands in a file, and the two things this tree then does with one.
+FETCHES = re.compile(r"(?<![\w-])curl\b")
+CONSUMES = re.compile(r"tar\s+-[a-zA-Z]*x|kubectl\s+apply\b")
+VERIFIES = re.compile(r"sha256sum\s+-c|shasum\s+-a\s+256\s+-c")
+
+# `kubectl apply -f <url>` fetches and applies in one step. There is no moment
+# between the two in which anything could check what arrived, so this shape is
+# the finding rather than a candidate for one — and it is invisible to the pair
+# above, which look for a fetch and a use as separate acts.
+APPLIES_A_URL = re.compile(r"kubectl\s+apply\b.*?-f\s+\"?https?://")
+
+
+def applies_a_url(text: str) -> bool:
+    """Whether any command applies a manifest straight from a URL.
+
+    Read over folded logical lines, because the invocation this exists for wrote
+    its flags on the line after the verb. A pattern that cannot cross a
+    continuation drops that command from its corpus and reports the file clean,
+    which is the same defect the helm invariants above were widened to remove.
+    """
+    return any(APPLIES_A_URL.search(cmd) for _, cmd in logical_lines(strip_comments(text)))
+
+
+def remote_artifacts_are_verified(root: pathlib.Path = ROOT) -> list[str]:
+    """Anything downloaded and then unpacked or applied is checked first.
+
+    Two of these run before anything else does: a binary unpacked onto PATH and
+    used by a blocking gate, and the CRDs defining every route kind in the
+    cluster, applied on the core path of every bring-up. Fetching and consuming
+    in one step means a truncated transfer, a proxy error page or a replaced
+    asset arrives as the thing itself.
+
+    Scoped to files that BOTH fetch and consume, so a script that only downloads
+    something a human reads is not asked for a digest it has no use for. The
+    bound is worth stating: this asks whether a file verifies, not whether it
+    verifies the right artifact — a digest recorded for one download does not
+    vouch for a second one added beside it. What it makes impossible is the
+    shape where nothing is checked at all.
+    """
+    problems = []
+    err = require_git(root)
+    if err:
+        return [err]
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                         capture_output=True, text=True, check=False)
+    candidates = []
+    for rel in (f for f in out.stdout.split("\0") if f):
+        if not (rel.endswith(".sh") or rel.endswith(".yml") or rel.endswith(".yaml")):
+            continue
+        f = root / rel
+        if not f.is_file():
+            continue
+        text = f.read_text(errors="ignore")
+        if applies_a_url(text) or (
+            FETCHES.search(text) and CONSUMES.search(text)
+        ):
+            candidates.append((rel, text))
+    EXAMINED["every fetched artifact is verified before it is used"] = len(candidates)
+    if not candidates:
+        return ["no tracked file both fetches and unpacks or applies an artifact — the "
+                "parser and the tree disagree, so this check asserted nothing."]
+    for rel, text in candidates:
+        direct = applies_a_url(text)
+        if direct:
+            problems.append(
+                f"{rel} applies a manifest straight from a URL, so there is no point between "
+                f"fetching and applying at which anything could check what arrived. Fetch it "
+                f"to a file, verify a recorded digest, then apply the file."
+            )
+            continue
+        if not VERIFIES.search(text):
+            problems.append(
+                f"{rel} downloads an artifact and then unpacks or applies it without checking "
+                f"a digest, so whatever the host served is what runs."
+            )
+    return problems
+
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -1171,6 +1294,8 @@ CHECKS = [
      tree_has_content_outside_the_gates),
     ("every gate refuses when its authority is unavailable",
      gates_refuse_without_their_authority),
+    ("no script hands a secret to a command on argv", secrets_stay_off_argv),
+    ("every fetched artifact is verified before it is used", remote_artifacts_are_verified),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -1302,6 +1427,59 @@ CONTROLS = {
             {"stack/s/a/install.sh": ADVERSARIAL_PREFIX
                                      + BOUNDED.replace(" --timeout 10m", "")},
             {"stack/s/a/install.sh": ADVERSARIAL_PREFIX + BOUNDED},
+        ),
+    ],
+    "no script hands a secret to a command on argv": [
+        (
+            "a secret handed to kubectl on the command line",
+            {"s.sh": 'kubectl create secret generic x --from-literal=password="$P"\n'},
+            {"s.sh": 'printf %s "$P" | kubectl create secret generic x --from-file=password=/dev/stdin\n'},
+            "--from-literal",
+        ),
+        (
+            # The rule is about the flag, not about the word `password`: a value
+            # named innocuously leaks exactly as far.
+            "a --from-literal whose key is not obviously a secret",
+            {"s.sh": 'kubectl create secret generic x --from-literal=host="$H"\n'},
+            {"s.sh": 'kubectl create secret generic x --from-file=host=/dev/stdin\n'},
+        ),
+        (
+            "a --from-literal inside a comment is not a use",
+            {"s.sh": '# built on stdin rather than --from-literal, which leaks to ps\n'
+                     'kubectl create secret generic x --from-file=p=/dev/stdin\n',
+             "t.sh": 'kubectl create secret generic y --from-literal=p="$P"\n'},
+            {"s.sh": '# built on stdin rather than --from-literal, which leaks to ps\n'
+                     'kubectl create secret generic x --from-file=p=/dev/stdin\n'},
+        ),
+    ],
+    "every fetched artifact is verified before it is used": [
+        (
+            "an archive downloaded and unpacked with no digest",
+            {"s.sh": 'curl -sSfL -o t.tgz "https://example/t.tgz"\ntar -xz -f t.tgz\n'},
+            {"s.sh": 'curl -sSfL -o t.tgz "https://example/t.tgz"\n'
+                     'echo "abc  t.tgz" | sha256sum -c -\ntar -xz -f t.tgz\n'},
+        ),
+        (
+            "a manifest fetched and applied with no digest",
+            {"s.sh": 'curl -sSfL -o m.yaml "https://example/m.yaml"\nkubectl apply -f m.yaml\n'},
+            {"s.sh": 'curl -sSfL -o m.yaml "https://example/m.yaml"\n'
+                     'echo "abc  m.yaml" | shasum -a 256 -c -\nkubectl apply -f m.yaml\n'},
+        ),
+        (
+            "a manifest applied straight from a URL, which nothing can verify",
+            {"s.sh": 'kubectl apply --server-side -f "https://example/crds.yaml"\n'},
+            {"s.sh": 'curl -sSfL -o c.yaml "https://example/crds.yaml"\n'
+                     'echo "abc  c.yaml" | sha256sum -c -\nkubectl apply --server-side -f c.yaml\n'},
+            "straight from a URL",
+        ),
+        (
+            # A file that downloads something nobody unpacks or applies is not
+            # asked for a digest, so the corpus stays the shape the rule is about.
+            "a download that is never unpacked or applied is not in the corpus",
+            {"s.sh": 'curl -sSfL -o t.tgz "https://example/t.tgz"\ntar -xz -f t.tgz\n'},
+            {"s.sh": 'curl -sSfL -o notes.txt "https://example/notes.txt"\ncat notes.txt\n',
+             "t.sh": 'curl -sSfL -o t.tgz "https://x"\n'
+                     'echo "abc  t.tgz" | sha256sum -c -\ntar -xz -f t.tgz\n'},
         ),
     ],
     "every path named in markdown resolves": [

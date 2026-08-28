@@ -58,13 +58,22 @@ jobs:
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # Downloaded to a file and checked before it is unpacked onto PATH and run,
+      # the same way ci.yml treats kubeconform. Piping the response straight into
+      # tar executes whatever arrives: a truncated transfer, a proxy error page or
+      # a replaced asset all reach the next step as a binary. The digest is the one
+      # the release publishes alongside the archive, so it catches corruption and
+      # substitution of the asset; it does not attest the release itself, which
+      # would need the upstream signing key.
       - name: Install trivy
         env:
           TRIVY_VERSION: v0.74.0
+          TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
         run: |
           url="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
           curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
             -o trivy.tar.gz "$url"
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
           tar -xz -C /usr/local/bin -f trivy.tar.gz trivy
           rm trivy.tar.gz
           trivy --version
