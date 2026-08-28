@@ -68,7 +68,7 @@ cluster/   kind config, cluster lifecycle tasks, local registry + coredns setup
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
-scripts/   CI gates (render, schema, mirror, chart provenance, renovate coverage)
+scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage)
 tests/     fixtures the gates prove themselves against
 Taskfile.yaml
 ```
