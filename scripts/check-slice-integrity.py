@@ -48,13 +48,19 @@ ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "")
 # `helm` as a command word: not part of a path, a longer word, or a flag.
 HELM_MENTION = re.compile(r"(?<![\w./-])helm(?![\w-])")
 
-# Where a command can start: the beginning of a logical line, or after an
-# operator that ends the previous one. A `helm` anywhere else on the line is
-# an argument or a string, not an invocation.
-COMMAND_START = re.compile(r"(?:^|[|;&(]|\$\(|&&|\|\|)\s*"
-                           r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)*"
-                           r"(?:exec\s+)?"
-                           r"helm\s+([a-z][a-z-]*)")
+# Where one command ends and the next begins. Splitting on these and reading
+# each segment's first word is linear; expressing the same thing as one pattern
+# needs a starred group whose body can also match the separator, which is
+# exponential on input that alternates the two.
+COMMAND_SEP = re.compile(r"\$\(|&&|\|\||[|;&()]")
+
+# A leading `NAME=value`, which is a prefix to the command rather than the
+# command. Anchored and matched against a single whitespace-delimited token, so
+# it cannot overlap the token that follows it.
+ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# A helm verb: the word directly after the binary.
+VERB = re.compile(r"^[a-z][a-z-]*$")
 
 # helm verbs that create, change or remove a release. Each blocks on the
 # cluster and so has to say how long it will wait.
@@ -105,6 +111,25 @@ def strip_quoted(line: str) -> str:
     return QUOTED.sub('""', line)
 
 
+def helm_verb(segment: str) -> str | None:
+    """The helm verb this command segment invokes, or None if it invokes no helm.
+
+    Tokenised rather than matched as one pattern. Leading `NAME=value` prefixes
+    and `exec` are dropped a token at a time, which is linear in the segment and
+    cannot backtrack — the same shape written as a starred group inside a larger
+    pattern is exponential on a line alternating assignments and separators.
+    """
+    tokens = segment.split()
+    i = 0
+    while i < len(tokens) and (ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec"):
+        i += 1
+    if i >= len(tokens) or tokens[i] != "helm":
+        return None
+    if i + 1 >= len(tokens) or not VERB.match(tokens[i + 1]):
+        return None
+    return tokens[i + 1]
+
+
 def helm_commands(text: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str]]]:
     """Every helm command, as (line, verb, command), and every one not parsed.
 
@@ -120,7 +145,7 @@ def helm_commands(text: str) -> tuple[list[tuple[int, str, str]], list[tuple[int
         cmd = strip_quoted(raw)
         if not HELM_MENTION.search(cmd):
             continue
-        verbs = COMMAND_START.findall(cmd)
+        verbs = [v for seg in COMMAND_SEP.split(cmd) if (v := helm_verb(seg))]
         if not verbs:
             unparsed.append((line, raw.strip()))
             continue
@@ -417,6 +442,11 @@ OPERATOR_FLAG_MANIFEST = json.dumps(
     },
     indent=2,
 ) + "\n"
+
+# The shape a single pattern for the command head backtracks on: an assignment,
+# then a separator, repeated. Long enough that an exponential parser does not
+# finish inside the floor's ceiling, short enough to read.
+ADVERSARIAL_PREFIX = 'A=' + '"" A='.join([""] * 40) + '"" helm template x y >/dev/null\n'
 
 BOUNDED_INSTALL = (
     "helm repo add x https://x --force-update >/dev/null\n"
@@ -1262,6 +1292,16 @@ CONTROLS = {
             {"stack/s/a/install.sh": BOUNDED.replace(" --timeout 10m", "")
                                      + 'echo "(helm does not upgrade CRDs)"\n'},
             {"stack/s/a/install.sh": BOUNDED + 'echo "(helm does not upgrade CRDs)"\n'},
+        ),
+        # A line alternating environment assignments and separators is the input
+        # that makes a single pattern for the same job backtrack exponentially.
+        # Both trees carry it, so the floor's 180s ceiling is the termination
+        # proof and the pair still turns on the violation rather than the input.
+        (
+            "a line built to make the command parser backtrack",
+            {"stack/s/a/install.sh": ADVERSARIAL_PREFIX
+                                     + BOUNDED.replace(" --timeout 10m", "")},
+            {"stack/s/a/install.sh": ADVERSARIAL_PREFIX + BOUNDED},
         ),
     ],
     "every path named in markdown resolves": [
