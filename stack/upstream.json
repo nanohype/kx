@@ -9,7 +9,7 @@
   "siblings": {
     "eks-agent-platform": {
       "repository": "nanohype/eks-agent-platform",
-      "ref": "0f56302c9e2d228c684bd36823dc15576016d9ba",
+      "ref": "1d289fecc4728afa61005d38aa558af8b76cbf61",
       "used_by": "stack/ai-platform/operator — chart source and image build context"
     }
   },
