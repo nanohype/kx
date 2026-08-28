@@ -7,10 +7,12 @@ A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [ek
 ## Prerequisites
 
 ```
-brew install kind helm kubectl task
+brew install kind helm kubectl go-task
 ```
 
-Docker Desktop or OrbStack must be running.
+`task` is Taskwarrior and conflicts with go-task; the binary this repo's Taskfiles need comes from `go-task`.
+
+Docker Desktop or OrbStack must be running — kind builds its nodes as containers.
 
 ## Quickstart
 
