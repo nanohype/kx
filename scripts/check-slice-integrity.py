@@ -45,31 +45,124 @@ import tempfile
 ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "")
                     or pathlib.Path(__file__).resolve().parent.parent)
 
-HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\b", re.M)
+# `helm` as a command word: not part of a path, a longer word, or a flag.
+HELM_MENTION = re.compile(r"(?<![\w./-])helm(?![\w-])")
+
+# Where one command ends and the next begins. Splitting on these and reading
+# each segment's first word is linear; expressing the same thing as one pattern
+# needs a starred group whose body can also match the separator, which is
+# exponential on input that alternates the two.
+COMMAND_SEP = re.compile(r"\$\(|&&|\|\||[|;&()]")
+
+# A leading `NAME=value`, which is a prefix to the command rather than the
+# command. Anchored and matched against a single whitespace-delimited token, so
+# it cannot overlap the token that follows it.
+ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# A helm verb: the word directly after the binary.
+VERB = re.compile(r"^[a-z][a-z-]*$")
+
+# helm verbs that create, change or remove a release. Each blocks on the
+# cluster and so has to say how long it will wait.
+HELM_STATEFUL = {"upgrade", "install", "uninstall", "rollback", "delete"}
+
+# helm verbs that cannot change a release. Listed rather than inferred: a verb
+# absent from both sets fails the check by name, so the set that decides whether
+# a command needs bounding can only grow by an edit somebody reviews.
+HELM_READ_ONLY = {
+    "repo", "template", "search", "show", "version", "lint", "dependency",
+    "history", "status", "get", "list", "plugin", "env", "completion", "package",
+    "verify", "pull", "inspect",
+}
 
 
-def helm_invocations(text: str) -> list[tuple[int, str]]:
-    """Each `helm upgrade --install` command as (1-indexed line, folded command).
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    """(1-indexed first line, command) with `\\`-continuations folded into one.
 
-    Scoped to the command rather than the file for both halves. Anchoring to
-    column 0 would miss an indented invocation and, worse, skip the whole file
-    on the non-match. Testing the file for `--timeout` would accept a helm call
-    with none beside a `kubectl wait --timeout=300s` that has nothing to do
-    with it.
+    Folding first is what makes the classification below total. A recogniser
+    applied per physical line cannot see a command whose verb and flags sit on
+    different lines, and it drops that command from its denominator without
+    saying so — which reads exactly like a tree that has no such command.
     """
     lines, out, i = text.splitlines(), [], 0
     while i < len(lines):
-        if HELM_INSTALL.match(lines[i]):
-            start, cmd = i + 1, []
-            while i < len(lines):
-                stripped = lines[i].rstrip()
-                cmd.append(stripped.rstrip("\\"))
-                if not stripped.endswith("\\"):
-                    break
-                i += 1
-            out.append((start, " ".join(cmd)))
+        start, parts = i + 1, []
+        while i < len(lines):
+            stripped = lines[i].rstrip()
+            parts.append(stripped.rstrip("\\").rstrip())
+            if not stripped.endswith("\\"):
+                break
+            i += 1
+        out.append((start, " ".join(p for p in parts if p)))
         i += 1
     return out
+
+
+QUOTED = re.compile(r'"[^"]*"|\'[^\']*\'')
+
+
+def strip_quoted(line: str) -> str:
+    """The line with quoted bodies emptied, so prose inside a string is not read
+    as shell. `echo "(helm does not upgrade them)"` otherwise presents `helm`
+    after a `(` — a command position — and classifies as a helm verb `does`.
+    Flag names and operators live outside quotes, so nothing this check reads is
+    lost.
+    """
+    return QUOTED.sub('""', line)
+
+
+def helm_verb(segment: str) -> str | None:
+    """The helm verb this command segment invokes, or None if it invokes no helm.
+
+    Tokenised rather than matched as one pattern. Leading `NAME=value` prefixes
+    and `exec` are dropped a token at a time, which is linear in the segment and
+    cannot backtrack — the same shape written as a starred group inside a larger
+    pattern is exponential on a line alternating assignments and separators.
+    """
+    tokens = segment.split()
+    i = 0
+    while i < len(tokens) and (ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec"):
+        i += 1
+    if i >= len(tokens) or tokens[i] != "helm":
+        return None
+    if i + 1 >= len(tokens) or not VERB.match(tokens[i + 1]):
+        return None
+    return tokens[i + 1]
+
+
+def helm_commands(text: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str]]]:
+    """Every helm command, as (line, verb, command), and every one not parsed.
+
+    The second list is the point. A recogniser matching one spelling reports a
+    clean verdict over the commands it happens to match and says nothing about
+    the rest, so its denominator shrinks silently — a gate cannot report a blind
+    spot using the instrument that has it. Here the broad question (does this
+    line invoke helm) and the precise one (which verb) are asked separately, and
+    a line where the answers disagree is returned for the caller to fail on.
+    """
+    found, unparsed = [], []
+    for line, raw in logical_lines(text):
+        cmd = strip_quoted(raw)
+        if not HELM_MENTION.search(cmd):
+            continue
+        verbs = [v for seg in COMMAND_SEP.split(cmd) if (v := helm_verb(seg))]
+        if not verbs:
+            unparsed.append((line, raw.strip()))
+            continue
+        for verb in verbs:
+            found.append((line, verb, cmd))
+    return found, unparsed
+
+
+def helm_invocations(text: str) -> list[tuple[int, str]]:
+    """Each release-changing helm command as (1-indexed line, folded command).
+
+    Scoped to the command rather than the file: testing the file for `--timeout`
+    would accept a helm call with none beside a `kubectl wait --timeout=300s`
+    that has nothing to do with it.
+    """
+    found, _ = helm_commands(text)
+    return [(line, cmd) for line, verb, cmd in found if verb in HELM_STATEFUL]
 
 
 def strip_comments(text: str) -> str:
@@ -135,7 +228,7 @@ EXAMINED: dict[str, int] = {}
 # calibrated to catch a corpus falling away rather than a single item leaving.
 # Raise one when the tree has grown enough that it can no longer fail.
 MINIMUM_EXAMINED = {
-    "every helm install names a timeout": 20,
+    "every helm install is found, and names a timeout": 20,
     "no helm repo add swallows its own failure": 18,
     "every shell script runs on bash 3.2": 30,
     "every scrape surface a values file names is enabled": 1,
@@ -189,18 +282,40 @@ def helm_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
                 "call bounded over an empty set."]
     checked = 0
     for script in scripts:
-        for line, cmd in helm_invocations(strip_comments(script.read_text())):
+        rel = script.relative_to(root)
+        found, unparsed = helm_commands(strip_comments(script.read_text()))
+
+        # A line that invokes helm in a form this parser cannot read is not a
+        # line without a helm command, and the two must not be recorded the
+        # same way. Reported rather than skipped, because a skip removes it
+        # from the denominator and the clean verdict then covers one command
+        # fewer with nothing to say so.
+        for line, raw in unparsed:
+            problems.append(
+                f"{rel}:{line} invokes helm in a form this check cannot read, so whether it "
+                f"is bounded was never asked: {raw[:80]}"
+            )
+
+        for line, verb, cmd in found:
+            if verb not in HELM_STATEFUL and verb not in HELM_READ_ONLY:
+                problems.append(
+                    f"{rel}:{line} runs `helm {verb}`, which is in neither the set of verbs "
+                    f"that change a release nor the set that cannot. Whether it needs a "
+                    f"--timeout is undecided, so it is reported rather than assumed harmless."
+                )
+                continue
+            if verb not in HELM_STATEFUL:
+                continue
             checked += 1
             if not names_token(cmd, "--timeout"):
                 problems.append(
-                    f"{script.relative_to(root)}:{line} runs `helm upgrade --install` with no "
-                    f"--timeout, so it takes helm's implicit 5m — short enough that a cold "
-                    f"image pull aborts the slice."
+                    f"{rel}:{line} runs `helm {verb}` with no --timeout, so it takes helm's "
+                    f"implicit 5m — short enough that a cold image pull aborts the slice."
                 )
-    EXAMINED["every helm install names a timeout"] = checked
+    EXAMINED["every helm install is found, and names a timeout"] = checked
     if not checked:
-        problems.append("no install.sh runs `helm upgrade --install` — the parser and the tree "
-                        "disagree, so this check asserted nothing.")
+        problems.append("no install.sh runs a release-changing helm command — the parser and "
+                        "the tree disagree, so this check asserted nothing.")
     return problems
 
 
@@ -327,6 +442,11 @@ OPERATOR_FLAG_MANIFEST = json.dumps(
     },
     indent=2,
 ) + "\n"
+
+# The shape a single pattern for the command head backtracks on: an assignment,
+# then a separator, repeated. Long enough that an exponential parser does not
+# finish inside the floor's ceiling, short enough to read.
+ADVERSARIAL_PREFIX = 'A=' + '"" A='.join([""] * 40) + '"" helm template x y >/dev/null\n'
 
 BOUNDED_INSTALL = (
     "helm repo add x https://x --force-update >/dev/null\n"
@@ -870,13 +990,29 @@ def repo_adds_do_not_swallow(root: pathlib.Path = ROOT) -> list[str]:
                 "unsuppressed over an empty set."]
     examined = 0
     for script in scripts:
-        for n, line in enumerate(strip_comments(script.read_text()).splitlines(), 1):
-            if not REPO_ADD.match(line):
+        rel = script.relative_to(root)
+        found, unparsed = helm_commands(strip_comments(script.read_text()))
+        for n, raw in unparsed:
+            problems.append(
+                f"{rel}:{n} invokes helm in a form this check cannot read, so whether it "
+                f"suppresses a failure was never asked: {raw[:80]}"
+            )
+        for n, verb, cmd in found:
+            if verb != "repo" or not re.search(r"helm\s+repo\s+add\b", cmd):
                 continue
             examined += 1
-            if "|| true" in line or "2>&1" in line:
+            # `||` in any spelling, not two literal suffixes. `|| true`, `|| :`,
+            # `||true`, `|| echo ...` and `|| /bin/true` are the same construct
+            # wearing different clothes, and a check listing the spellings it
+            # knows scores every other one as compliant.
+            swallowed = (
+                "||" in cmd
+                or "2>&1" in cmd
+                or re.search(r";\s*(true|:)\s*$", cmd)
+            )
+            if swallowed:
                 problems.append(
-                    f"{script.relative_to(root)}:{n} suppresses `helm repo add`'s failure. "
+                    f"{rel}:{n} suppresses `helm repo add`'s failure. "
                     f"The only thing it can fail on is the alias already pointing somewhere "
                     f"else, which is the one case worth hearing about."
                 )
@@ -1024,7 +1160,7 @@ def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
 
 
 CHECKS = [
-    ("every helm install names a timeout", helm_calls_are_bounded),
+    ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
     ("every shell script runs on bash 3.2", shell_runs_on_bash_3),
     ("every scrape surface a values file names is enabled", scrape_surfaces_are_on),
@@ -1056,7 +1192,7 @@ BOUNDED = ('helm repo add x https://x\n'
            'helm upgrade --install a x/a --version 1 --wait --timeout 10m\n')
 
 CONTROLS = {
-    "every helm install names a timeout": [
+    "every helm install is found, and names a timeout": [
         (
             "a helm install with no --timeout",
             {"stack/s/a/install.sh": BOUNDED.replace(" --timeout 10m", "")},
@@ -1107,6 +1243,65 @@ CONTROLS = {
             "no install.sh at all",
             {"README.md": "nothing here\n"},
             {"stack/s/a/install.sh": BOUNDED},
+        ),
+        # One case per spelling that used to fall out of the denominator. Each
+        # broken tree carries an UNBOUNDED install written that way, so a check
+        # that cannot see the form reports the tree clean and fails the control.
+        (
+            "an unbounded install using the short -i flag",
+            {"stack/s/a/install.sh": "helm upgrade -i a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh": "helm upgrade -i a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "an unbounded install behind an environment assignment",
+            {"stack/s/a/install.sh": "NS=n helm upgrade --install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh":
+             "NS=n helm upgrade --install a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "an unbounded install behind exec",
+            {"stack/s/a/install.sh": "exec helm upgrade --install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh":
+             "exec helm upgrade --install a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "an unbounded install with two spaces before --install",
+            {"stack/s/a/install.sh": "helm upgrade  --install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh":
+             "helm upgrade  --install a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "an unbounded install whose verb and flags are on different lines",
+            {"stack/s/a/install.sh": "helm upgrade \\\n  --install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh":
+             "helm upgrade \\\n  --install a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "an unbounded `helm install`, which is not an upgrade at all",
+            {"stack/s/a/install.sh": "helm install a x/a --version 1 --wait\n"},
+            {"stack/s/a/install.sh": "helm install a x/a --version 1 --wait --timeout 10m\n"},
+        ),
+        (
+            "a helm verb in neither set is reported rather than assumed harmless",
+            {"stack/s/a/install.sh": BOUNDED + "helm frobnicate a\n"},
+            {"stack/s/a/install.sh": BOUNDED + "helm template a x/a\n"},
+            "helm frobnicate",
+        ),
+        (
+            "helm named inside a quoted string is not read as a command",
+            {"stack/s/a/install.sh": BOUNDED.replace(" --timeout 10m", "")
+                                     + 'echo "(helm does not upgrade CRDs)"\n'},
+            {"stack/s/a/install.sh": BOUNDED + 'echo "(helm does not upgrade CRDs)"\n'},
+        ),
+        # A line alternating environment assignments and separators is the input
+        # that makes a single pattern for the same job backtrack exponentially.
+        # Both trees carry it, so the floor's 180s ceiling is the termination
+        # proof and the pair still turns on the violation rather than the input.
+        (
+            "a line built to make the command parser backtrack",
+            {"stack/s/a/install.sh": ADVERSARIAL_PREFIX
+                                     + BOUNDED.replace(" --timeout 10m", "")},
+            {"stack/s/a/install.sh": ADVERSARIAL_PREFIX + BOUNDED},
         ),
     ],
     "every path named in markdown resolves": [
@@ -1214,6 +1409,39 @@ CONTROLS = {
             "no install.sh at all",
             {"README.md": "nothing here\n"},
             {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        # `|| true` is one spelling of a construct with several. A check that
+        # lists the spellings it knows scores every other one as compliant, so
+        # each is a case here rather than an alternation somebody has to trust.
+        (
+            "a repo add suppressed with || :",
+            {"stack/s/a/install.sh": "helm repo add x https://x || :\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a repo add suppressed with ||true, no space",
+            {"stack/s/a/install.sh": "helm repo add x https://x ||true\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a repo add whose failure is swallowed by || echo",
+            {"stack/s/a/install.sh": "helm repo add x https://x || echo skipped\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a repo add suppressed with a trailing ; true",
+            {"stack/s/a/install.sh": "helm repo add x https://x; true\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x https://x --force-update >/dev/null\n"
+                                     + BOUNDED},
+        ),
+        (
+            "a repo add split across a line continuation, suppressed",
+            {"stack/s/a/install.sh": "helm repo add x \\\n  https://x || true\n" + BOUNDED},
+            {"stack/s/a/install.sh": "helm repo add x \\\n  https://x --force-update\n"
                                      + BOUNDED},
         ),
     ],
