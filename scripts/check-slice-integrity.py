@@ -140,11 +140,11 @@ MINIMUM_EXAMINED = {
     "every shell script runs on bash 3.2": 30,
     "every scrape surface a values file names is enabled": 1,
     "every file in an addon directory is applied": 25,
-    "every gate is observed to reject and to accept": 3,
+    "every gate is observed to reject and to accept": 4,
     "every path named in markdown resolves": 5,
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
-    "every gate refuses when its authority is unavailable": 4,
+    "every gate refuses when its authority is unavailable": 5,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
@@ -286,7 +286,47 @@ WATCHED_PIN = (
     "helm upgrade --install w w/w --version 1.0.0\n"
 )
 
+# Prefix for a fixture file that is written but not staged. A sibling repository
+# checked out into the workspace is present on disk and absent from the tracked
+# set, and a fixture that stages it is modelling a different situation than the
+# one the gate was scoped for.
+UNTRACKED = "!"
+
+
 OPERATOR_IMAGE = DEPLOY_WITH % "ghcr.io/nanohype/eks-agent-platform/operator:dev"
+
+# The operator Deployment as a render carries it: the image is what identifies it
+# among every other Deployment in the stack, and the argument list is the subject.
+OPERATOR_DEPLOY_WITH_ARGS = """apiVersion: apps/v1
+kind: Deployment
+metadata: {name: op}
+spec:
+  template:
+    spec:
+      containers:
+        - name: c
+          image: ghcr.io/nanohype/eks-agent-platform/operator:dev
+          args: [%s]
+"""
+
+# The manifest shape the flag gate reads, built from the keys it names rather
+# than copied from the shipped file, which would make the fixture a second copy
+# of a thing that moves.
+OPERATOR_FLAG_MANIFEST = json.dumps(
+    {
+        "upstream": {"repository": "example/upstream", "path": "applicationsets",
+                     "ref": "0" * 40},
+        "siblings": {
+            "eks-agent-platform": {
+                "repository": "example/sibling",
+                "ref": "0" * 40,
+                "used_by": "stack/ai-platform/operator",
+                "flagSource": "operators/cmd/main.go",
+            }
+        },
+    },
+    indent=2,
+) + "\n"
 
 BOUNDED_INSTALL = (
     "helm repo add x https://x --force-update >/dev/null\n"
@@ -334,6 +374,35 @@ GATE_PROBES: dict[str, dict] = {
                  "stack/chart-provenance.json":
                      '{"charts": {"a": {"repo": "https://x", "description": "d",'
                      ' "deprecated": false}}}\n'},
+    },
+    "check-operator-flags.py": {
+        "argv": ["--render", "{root}/render", "--chart-source", "{root}/.sibling"],
+        "names": "--disable-aws",
+        # The render and the checkout are UNTRACKED: neither is part of a tree
+        # under test, and a fixture that stages them models a situation the gate
+        # was not scoped for.
+        # Two flag definitions on both sides, not one. With a single definition
+        # "parsed one flag" and "parsed correctly" are the same observation, so
+        # the empty-extraction refusal would be what the good tree exercised.
+        # The planted violation is a RENAME rather than a deletion, so the near-
+        # miss line has something to print — a rejection that merely says the
+        # flag is gone is a weaker report of the same event.
+        "bad": {
+            "stack/upstream.json": OPERATOR_FLAG_MANIFEST,
+            "stack/ai-platform/operator/values.yaml": "extraArgs:\n  - --disable-aws\n",
+            UNTRACKED + "render/op.yaml": OPERATOR_DEPLOY_WITH_ARGS % "--disable-aws",
+            UNTRACKED + ".sibling/operators/cmd/main.go":
+                'flag.BoolVar(&awsDisabled, "aws-disabled", false, "")\n'
+                'flag.BoolVar(&leaderElect, "leader-elect", true, "")\n',
+        },
+        "good": {
+            "stack/upstream.json": OPERATOR_FLAG_MANIFEST,
+            "stack/ai-platform/operator/values.yaml": "extraArgs:\n  - --disable-aws\n",
+            UNTRACKED + "render/op.yaml": OPERATOR_DEPLOY_WITH_ARGS % "--disable-aws",
+            UNTRACKED + ".sibling/operators/cmd/main.go":
+                'flag.BoolVar(&disableAWS, "disable-aws", false, "")\n'
+                'flag.BoolVar(&leaderElect, "leader-elect", true, "")\n',
+        },
     },
 }
 
@@ -540,6 +609,17 @@ AUTHORITY_PROBES: dict[str, dict] = {
         "authority": "an eks-gitops checkout",
         "argv": ["check"],
         "env": {"EKS_GITOPS_DIR": "{root}/not-a-checkout"},
+        "empty_path": False,
+    },
+    # This table asserts a non-zero exit and no traceback, and carries no
+    # `names` field, so a probe is honest only where exactly one refusal is
+    # plausible on the shared fixture. The gate resolves --chart-source ahead of
+    # every other precondition for that reason: the fixture holds no operator
+    # values file and an empty `siblings`, and neither is ever reached.
+    "check-operator-flags.py": {
+        "authority": "an eks-agent-platform checkout",
+        "argv": ["--render", "{root}", "--chart-source", "{root}/not-a-checkout"],
+        "env": {},
         "empty_path": False,
     },
 }
@@ -1232,13 +1312,6 @@ CONTROLS = {
         ),
     ],
 }
-
-
-# Prefix for a fixture file that is written but not staged. A sibling repository
-# checked out into the workspace is present on disk and absent from the tracked
-# set, and a fixture that stages it is modelling a different situation than the
-# one the gate was scoped for.
-UNTRACKED = "!"
 
 
 def _tree(files: dict[str, str]) -> pathlib.Path:

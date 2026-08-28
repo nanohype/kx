@@ -342,6 +342,28 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
           python3 scripts/check-rendered-schemas.py "$RENDER_DIR"
 
+      # Third pass over the same render, and the only one that joins it to the
+      # sibling checkout the render was produced from. The operator slice hands
+      # the binary flags through the chart's `extraArgs`, which the chart
+      # declares as an untyped array and renders verbatim — so helm has nothing
+      # to hold them to, and neither does anything above.
+      #
+      # Blocking, and it needs no schedule to be. Both of its subjects are in
+      # the commit under test: this slice's values file, and the ref that
+      # decides which checkout the flags are read from. Nothing here reads any
+      # repository's default branch, so no merge elsewhere can redden a pull
+      # request that did not cause it.
+      #
+      # Both paths arrive as arguments rather than through the environment. The
+      # suite floor runs a probed gate with the ambient environment inherited,
+      # so a checkout resolved from KX_EKS_AGENT_PLATFORM_DIR would be read from
+      # a developer's own tree instead of the fixture the floor wrote.
+      - name: Every flag the operator slice sets reaches a binary that defines it
+        env:
+          RENDER_DIR: ${{ runner.temp }}/render
+          SIBLING_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
+        run: python3 scripts/check-operator-flags.py --render "$RENDER_DIR" --chart-source "$SIBLING_DIR"
+
   merge-gate:
     name: merge gate
     runs-on: ubuntu-latest

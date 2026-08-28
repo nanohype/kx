@@ -45,6 +45,16 @@ deliberately never compares values, so an upstream change to resource bounds, a
 security context or a replica count leaves every check here green. Anything a
 chart needs from AWS is exercised nowhere in this workspace.
 
+The eks-agent-platform pin is bounded the same way and one step further.
+`scripts/check-operator-flags.py` holds the flags `stack/ai-platform/operator`
+hands the binary to a checkout at the pinned ref, because the chart takes them
+through an untyped `extraArgs` array that helm renders verbatim — the one values
+path a render cannot grade. Nothing in this workspace observes what that
+repository's default branch contains: the pinned ref is checked out, rendered,
+and held to those flags, and all three are facts about the commit under test.
+Whether the pin should move is a judgement made by reading that repository, and
+no check here makes it or prompts it.
+
 ## Add an addon to the local stack
 
 1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
