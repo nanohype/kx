@@ -36,10 +36,10 @@ path is formatted into the probe and cannot be steered.
 
 Scope, as a limit rather than a reassurance:
 
-* It never reads the sibling's default branch. Whether the pin is behind is not
-  measured here and is not measured anywhere in this workspace. Age is not a
-  property of a commit, and the pin exists so this verdict stays a fact about
-  the commit under test.
+* It never reads the sibling's default branch. Age is not a property of a
+  commit, and the pin exists so this verdict stays a fact about the commit under
+  test. `sibling-freshness.yml` runs this same gate against that branch on a
+  schedule, which is where the pin's distance is reported.
 * It compares names. A flag whose meaning inverts, whose default moves, or that
   becomes a no-op keeps its name and passes.
 * It sees flags registered by a `flag.*` call in the file the manifest names.

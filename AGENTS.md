@@ -49,11 +49,12 @@ The eks-agent-platform pin is bounded the same way and one step further.
 `scripts/check-operator-flags.py` holds the flags `stack/ai-platform/operator`
 hands the binary to a checkout at the pinned ref, because the chart takes them
 through an untyped `extraArgs` array that helm renders verbatim — the one values
-path a render cannot grade. Nothing in this workspace observes what that
+path a render cannot grade. On the blocking path nothing observes what that
 repository's default branch contains: the pinned ref is checked out, rendered,
 and held to those flags, and all three are facts about the commit under test.
-Whether the pin should move is a judgement made by reading that repository, and
-no check here makes it or prompts it.
+`sibling-freshness.yml` asks the other question on a schedule — it reports how
+far the pin is behind and fails when a bump would not hold, which is the half a
+distance count only gestures at.
 
 ## Add an addon to the local stack
 
