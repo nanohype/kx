@@ -13,7 +13,8 @@ name: image cves
 # image overnight has a different answer every day and is not something a pull
 # request caused. Asking it on the blocking path reddens changes that are not at
 # fault. The half that IS a fact about the commit — whether every image
-# reference is immutable — runs there instead.
+# reference is immutable, and every hand-pinned tag on its chart's release —
+# runs there instead.
 #
 # In-cluster runtime scanning belongs to the trivy-operator addon and stays
 # there. This is the other half: the images a pin resolves to, checked where the

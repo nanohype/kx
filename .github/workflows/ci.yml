@@ -322,15 +322,17 @@ jobs:
       # gate that has stopped rejecting fails on its own invocation rather than
       # in a step somebody has to remember to add.
       # Whether an image reference is immutable IS a fact about the commit under
-      # test, so this half blocks. The CVE half asks a question with a different
-      # answer every day and runs on a schedule, in image-cves.yml — the same
-      # split, for the same reason, as chart provenance and mirror freshness.
+      # test, and so is whether a tag a values file pins by hand names the same
+      # release as the chart's own images, so this half blocks. The CVE half asks
+      # a question with a different answer every day and runs on a schedule, in
+      # image-cves.yml — the same split, for the same reason, as chart provenance
+      # and mirror freshness.
       #
       # kx pins its own chart versions and those pins are not derived from the
       # catalog, so no other repository can vouch for what they resolve to. The
       # render is the input rather than the values files, because a values file
       # names the deltas and the chart supplies the rest.
-      - name: Every image the pinned charts resolve to is immutable
+      - name: Every image the pinned charts resolve to is immutable, every hand pin on its chart's release
         env:
           RENDER_DIR: ${{ runner.temp }}/render
         run: python3 scripts/check-images.py --pins "$RENDER_DIR"
