@@ -10,6 +10,6 @@ kubectl create namespace kyverno --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install kyverno kyverno/kyverno \
   --namespace kyverno \
-  --version 3.8.2 \
+  --version 3.9.2 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

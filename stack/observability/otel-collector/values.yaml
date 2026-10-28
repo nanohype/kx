@@ -46,6 +46,14 @@ presets:
   kubernetesAttributes:
     enabled: true
 
+# The preset above emits its processor as k8s_attributes only while this is on.
+# Off, it emits k8sattributes, and the pipelines below name a processor the
+# generated config does not define. On is the chart's default; it is set here so
+# a chart version that flips the default cannot rename the processor underneath
+# these pipelines, and so one that drops the key fails scripts/render-check.sh
+# at the bump: the chart's values schema admits no key it does not declare.
+rewriteDeprecatedComponentNames: true
+
 serviceAccount:
   create: true
   name: otel-gateway
@@ -81,6 +89,10 @@ config:
       check_interval: 5s
       limit_percentage: 80
       spike_limit_percentage: 25
+  # Component names are the ones the collector registers: otlp_http and
+  # otlp_grpc for the two OTLP exporters. The chart rewrites the deprecated
+  # otlphttp and otlp spellings to these, so spelling them here keeps this file
+  # naming what the generated config names. The otlp RECEIVER keeps its name.
   exporters:
     # Same exporter upstream uses, pointed at the in-cluster Prometheus instead
     # of AMP. `enableRemoteWriteReceiver` in the kube-prometheus-stack values is
@@ -95,9 +107,9 @@ config:
     # Loki's native OTLP endpoint. The exporter appends /v1/logs, so the endpoint
     # stops at /otlp. kx disables the chart's gateway, so this addresses the
     # single-binary Service directly.
-    otlphttp/loki:
+    otlp_http/loki:
       endpoint: http://loki.monitoring.svc.cluster.local:3100/otlp
-    otlp/tempo:
+    otlp_grpc/tempo:
       endpoint: tempo.monitoring.svc.cluster.local:4317
       tls:
         insecure: true
@@ -112,11 +124,11 @@ config:
       logs:
         receivers: [otlp]
         processors: [memory_limiter, k8s_attributes, batch]
-        exporters: [otlphttp/loki]
+        exporters: [otlp_http/loki]
       traces:
         receivers: [otlp]
         processors: [memory_limiter, k8s_attributes, batch]
-        exporters: [otlp/tempo]
+        exporters: [otlp_grpc/tempo]
 
 # The tenant-facing endpoint, decoupled from the release name exactly as upstream
 # decouples it. This is the `telemetry.monitoring.svc` name every tenant chart
