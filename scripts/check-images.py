@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The images kx's pinned charts resolve to, held to two properties.
+"""The images kx's pinned charts resolve to, checked in two modes.
 
     scripts/check-images.py --pins <render-dir>   # blocking
     scripts/check-images.py --cves <render-dir>   # scheduled, needs trivy
@@ -20,8 +20,9 @@ only actionable at the place the version is chosen.
 Split across two modes for the reason this repository already gives twice, for
 chart provenance and for mirror freshness:
 
-  --pins  Whether an image reference is immutable is a fact about the commit
-          under test, so it blocks a merge.
+  --pins  Whether an image reference is immutable, and whether a tag a values
+          file pins by hand names the same release as the chart's own images,
+          are facts about the commit under test, so they block a merge.
   --cves  Whether a vulnerability was published against a pinned image
           overnight has a different answer every day and is not something a
           pull request caused. Gating merges on it reddens changes that are not
@@ -103,6 +104,22 @@ FLOATING_ALLOWED: dict[str, str] = {
     ),
 }
 
+# Images a values file pins by hand that ship in the same release as an image
+# the chart tags from its own appVersion: hand-pinned repository to the
+# chart-tagged repository it has to match. A chart bump moves the chart's images
+# and leaves a hand-written tag where it was, and the immutability check cannot
+# see the gap — both references stay immutable while naming different releases.
+# The values file that carries each pin says why it is pinned.
+#
+# Asserted like the exemptions above: a pair naming a repository the render no
+# longer produces fails, because a rule whose subject is gone holds over nothing
+# and reports the same clean line as one that holds.
+RELEASED_TOGETHER: dict[str, str] = {
+    # The image both Kyverno chart hooks run; stack/security/kyverno/values.yaml
+    # pins its tag.
+    "ghcr.io/kyverno/readiness-checker": "reg.kyverno.io/kyverno/kyverno",
+}
+
 
 def pod_specs(doc):
     """Every pod spec in a manifest, whatever wraps it."""
@@ -158,6 +175,69 @@ def check_pins(images: dict[str, set[str]]) -> list[str]:
             f"{image} is a moving reference, rendered by {where}. It is a different "
             f"program on the next pull and nothing here records which one an adopter got."
         )
+    return problems
+
+
+def split_ref(image: str) -> tuple[str, str | None]:
+    """(repository, tag) of an image reference, with None for a reference with no tag.
+
+    The digest is dropped before the tag is read, so `repo:tag@sha256:...` keeps
+    its tag and `repo@sha256:...` has none. The tag is read from the last path
+    segment only, so a registry port is never taken for one.
+    """
+    name = image.split("@", 1)[0]
+    head, slash, last = name.rpartition("/")
+    if ":" not in last:
+        return name, None
+    last, tag = last.rsplit(":", 1)
+    return f"{head}{slash}{last}", tag
+
+
+def check_release_tags(images: dict[str, set[str]],
+                       pairs: dict[str, str] | None = None) -> list[str]:
+    """Every hand-pinned image in RELEASED_TOGETHER carries its chart's release tag.
+
+    The chart-tagged repository has to render at exactly one tag, since that tag
+    is the release being matched; two tags leave nothing to match against.
+    """
+    pairs = RELEASED_TOGETHER if pairs is None else pairs
+    tags: dict[str, dict[str | None, set[str]]] = {}
+    for image, slices in images.items():
+        repo, tag = split_ref(image)
+        tags.setdefault(repo, {}).setdefault(tag, set()).update(slices)
+
+    problems = []
+    for pinned, chart_tagged in sorted(pairs.items()):
+        gone = [r for r in (pinned, chart_tagged) if r not in tags]
+        if gone:
+            problems.append(
+                f"RELEASED_TOGETHER pairs {pinned} with {chart_tagged}, and the render no "
+                f"longer produces {' or '.join(gone)}. A rule whose subject is gone holds over "
+                f"nothing."
+            )
+            continue
+        release = tags[chart_tagged]
+        if len(release) != 1 or None in release:
+            seen = ", ".join(sorted(t or "no tag" for t in release))
+            problems.append(
+                f"{chart_tagged} renders at {seen}, so there is no single release for "
+                f"{pinned} to match."
+            )
+            continue
+        (want,) = release
+        for tag, slices in sorted(tags[pinned].items(), key=lambda kv: kv[0] or ""):
+            if tag == want:
+                continue
+            # render-check.sh names each render file after its slice directory
+            # with `/` spelled `__`, so the stem leads back to the values file
+            # that carries the pin.
+            for stem in sorted(slices):
+                values = stem.replace("__", "/") + "/values.yaml"
+                problems.append(
+                    f"{pinned} renders at {tag or 'no tag'} in {stem}, a different release "
+                    f"from {chart_tagged}:{want}. The two ship together; set the hand-pinned "
+                    f"tag to {want} in {values}."
+                )
     return problems
 
 
@@ -309,6 +389,31 @@ def controls() -> int:
     case("a registry:port host is not mistaken for a tag", pins,
          {"reg.io:5000/x": {"s"}}, {"reg.io:5000/x:1.2.3": {"s"}})
 
+    # Release agreement, against a pair of its own so no control depends on what
+    # the shipped table names.
+    def released(imgs):
+        return check_release_tags(imgs, {"reg.io:5000/hook": "reg.io:5000/app"})
+
+    app = {"reg.io:5000/app:2.0.0": {"s"}}
+    case("a hand-pinned tag on a different release from its chart's images", released,
+         {**app, "reg.io:5000/hook:1.0.0": {"stack__x__a"}},
+         {**app, "reg.io:5000/hook:2.0.0": {"stack__x__a"}},
+         "set the hand-pinned tag to 2.0.0 in stack/x/a/values.yaml")
+    case("a hand-pinned image with no tag to read a release from", released,
+         {**app, "reg.io:5000/hook@sha256:" + "a" * 64: {"s"}},
+         {**app, "reg.io:5000/hook:2.0.0@sha256:" + "a" * 64: {"s"}}, "different release")
+    case("a registry:port host is not read as the hand-pinned release", released,
+         {**app, "reg.io:5000/hook": {"s"}}, {**app, "reg.io:5000/hook:2.0.0": {"s"}},
+         "different release")
+    case("a hand-pinned tag is matched in every slice that renders it", released,
+         {**app, "reg.io:5000/hook:2.0.0": {"s"}, "reg.io:5000/hook:1.0.0": {"t"}},
+         {**app, "reg.io:5000/hook:2.0.0": {"s", "t"}}, "different release")
+    case("chart images at two releases leave nothing to match", released,
+         {**app, "reg.io:5000/app:1.0.0": {"t"}, "reg.io:5000/hook:2.0.0": {"s"}},
+         {**app, "reg.io:5000/hook:2.0.0": {"s"}}, "no single release")
+    case("a pair naming an image the render no longer produces", released,
+         dict(app), {**app, "reg.io:5000/hook:2.0.0": {"s"}}, "no longer produces")
+
     # Extraction: an image outside a pod spec is not something an adopter pulls.
     imgs = resolved_images(_render([DEPLOY % "r/real:1.0"]))
     if set(imgs) != {"r/real:1.0"}:
@@ -394,8 +499,11 @@ def main() -> int:
               f"over an empty set. Either the render is empty or the extraction is wrong.")
         return 1
 
-    check, label = (check_pins, "pinned") if args.pins else (check_cves,
-                    f"free of {'/'.join(FAIL_ON)} (high findings are reported, not failed on)")
+    def pinned(imgs):
+        return check_pins(imgs) + check_release_tags(imgs)
+
+    check, label = (pinned, "pinned, every hand pin on its chart's release") if args.pins else (
+        check_cves, f"free of {'/'.join(FAIL_ON)} (high findings are reported, not failed on)")
     print(f"check-images: {len(images)} image(s) across {len(set().union(*images.values()))} slice(s)")
     problems = exemptions_still_apply(images) + check(images)
     if problems:

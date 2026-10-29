@@ -416,6 +416,14 @@ UNTRACKED = "!"
 
 OPERATOR_IMAGE = DEPLOY_WITH % "ghcr.io/nanohype/eks-agent-platform/operator:dev"
 
+# The pair check-images holds to one release, by the names its RELEASED_TOGETHER
+# table carries. Every check-images fixture renders the pair, for the reason it
+# renders the operator image: the gate asserts each rule it carries still has a
+# subject in the render it is handed, and a render without the pair fails that
+# assertion whatever else it holds.
+RELEASED_PAIR = (DEPLOY_WITH % "reg.kyverno.io/kyverno/kyverno:v1.0.0" + "---\n"
+                 + DEPLOY_WITH % "ghcr.io/kyverno/readiness-checker:%s")
+
 # The operator Deployment as a render carries it: the image is what identifies it
 # among every other Deployment in the stack, and the argument list is the subject.
 OPERATOR_DEPLOY_WITH_ARGS = """apiVersion: apps/v1
@@ -465,6 +473,11 @@ BOUNDED_INSTALL = (
 # consulted, because that is testimony — a four-line gate returning a literal
 # {"ok": True, "lines": [...]} satisfied the two previous versions of this
 # floor with no checks behind it.
+#
+# Keyed by the gate's filename, or by any label when the probe names its script
+# in `gate`. A gate holding more than one property takes a probe per property:
+# one probe plants one violation, and a gate that stopped checking the second
+# property would still reject the first probe's tree.
 GATE_PROBES: dict[str, dict] = {
     "check-images.py": {
         "argv": ["--pins", "{root}/render"],
@@ -473,8 +486,20 @@ GATE_PROBES: dict[str, dict] = {
         # own exemptions against the render it is handed and an exemption whose
         # subject is absent is a finding in its own right. The fixture differs
         # in exactly the property under test and nothing else.
-        "bad": {"render/s.yaml": DEPLOY_WITH % "r/x:latest" + "---\n" + OPERATOR_IMAGE},
-        "good": {"render/s.yaml": DEPLOY_WITH % "r/x:1.2.3" + "---\n" + OPERATOR_IMAGE},
+        "bad": {"render/s.yaml": DEPLOY_WITH % "r/x:latest" + "---\n" + OPERATOR_IMAGE
+                + "---\n" + RELEASED_PAIR % "v1.0.0"},
+        "good": {"render/s.yaml": DEPLOY_WITH % "r/x:1.2.3" + "---\n" + OPERATOR_IMAGE
+                 + "---\n" + RELEASED_PAIR % "v1.0.0"},
+    },
+    "check-images.py (hand pins)": {
+        "gate": "check-images.py",
+        "argv": ["--pins", "{root}/render"],
+        "names": "readiness-checker renders at v0.1.0",
+        # Every reference immutable on both trees, so the only thing left to
+        # reject is a hand-pinned tag naming a different release from the
+        # chart's own image.
+        "bad": {"render/s.yaml": OPERATOR_IMAGE + "---\n" + RELEASED_PAIR % "v0.1.0"},
+        "good": {"render/s.yaml": OPERATOR_IMAGE + "---\n" + RELEASED_PAIR % "v1.0.0"},
     },
     "check-renovate-coverage.py": {
         "argv": [],
@@ -577,16 +602,19 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
         return ["found no gate scripts under scripts/ — refusing to report a proven suite "
                 "over an empty set."]
 
-    for name in sorted(GATE_PROBES):
-        if name not in present:
+    def script_of(name: str, probe: dict) -> str:
+        return probe.get("gate", name)
+
+    for name, probe in sorted(GATE_PROBES.items()):
+        if script_of(name, probe) not in present:
             problems.append(
-                f"GATE_PROBES names scripts/{name}, which is not in the tree — a probe that "
-                f"outlasts its gate proves nothing about whatever replaced it."
+                f"GATE_PROBES names scripts/{script_of(name, probe)}, which is not in the tree — "
+                f"a probe that outlasts its gate proves nothing about whatever replaced it."
             )
 
     observed = 0
     for name, probe in sorted(GATE_PROBES.items()):
-        if name not in present:
+        if script_of(name, probe) not in present:
             continue
         if "names" not in probe:
             problems.append(f"{name}: its probe declares no `names`, so a rejection for any "
@@ -596,7 +624,7 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
             problems.append(f"{name}: the probe's bad and good trees are identical, so running "
                             f"them proves nothing.")
             continue
-        gate = scripts_dir / name
+        gate = scripts_dir / script_of(name, probe)
         verdict, output = {}, {}
         for kind in ("bad", "good"):
             fixture = _tree(probe[kind])
@@ -646,8 +674,9 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
         if verdict.get("bad") is not None and verdict.get("good") is not None:
             observed += 1
 
+    probed = {script_of(name, probe) for name, probe in GATE_PROBES.items()}
     unprobed = [n for n in present
-                if n not in GATE_PROBES and n not in UNPROBEABLE
+                if n not in probed and n not in UNPROBEABLE
                 and n != pathlib.Path(__file__).name]
     if unprobed:
         problems.append(

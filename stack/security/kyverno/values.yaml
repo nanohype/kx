@@ -30,19 +30,23 @@ reportsController:
       cpu: 25m
       memory: 64Mi
 
-# The chart leaves this tag unset, and its own comment records what that means:
-# "Defaults to `latest` if omitted". A floating tag is a different program on
-# the next pull with nothing recording which one an adopter got, and `task up`
-# pulls it into whichever environment runs it.
+# Two chart hooks run ghcr.io/kyverno/readiness-checker, and the chart falls
+# back to a different tag for each. The webhook cleanup hook, the pre-delete
+# Jobs `helm uninstall` runs, takes the chart's appVersion. The test hook, the
+# Pods `helm test` starts, takes `latest`: a floating tag, a different program
+# on the next pull with nothing recording which one ran. The chart's values file
+# documents `latest` for both, so which default the cleanup hook gets depends on
+# which of the two a later chart version honours.
 #
-# v0.1.0 is the only semantic tag the registry publishes for this image; the
-# rest are commit shas. Pinned in both places the chart uses it — the webhook
-# cleanup hook, which runs on every install, and the test hook, which does not
-# render here but would carry the same default if it were enabled.
+# Both are pinned to the chart's appVersion, the release every Kyverno
+# controller image renders at, as eks-gitops pins the same two keys. They move
+# with the chart pin in install.sh: scripts/check-images.py fails the render
+# gate when these tags name a different release from the admission controller
+# image.
 webhooksCleanup:
   image:
-    tag: v0.1.0
+    tag: v1.19.2
 
 test:
   image:
-    tag: v0.1.0
+    tag: v1.19.2
