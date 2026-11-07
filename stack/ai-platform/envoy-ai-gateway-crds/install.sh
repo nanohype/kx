@@ -11,5 +11,5 @@ set -euo pipefail
 helm upgrade --install envoy-ai-gateway-crds oci://docker.io/envoyproxy/ai-gateway-crds-helm \
   --namespace envoy-gateway-system \
   --create-namespace \
-  --version 1.0.0 \
+  --version 1.2.0 \
   --wait --timeout 10m

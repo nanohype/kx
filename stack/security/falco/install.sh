@@ -11,6 +11,6 @@ kubectl create namespace falco --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install falco falcosecurity/falco \
   --namespace falco \
-  --version 9.1.0 \
+  --version 9.2.2 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
