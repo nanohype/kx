@@ -8,6 +8,6 @@ helm repo update descheduler >/dev/null
 
 helm upgrade --install descheduler descheduler/descheduler \
   --namespace kube-system \
-  --version 0.36.0 \
+  --version 0.37.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

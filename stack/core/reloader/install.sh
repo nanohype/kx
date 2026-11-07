@@ -8,6 +8,6 @@ helm repo update stakater >/dev/null
 
 helm upgrade --install reloader stakater/reloader \
   --namespace kube-system \
-  --version 2.2.15 \
+  --version 2.2.19 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
