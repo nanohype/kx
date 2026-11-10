@@ -10,6 +10,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install opencost opencost/opencost \
   --namespace monitoring \
-  --version 2.5.29 \
+  --version 2.5.33 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
