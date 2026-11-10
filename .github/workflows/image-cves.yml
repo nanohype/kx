@@ -68,7 +68,7 @@ jobs:
       # would need the upstream signing key.
       - name: Install trivy
         env:
-          TRIVY_VERSION: v0.74.0
+          TRIVY_VERSION: v0.76.2
           TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
         run: |
           url="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
