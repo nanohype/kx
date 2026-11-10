@@ -8,6 +8,6 @@ helm repo update metrics-server >/dev/null
 
 helm upgrade --install metrics-server metrics-server/metrics-server \
   --namespace kube-system \
-  --version 3.13.1 \
+  --version 3.14.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

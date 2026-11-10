@@ -9,6 +9,6 @@ kubectl create namespace argo --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install argo-rollouts argo/argo-rollouts \
   --namespace argo \
-  --version 2.41.1 \
+  --version 2.43.9 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
