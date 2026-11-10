@@ -19,6 +19,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install tempo grafana-community/tempo \
   --namespace monitoring \
-  --version 2.2.3 \
+  --version 2.4.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

@@ -14,6 +14,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
   --namespace monitoring \
-  --version 0.178.0 \
+  --version 0.178.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
