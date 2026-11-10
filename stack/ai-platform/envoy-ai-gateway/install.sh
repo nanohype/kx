@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm upgrade --install envoy-ai-gateway oci://docker.io/envoyproxy/ai-gateway-helm \
   --namespace envoy-gateway-system \
   --create-namespace \
-  --version 1.0.0 \
+  --version 1.2.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
 

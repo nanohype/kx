@@ -10,6 +10,6 @@ kubectl create namespace vpa --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install vpa fairwinds-stable/vpa \
   --namespace vpa \
-  --version 4.12.5 \
+  --version 5.2.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
