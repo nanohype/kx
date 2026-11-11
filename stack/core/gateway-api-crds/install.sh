@@ -5,7 +5,7 @@
 # Upstream: https://github.com/kubernetes-sigs/gateway-api
 set -euo pipefail
 
-GATEWAY_API_VERSION="v1.5.1"
+GATEWAY_API_VERSION="v1.7.0"
 # The digest of the manifest that version publishes. `kubectl apply -f <url>`
 # fetches and applies in one step, so without this the CRDs that define every
 # route kind in the cluster are whatever the release host serves at the moment

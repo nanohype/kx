@@ -74,6 +74,14 @@
   "packageRules": [
     {
       "description": [
+        "Exclude grafana-operator 5.25.0, whose published archive does not match the digest grafana's Helm index records for it (index sha256 23fc876a6e41..., release asset 4a5319f9796a...).",
+        "eks-gitops excludes the same version, because its chart fetcher refuses the mismatch, and kx mirrors the catalog's pin, so a kx bump to 5.25.0 can only fail 'Mirror the eks-gitops catalog'. Excludes that one version; drop this once grafana ships a release whose asset matches its index."
+      ],
+      "matchPackageNames": ["grafana-operator"],
+      "allowedVersions": "!/^5\\.25\\.0$/"
+    },
+    {
+      "description": [
         "Group the local stack's chart bumps so a slice moves in one PR rather than one per addon, the way the shared preset already groups helm charts elsewhere.",
         "Deliberately sets nothing but groupName. The preset warns that a consumer's packageRules are appended after its own and later rules win — a local rule setting automerge would defeat the security rule that must stay last. This sets no schedule either: the preset already extends schedule:weekly, and a schedule here would also land on CVE-triggered updates, which are meant to fire at any time."
       ],
