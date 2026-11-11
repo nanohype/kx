@@ -17,6 +17,6 @@ kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f 
 
 helm upgrade --install loki grafana-community/loki \
   --namespace monitoring \
-  --version 18.17.1 \
+  --version 21.0.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
