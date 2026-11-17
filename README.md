@@ -71,7 +71,7 @@ stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
 scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage, kyverno policy tests)
-tests/     fixtures the gates prove themselves against, and the Kyverno policy suite
+tests/     fixtures the gates prove themselves against, and the Kyverno policy suites
 Taskfile.yaml
 ```
 

@@ -15,9 +15,13 @@
 #     gw-envoy-only       → the sidecar only; envoy already had it
 #     gw-mutated          → unchanged: gw-plain's output admitted again
 #     gw-outside          → skipped: a gateway outside the tenants-* namespaces
+#     app-with-envoy      → skipped: containers named like the gateway's, in a
+#                           tenant namespace, without Envoy Gateway's proxy
+#                           labels — the object selector is what excludes it
 #
-# A pod without Envoy Gateway's proxy labels never reaches the policy at all —
-# the object selector filters it before Kyverno is asked — so it has no row.
+# The policies' own settings that no fixture can exercise offline —
+# synchronize, the backfill, fail-open, admission-only — are held by the
+# contract suite beside this one, tests/kyverno/bedrock-credentials-contract.
 apiVersion: cli.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -74,4 +78,9 @@ results:
     isMutatingPolicy: true
     kind: Pod
     resources: [gw-outside]
+    result: skip
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [app-with-envoy]
     result: skip

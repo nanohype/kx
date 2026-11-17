@@ -131,3 +131,22 @@ spec:
         - secretRef:
             name: kx-bedrock-credentials
             optional: true
+---
+# The gateway's container names, in a tenant namespace, on a pod Envoy Gateway
+# did not render. Only the object selector tells it apart from a gateway, so
+# this is the row that fails if the selector is dropped or loosened.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-envoy
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/name: app-with-envoy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0

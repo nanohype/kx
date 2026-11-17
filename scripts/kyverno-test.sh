@@ -18,9 +18,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTS="tests/kyverno"
 
 # Rows that evaluated a resource. Set to what the suite holds — the clone into a
-# tenant namespace and six pods — so a fixture that stops reaching its policy
-# fails here rather than passing as one fewer row.
-MIN_EVALUATED=7
+# tenant namespace, six pods, and the three manifests the contract suite
+# validates — so a fixture that stops reaching its policy fails here rather than
+# passing as one fewer row.
+MIN_EVALUATED=10
 
 if ! command -v kyverno >/dev/null 2>&1; then
   echo "Cannot run: kyverno is not on PATH. No policy was tested — that is"
@@ -32,6 +33,26 @@ cd "$ROOT" || { echo "Cannot run: $ROOT cannot be entered."; exit 2; }
 
 if [ ! -d "$TESTS" ]; then
   echo "Cannot run: $TESTS does not exist, so there is nothing to test."
+  exit 2
+fi
+
+# No legacy policy anywhere in the tree. Kyverno 1.20 does not execute a
+# kyverno.io policy, and chart 3.10's pre-upgrade hook refuses the upgrade while
+# one exists on the cluster, so a manifest declaring one is a slice that breaks
+# the security slice's next bump. The suite below cannot see it: it tests only
+# the policies its Test files name. Read off git's index rather than a walk, so a
+# scratch file in a working tree is not a finding and a tracked one is; git grep
+# exits 1 for no match, and anything above 1 is a search that did not happen.
+legacy="$(git -C "$ROOT" grep -lE '^apiVersion:[[:space:]]*["'\'']?kyverno\.io/' -- '*.yaml' '*.yml' 2>&1)"
+grc=$?
+if [ "$grc" -eq 0 ]; then
+  echo "FAIL  a tracked manifest declares a legacy kyverno.io policy:"
+  printf '%s\n' "$legacy" | sed 's/^/        /'
+  echo "      Kyverno 1.20 does not run these; write it as a policies.kyverno.io kind."
+  exit 1
+elif [ "$grc" -ne 1 ]; then
+  echo "Cannot run: git grep exited $grc searching for legacy kyverno.io manifests:"
+  printf '%s\n' "$legacy" | sed 's/^/  /'
   exit 2
 fi
 

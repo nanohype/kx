@@ -1,0 +1,111 @@
+# The bedrock-credentials slice's settings that no offline fixture can
+# exercise, held to what the legacy ClusterPolicy did (or to the deliberate
+# departure from it) by validating the slice's own manifests as resources.
+#
+# The behaviour suite beside this one runs both policies against fixtures, but
+# the CLI evaluates a GeneratingPolicy once against one trigger: it has no
+# source to rotate, no copy to delete, no existing namespace to backfill and no
+# webhook to fail. Every setting below is one of those, and every one of them
+# changes what a cluster does while leaving that suite green. Each validation
+# names the behaviour it protects.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: clone-local-bedrock-credentials-contract
+spec:
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [policies.kyverno.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [generatingpolicies]
+  matchConditions:
+    - name: this-slice
+      expression: object.metadata.name == 'clone-local-bedrock-credentials'
+  validations:
+    - expression: object.spec.?evaluation.?synchronize.?enabled.orValue(false) == true
+      message: >-
+        synchronize must be enabled: it is what carries a rotated source Secret to
+        every copy, removes the copies when the source is deleted, and restores a
+        copy deleted or edited by hand — the legacy rule's `synchronize: true`.
+    - expression: object.spec.?evaluation.?generateExisting.?enabled.orValue(false) == true
+      message: >-
+        generateExisting must be enabled: install.sh retires the legacy policy and
+        its copies, so tenant namespaces that already exist get a copy only from
+        the backfill.
+    - expression: object.spec.?evaluation.?admission.?enabled.orValue(true) == true
+      message: >-
+        admission must stay enabled: a tenant namespace created after install gets
+        its copy from the admission webhook, not from a re-run.
+    - expression: object.spec.?useServerSideApply.orValue(false) == false
+      message: >-
+        useServerSideApply would write the copies with patch, which rbac.yaml does
+        not grant the background controller.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: inject-local-bedrock-credentials-contract
+spec:
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [policies.kyverno.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [mutatingpolicies]
+  matchConditions:
+    - name: this-slice
+      expression: object.metadata.name == 'inject-local-bedrock-credentials'
+  validations:
+    - expression: object.spec.?failurePolicy.orValue('Fail') == 'Ignore'
+      message: >-
+        failurePolicy must be Ignore: a MutatingPolicy left unset fails closed, and
+        a local-credentials shortcut must never block pod admission in the
+        namespaces that run the platform's data plane.
+    - expression: object.spec.?evaluation.?admission.?enabled.orValue(true) == true
+      message: admission must stay enabled; it is the only path that mutates a gateway pod.
+    - expression: object.spec.?evaluation.?background.?enabled.orValue(true) == false
+      message: >-
+        background must be disabled explicitly — a MutatingPolicy defaults it on —
+        as the legacy policy's `background: false` did.
+    - expression: object.spec.?evaluation.?mutateExisting.?enabled.orValue(false) == false
+      message: >-
+        mutateExisting must stay off: a running container's envFrom cannot be
+        changed, so mutating existing pods could only fail.
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: bedrock-credentials-grant-contract
+spec:
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [clusterroles]
+  matchConditions:
+    - name: this-slice
+      expression: object.metadata.name == 'kyverno:bedrock-credentials-secrets'
+  variables:
+    - name: verbs
+      expression: >-
+        object.?rules.orValue([]).filter(r,
+          r.?apiGroups.orValue([]).exists(g, g == '') &&
+          r.?resources.orValue([]).exists(x, x == 'secrets')
+        ).map(r, r.?verbs.orValue([])).flatten()
+  validations:
+    - expression: >-
+        object.metadata.?labels[?'rbac.kyverno.io/aggregate-to-background-controller'].orValue('') == 'true'
+      message: >-
+        the grant must aggregate to the background controller, which is the one
+        that reads the source and writes every copy of a GeneratingPolicy.
+    - expression: >-
+        ['get', 'list', 'watch', 'create', 'update', 'delete'].all(v, v in variables.verbs)
+      message: >-
+        the background controller needs get, list, watch, create, update and delete
+        on Secrets: read the source, write and keep the copies, withdraw them when
+        the source goes, and watch both to restore a copy and follow the source.

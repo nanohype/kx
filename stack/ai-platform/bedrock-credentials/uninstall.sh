@@ -21,7 +21,7 @@ GENERATOR="clone-local-bedrock-credentials"
 MUTATOR="inject-local-bedrock-credentials"
 GRANT="kyverno:bedrock-credentials-secrets"
 
-# Every namespace the clone rule targets. `|| true` on the listing because a
+# Every namespace the GeneratingPolicy targets. `|| true` on the listing because a
 # cluster with no tenant namespaces is the normal case, not an error.
 #
 # read -r rather than mapfile, for the reason verify.sh states beside it:

@@ -123,9 +123,13 @@ spec:
   # than a cluster that will not schedule. Unset, a MutatingPolicy fails closed.
   failurePolicy: Ignore
   # The ClusterPolicy's mutating webhook was registered with reinvocationPolicy
-  # IfNeeded; a MutatingPolicy defaults to Never, so the old behaviour is stated
-  # here. The patch adds a reference only where it is absent, so running again
-  # after a later webhook changes the pod adds nothing twice.
+  # IfNeeded, and so is the one Kyverno 1.19 and 1.20 register for every
+  # MutatingPolicy, whatever this field says: the engine sets IfNeeded on that
+  # webhook itself, and reads this field only into a MutatingAdmissionPolicy it
+  # generates from the policy, where it defaults to Never. It is written so the
+  # stored object states the reinvocation the webhook already has. The patch
+  # adds a reference only where it is absent, so running again after a later
+  # webhook changes the pod adds nothing twice.
   reinvocationPolicy: IfNeeded
   # Admission only. There is no value in scanning existing pods: a running
   # gateway that predates the policy is replaced by Envoy Gateway on the next
