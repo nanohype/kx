@@ -9,7 +9,7 @@
   "siblings": {
     "eks-agent-platform": {
       "repository": "nanohype/eks-agent-platform",
-      "ref": "1d289fecc4728afa61005d38aa558af8b76cbf61",
+      "ref": "81187c14984af17138ff57bbe300942183caa568",
       "used_by": "stack/ai-platform/operator — chart source and image build context; stack/ai-platform/conformance — the gateway conformance probes",
       "flagSource": "operators/cmd/main.go"
     }
