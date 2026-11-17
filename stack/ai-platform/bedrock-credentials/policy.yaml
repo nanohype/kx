@@ -181,10 +181,12 @@ spec:
     # in CreateContainerConfigError and the cause would be three layers from
     # the symptom.
     #
-    # A plain map rather than a typed Object.spec.containers.envFrom value: the
-    # Kyverno 1.19 the security slice pins panics converting a list of typed
-    # objects into a JSONPatch value, which the envFrom-absent branch below
-    # needs. The dyn() calls give the map one value type, as CEL requires.
+    # A plain map rather than a typed Object.spec.containers.envFrom value:
+    # Kyverno 1.19 panics converting a list of typed objects into a JSONPatch
+    # value, which the envFrom-absent branch below needs. A cluster keeps the
+    # Kyverno it last installed, so 1.19 stays a live engine for this policy
+    # until the security slice is re-run, and the map form works under 1.19 and
+    # 1.20 alike. The dyn() calls give the map one value type, as CEL requires.
     - name: ref
       expression: >-
         {"secretRef": {"name": dyn(variables.secret), "optional": dyn(true)}}

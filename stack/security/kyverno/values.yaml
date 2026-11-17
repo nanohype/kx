@@ -4,10 +4,17 @@
 
 admissionController:
   replicas: 1
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
+  # The admission controller reads its container's resources from
+  # admissionController.container.resources. A bare admissionController.resources
+  # is read by no template, so a request set there leaves the pod on the chart
+  # default while this file says otherwise. The other three controllers read
+  # <controller>.resources directly, as below. The chart's 384Mi memory limit
+  # stays: helm merges this map into the chart default.
+  container:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
 
 backgroundController:
   replicas: 1
@@ -30,23 +37,34 @@ reportsController:
       cpu: 25m
       memory: 64Mi
 
-# Two chart hooks run ghcr.io/kyverno/readiness-checker, and the chart falls
-# back to a different tag for each. The webhook cleanup hook, the pre-delete
-# Jobs `helm uninstall` runs, takes the chart's appVersion. The test hook, the
-# Pods `helm test` starts, takes `latest`: a floating tag, a different program
-# on the next pull with nothing recording which one ran. The chart's values file
-# documents `latest` for both, so which default the cleanup hook gets depends on
-# which of the two a later chart version honours.
+# Two chart hooks run ghcr.io/kyverno/readiness-checker: the webhook cleanup
+# hook, the pre-delete Jobs `helm uninstall` runs, and the test hook, the Pods
+# `helm test` starts. Chart releases before 3.10 left both tags unset: the
+# cleanup hook then fell back to the chart's appVersion, and the test hook to
+# what the chart's values comment still records — "Defaults to `latest` if
+# omitted", a floating tag, a different program on the next pull with nothing
+# recording which one ran. 3.10 sets both tags to its appVersion itself; the
+# pins stay so neither hook can fall back to `latest` on a chart that drops
+# them again.
 #
 # Both are pinned to the chart's appVersion, the release every Kyverno
 # controller image renders at, as eks-gitops pins the same two keys. They move
 # with the chart pin in install.sh: scripts/check-images.py fails the render
 # gate when these tags name a different release from the admission controller
 # image.
+#
+# No `upgrade:` block. Chart 3.10 refuses to install or upgrade while any legacy
+# kyverno.io policy (ClusterPolicy, Policy, CleanupPolicy, ClusterCleanupPolicy,
+# PolicyException) exists on the cluster, through a render-time lookup and a
+# pre-install/pre-upgrade hook Job. kx ships none — the bedrock-credentials slice
+# is on the policies.kyverno.io CEL kinds — so the check is left on and
+# upgrade.acknowledgeLegacyPoliciesNotEnforced unset: acknowledging would not
+# restore enforcement, only hide that a project's legacy policy has stopped
+# being enforced.
 webhooksCleanup:
   image:
-    tag: v1.19.2
+    tag: v1.20.0
 
 test:
   image:
-    tag: v1.19.2
+    tag: v1.20.0

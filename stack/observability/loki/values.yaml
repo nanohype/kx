@@ -64,11 +64,3 @@ distributor: { replicas: 0 }
 compactor: { replicas: 0 }
 indexGateway: { replicas: 0 }
 bloomGateway: { replicas: 0 }
-
-monitoring:
-  selfMonitoring:
-    enabled: false
-    grafanaAgent:
-      installOperator: false
-  lokiCanary:
-    enabled: false
