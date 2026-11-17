@@ -1,0 +1,105 @@
+# The bedrock-credentials slice's two policies, offline. Run by
+# scripts/kyverno-test.sh, in CI and as `task test:kyverno`.
+#
+#   clone-local-bedrock-credentials (GeneratingPolicy)
+#     tenants-alpha       → a copy of the source Secret, data and type intact
+#     tenants-beta        → the same, in tenants-beta: each copy lands in the
+#                           namespace that triggered it
+#     default             → nothing; not a tenant namespace
+#     kx-tenants-alpha    → nothing; the prefix is anchored, not a substring
+#
+#   inject-local-bedrock-credentials (MutatingPolicy), every row asserting the
+#   patched pod rather than only a verdict, since a MutatingPolicy reports pass
+#   whether or not it changed anything
+#     gw-plain            → the reference on the sidecar and on envoy
+#     gw-other-envfrom    → appended after the sidecar's own entry, which stays
+#     gw-no-extproc       → envoy only; no sidecar is invented
+#     gw-envoy-only       → the sidecar only; envoy already had it
+#     gw-mutated          → unchanged: gw-plain's output admitted again
+#     gw-reordered        → the reference at the index each name was found at,
+#                           with another container ahead of each
+#     gw-outside          → skipped: a gateway outside the tenants-* namespaces
+#     gw-kx-tenants       → skipped: the prefix is anchored, not a substring
+#     app-with-envoy      → skipped: containers named like the gateway's, in a
+#                           tenant namespace, without Envoy Gateway's proxy
+#                           labels — the object selector is what excludes it
+#     gw-managed-by-only, gw-component-only
+#                         → skipped: the selector needs both proxy labels
+#
+# The policies' own settings that no fixture can exercise offline —
+# synchronize, the backfill, fail-open, admission-only — are held by the
+# contract suite beside this one, tests/kyverno/bedrock-credentials-contract.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bedrock-credentials
+policies:
+  - ../../../stack/ai-platform/bedrock-credentials/policy.yaml
+resources:
+  - namespaces.yaml
+  - pods.yaml
+context: context.yaml
+results:
+  - policy: clone-local-bedrock-credentials
+    isGeneratingPolicy: true
+    kind: Namespace
+    resources: [tenants-alpha]
+    generatedResource: generated/tenants-alpha.yaml
+    result: pass
+  - policy: clone-local-bedrock-credentials
+    isGeneratingPolicy: true
+    kind: Namespace
+    resources: [tenants-beta]
+    generatedResource: generated/tenants-beta.yaml
+    result: pass
+  - policy: clone-local-bedrock-credentials
+    isGeneratingPolicy: true
+    kind: Namespace
+    resources: [default, kx-tenants-alpha]
+    result: skip
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-plain]
+    patchedResources: patched/gw-plain.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-other-envfrom]
+    patchedResources: patched/gw-other-envfrom.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-no-extproc]
+    patchedResources: patched/gw-no-extproc.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-envoy-only]
+    patchedResources: patched/gw-envoy-only.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-mutated]
+    patchedResources: patched/gw-mutated.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-reordered]
+    patchedResources: patched/gw-reordered.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [gw-outside]
+    result: skip
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
+    resources: [app-with-envoy, gw-kx-tenants, gw-managed-by-only, gw-component-only]
+    result: skip

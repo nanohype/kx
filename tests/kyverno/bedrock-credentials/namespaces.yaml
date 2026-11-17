@@ -1,0 +1,23 @@
+# The triggers the GeneratingPolicy is offered: two tenant namespaces, each
+# expecting its copy in itself — so a policy writing every copy into one fixed
+# namespace fails — and two that must not match, one outside the prefix and one
+# carrying it mid-name.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenants-alpha
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenants-beta
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kx-tenants-alpha

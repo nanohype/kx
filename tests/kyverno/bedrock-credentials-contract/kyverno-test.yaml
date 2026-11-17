@@ -1,0 +1,27 @@
+# The bedrock-credentials slice's manifests, validated as resources against
+# contract.yaml. Run by scripts/kyverno-test.sh with the behaviour suite.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bedrock-credentials-contract
+policies:
+  - contract.yaml
+resources:
+  - ../../../stack/ai-platform/bedrock-credentials/policy.yaml
+  - ../../../stack/ai-platform/bedrock-credentials/rbac.yaml
+results:
+  - policy: clone-local-bedrock-credentials-contract
+    isValidatingPolicy: true
+    kind: GeneratingPolicy
+    resources: [clone-local-bedrock-credentials]
+    result: pass
+  - policy: inject-local-bedrock-credentials-contract
+    isValidatingPolicy: true
+    kind: MutatingPolicy
+    resources: [inject-local-bedrock-credentials]
+    result: pass
+  - policy: bedrock-credentials-grant-contract
+    isValidatingPolicy: true
+    kind: ClusterRole
+    resources: ["kyverno:bedrock-credentials-secrets"]
+    result: pass

@@ -1,0 +1,27 @@
+# The sidecar's own envFrom entry is kept and the reference appended after it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-other-envfrom
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+      envFrom:
+        - configMapRef:
+            name: extproc-tuning
+        - secretRef:
+            name: kx-bedrock-credentials
+            optional: true
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+      envFrom:
+        - secretRef:
+            name: kx-bedrock-credentials
+            optional: true

@@ -34,7 +34,7 @@ eks-agent-platform mirror (these are direct mirrors, not substitutes):
 | envoy-ai-gateway-crds (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway-crds | Same OCI chart and pin. Its own release because the AI-layer chart does not ship its CRDs |
 | envoy-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-gateway | Same OCI chart and values, including `GatewayNamespace` deploy mode — each tenant's Envoy runs in the tenant namespace, so the topology under test matches production |
 | envoy-ai-gateway (ns envoy-gateway-system) | stack/ai-platform/envoy-ai-gateway | Same OCI chart, single controller replica. No credential in this slice either side: on the cluster a BackendSecurityPolicy names a region and Pod Identity supplies the rest; locally there is no association, so credentials come from the opt-in `bedrock-credentials` slice below |
-| (Pod Identity association on the tenant ServiceAccount) | stack/ai-platform/bedrock-credentials | Opt-in, local-only, needs the security slice. A Kyverno policy clones a credentials Secret into each `tenants-*` namespace and adds it to the gateway's `ai-gateway-extproc` sidecar — the container that evaluates the AWS credential chain, since Envoy AI Gateway resolves credentials and SigV4-signs in its external processor rather than in Envoy. The sidecar is declared native, so it lives under `initContainers`. Mutating at admission rather than patching, because Envoy Gateway regenerates the data plane from the EnvoyProxy and a patch is reconciled away |
+| (Pod Identity association on the tenant ServiceAccount) | stack/ai-platform/bedrock-credentials | Opt-in, local-only, needs the security slice. A Kyverno GeneratingPolicy clones a credentials Secret into each `tenants-*` namespace and a MutatingPolicy adds it to the gateway's `ai-gateway-extproc` sidecar — the container that evaluates the AWS credential chain, since Envoy AI Gateway resolves credentials and SigV4-signs in its external processor rather than in Envoy. The sidecar is declared native, so it lives under `initContainers`. Mutating at admission rather than patching, because Envoy Gateway regenerates the data plane from the EnvoyProxy and a patch is reconciled away |
 | operator (ns eks-agent-platform) | stack/ai-platform/operator | Built from the sibling eks-agent-platform checkout + kind-loaded (image isn't published); `--disable-aws`, self-signed webhook issuer, cilium netpol. Override the repo path with `KX_EKS_AGENT_PLATFORM_DIR` |
 | nvidia-gpu-operator / nvidia-dra-driver / aws-neuron-device-plugin | (not applicable) | No GPUs on kind |
 
@@ -47,7 +47,7 @@ eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`ek
 ## Labels on kx's own manifests
 
 The org `resource-tagging` standard's required k8s label tier binds tenant
-workloads — the three kinds the eks-gitops `require-labels` ClusterPolicy
+workloads — the three kinds the eks-gitops `require-labels` ValidatingPolicy
 matches, Deployment, StatefulSet and DaemonSet, outside the platform-managed
 namespaces. kx's own manifests are cluster fixtures, not tenant workloads, and
 none of them is one of those kinds. A production cluster would not match them

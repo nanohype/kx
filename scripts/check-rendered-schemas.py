@@ -6,7 +6,7 @@
 
 `helm template` proves a chart renders. It does not prove the result is a valid
 Kubernetes object, and in a catalog mirror the objects that matter most are the
-custom ones — ServiceMonitor, ClusterPolicy, Gateway, Platform. A render gate
+custom ones — ServiceMonitor, MutatingPolicy, Gateway, Platform. A render gate
 alone accepts a ServiceMonitor with a misspelled field and every check stays
 green until the API server refuses it on a cluster.
 

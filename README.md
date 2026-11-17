@@ -70,8 +70,8 @@ cluster/   kind config, cluster lifecycle tasks, local registry + coredns setup
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
-scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage)
-tests/     fixtures the gates prove themselves against
+scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage, kyverno policy tests)
+tests/     fixtures the gates prove themselves against, and the Kyverno policy suites
 Taskfile.yaml
 ```
 
@@ -96,7 +96,8 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | `task stack:ai-platform:enable` fails on the operator | No sibling `eks-agent-platform` checkout — the operator image is built locally, not published | Clone it beside `kx`, or set `KX_EKS_AGENT_PLATFORM_DIR` |
 | `task stack:data:druid:enable` fails on a missing chart | Druid runs the unmodified `eks-gitops` chart from a sibling checkout | Clone `eks-gitops` beside `kx`, or set `KX_DRUID_CHART_DIR` |
 | Bedrock calls return `AccessDeniedException` | The `bedrock-credentials` slice is not installed, the profile's SSO session expired, or the account does not allow Bedrock in the signing region | `aws sso login`, then `task stack:ai-platform:credentials`; `AWS_REGION` picks the signing region (default us-east-1) |
-| `bedrock-credentials` refuses to install | Kyverno is absent — the slice is a mutating policy | `task stack:security:enable` first |
+| `bedrock-credentials` refuses to install | Kyverno is absent, or older than the GeneratingPolicy and MutatingPolicy kinds the slice declares | `task stack:security:enable` first |
+| A Kyverno chart upgrade fails on the `kyverno-check-legacy-policies` hook | Kyverno 1.20 no longer runs `kyverno.io/v1` policies, and an earlier `bedrock-credentials` install left its ClusterPolicy behind | `task stack:ai-platform:credentials` once — it retires the old policy and its copies before installing the replacements — then retry the upgrade |
 | Credentials installed but gateways still fail | Envoy Gateway regenerates the data plane on its own schedule; running proxies predate the Secret | `kubectl delete pod -A -l app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy` |
 | A chart bump fails `Validate every rendered resource against a schema` | A rendered resource no longer matches its CRD — the API server would reject it too | Read the reported path (e.g. `/spec/endpoints/0/port`); for any kind whose CRD is in the render, this is a real incompatibility |
 | ...but the failing kind is a `Cilium*` resource | Cilium registers its CRDs at operator runtime, so that schema comes from the community catalog and is **not** version-matched to the pinned chart | Triage schema skew first — compare against the CRD the running operator registered before treating the manifest as wrong |

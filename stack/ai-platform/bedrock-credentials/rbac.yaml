@@ -1,0 +1,40 @@
+# Kyverno ships with no rights over Secrets, and the GeneratingPolicy in
+# policy.yaml reads one Secret and writes copies of it, so its controller picks
+# up the rights from a ClusterRole carrying the aggregation label.
+#
+# Granted by aggregation rather than by binding to Kyverno's ServiceAccount
+# directly: the chart owns that binding, so a direct binding would be a second
+# owner of the same subject and would drift on upgrade.
+#
+# Only the background controller. A GeneratingPolicy is evaluated there and
+# nowhere else: the admission controller's part is to record an UpdateRequest
+# naming the namespace that triggered it, which reads no Secret. (The legacy
+# ClusterPolicy this replaced also needed the admission controller, which
+# checked the generate rule's Secret permissions when the policy was admitted;
+# a GeneratingPolicy is admitted without that check, so granting the admission
+# controller Secret rights would grant something nothing uses.) The
+# MutatingPolicy needs no Secret rights at all: it adds a reference by name and
+# never reads the Secret.
+#
+# The grant is cluster-wide over Secrets, and the resource scope is the only
+# bound on it: the clone reads a source in one namespace and writes targets in
+# namespaces that do not exist yet, so it cannot be namespaced or named.
+# Installing this opt-in slice widens Kyverno from no Secret rights to reading
+# every Secret in the cluster, for as long as the ClusterRole exists.
+# `task stack:ai-platform:credentials:disable` removes it.
+#
+# The verb set is what the generator and its watcher call: get to read the
+# source, create and update to write a copy and keep it current, delete to
+# withdraw the copies when the source goes, list and watch for the watcher that
+# restores a deleted copy and follows the source. Not `patch` — the policy does
+# not set useServerSideApply, so nothing here patches or applies a Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno:bedrock-credentials-secrets
+  labels:
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
