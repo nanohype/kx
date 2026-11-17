@@ -1,0 +1,12 @@
+# The source's data and type, in the tenant namespace that triggered the clone.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kx-bedrock-credentials
+  namespace: tenants-alpha
+type: Opaque
+data:
+  AWS_ACCESS_KEY_ID: QUtJQUVYQU1QTEU=
+  AWS_SECRET_ACCESS_KEY: bm90LWEtcmVhbC1rZXk=
+  AWS_SESSION_TOKEN: bm90LWEtcmVhbC10b2tlbg==
+  AWS_REGION: dXMtZWFzdC0x

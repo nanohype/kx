@@ -98,9 +98,23 @@ fi
 # - gateway-api-crds is kubectl-apply only
 # - druid renders via helm template → filter → kubectl apply (Helm v4 dropped
 #   the exec post-renderer); its chart is validated in eks-gitops CI, where it lives
-# - bedrock-credentials installs no chart: it applies a Kyverno policy and an
-#   aggregated ClusterRole, both plain manifests the yaml lint already covers
+# - bedrock-credentials installs no chart: it applies two Kyverno policies and
+#   an aggregated ClusterRole, plain manifests listed in MANIFESTS below
 SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
+
+# Plain manifests a slice applies with `kubectl apply -f`, written into the
+# render output unchanged so the schema gate validates them with everything
+# else. Rendering is not what they need — there is nothing to template — but
+# validating is: bedrock-credentials declares Kyverno's GeneratingPolicy and
+# MutatingPolicy, and the schemas for those come from the CRDs the security
+# slice's pinned Kyverno chart renders. A kind or field that chart does not
+# serve fails there, on the pull request, rather than at `kubectl apply` on a
+# workstation. Each entry is `slice:file`, and the slice's install.sh must apply
+# the file, so the list cannot validate a manifest the installer never sends.
+MANIFESTS=(
+  "stack/ai-platform/bedrock-credentials:rbac.yaml"
+  "stack/ai-platform/bedrock-credentials:policy.yaml"
+)
 
 # The exemptions, asserted rather than described. An entry naming a slice that
 # no longer exists silently exempts whatever takes that path next, and an entry
@@ -127,6 +141,27 @@ for s in "${SKIP[@]}"; do
   elif [[ "$rc" -ne 1 ]]; then
     echo "FAIL  could not determine whether $s runs \`helm upgrade --install\` — grep exited $rc."
     echo "      The exemption is unexamined, so it cannot be allowed to stand."
+    exit 2
+  fi
+done
+
+# The manifest entries, asserted like the exemptions: a file that is gone, or
+# one its installer no longer applies, is a validation of something nothing
+# installs. Checked before anything renders, so the run stops on it.
+for m in "${MANIFESTS[@]}"; do
+  slice="${m%%:*}"
+  file="${m#*:}"
+  if [[ ! -f "$ROOT/$slice/$file" ]]; then
+    echo "FAIL  MANIFESTS names $slice/$file, which does not exist."
+    exit 2
+  fi
+  rc=0
+  grep -qE "^[[:space:]]*kubectl apply -f \"\\\$\{SCRIPT_DIR\}/$file\"" "$ROOT/$slice/install.sh" || rc=$?
+  if [[ "$rc" -eq 1 ]]; then
+    echo "FAIL  MANIFESTS names $slice/$file, but $slice/install.sh does not apply it."
+    exit 2
+  elif [[ "$rc" -ne 0 ]]; then
+    echo "FAIL  could not determine whether $slice/install.sh applies $file — grep exited $rc."
     exit 2
   fi
 done
@@ -244,5 +279,26 @@ for script in "${scripts[@]}"; do
     fail=1
   fi
 done
+
+# After every chart, so the CRDs these are validated against are already in the
+# output. One render file per slice, named the way the helm renders are, and
+# cleared first: the output directory is reused when this is re-run, and
+# appending to last run's file would validate every manifest twice.
+if [[ -n "${KX_RENDER_OUT:-}" ]]; then
+  mkdir -p "$KX_RENDER_OUT"
+  for m in "${MANIFESTS[@]}"; do
+    slice="${m%%:*}"
+    rm -f "$KX_RENDER_OUT/${slice//\//__}.yaml"
+  done
+  for m in "${MANIFESTS[@]}"; do
+    slice="${m%%:*}"
+    out_file="$KX_RENDER_OUT/${slice//\//__}.yaml"
+    if [[ -s "$out_file" ]]; then
+      printf -- '---\n' >>"$out_file"
+    fi
+    cat "$ROOT/$slice/${m#*:}" >>"$out_file"
+    echo "OK    $slice/${m#*:} (plain manifest, written for the schema gate)"
+  done
+fi
 
 exit "$fail"

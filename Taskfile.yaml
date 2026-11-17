@@ -11,6 +11,7 @@ version: '3'
 #   task stack:<slice>:disable       uninstall an opt-in slice
 #   task stack:all:enable            install every opt-in slice (skips druid)
 #   task port-forward:model-gateway  forward a Platform's model gateway
+#   task test:kyverno                the Kyverno policy tests, no cluster needed
 #
 # The ArgoCD and Grafana UIs need no task — they are NodePorts published on
 # loopback at localhost:30080 and localhost:30030.
@@ -68,6 +69,14 @@ tasks:
       - kubectl -n tenants-{{.PLATFORM}} port-forward svc/{{.PLATFORM}}-gateway 8080:8080
     requires:
       vars: [PLATFORM]
+
+  # Clusterless: the bedrock-credentials policies against the fixtures in
+  # tests/kyverno, the same suite the kyverno CI job runs. Needs the kyverno CLI
+  # on PATH, at the release stack/security/kyverno/values.yaml names.
+  test:kyverno:
+    desc: Run the Kyverno policy tests (needs the kyverno CLI)
+    cmds:
+      - bash scripts/kyverno-test.sh
 
   argocd:initial-password:
     desc: Print the ArgoCD admin password

@@ -1,0 +1,133 @@
+# The pods the MutatingPolicy is offered. Envoy Gateway labels its proxy pods
+# with the two labels below; the images are illustrative and nothing pulls them.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-plain
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+    - name: shutdown-manager
+      image: docker.io/envoyproxy/gateway:v1.6.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-other-envfrom
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+      envFrom:
+        - configMapRef:
+            name: extproc-tuning
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-no-extproc
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-outside
+  namespace: default
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/name: app
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-mutated
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+      envFrom:
+        - secretRef:
+            name: kx-bedrock-credentials
+            optional: true
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+      envFrom:
+        - secretRef:
+            name: kx-bedrock-credentials
+            optional: true
+    - name: shutdown-manager
+      image: docker.io/envoyproxy/gateway:v1.6.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-envoy-only
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+      envFrom:
+        - secretRef:
+            name: kx-bedrock-credentials
+            optional: true

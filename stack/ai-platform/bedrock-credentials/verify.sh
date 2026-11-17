@@ -2,7 +2,7 @@
 # Assert the credentials actually reached the container that signs.
 #
 # The failure this exists for: a mutation that matches nothing. Kyverno reports
-# a healthy policy either way — a ClusterPolicy that mutates zero pods is not an
+# a healthy policy either way — a MutatingPolicy that mutates zero pods is not an
 # error to Kyverno, it is a policy with nothing to do. The symptom would surface
 # much later as AccessDeniedException from Bedrock, which reads as an IAM
 # problem rather than a policy that never fired.
@@ -18,8 +18,8 @@
 # It reads the pod spec rather than the process environment because the Envoy
 # image is distroless — there is no shell and no `env` binary to exec. The spec
 # is sufficient: with the reference present and the Secret in the namespace,
-# injection is the kubelet's guarantee, and the clone rule is what puts the
-# Secret there.
+# injection is the kubelet's guarantee, and the GeneratingPolicy is what puts
+# the Secret there.
 set -euo pipefail
 
 SELECTOR="app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy"
@@ -60,13 +60,13 @@ for entry in "${PODS[@]}"; do
   ns="${entry%%/*}"
   pod="${entry##*/}"
 
-  # The signer first. A rename upstream makes the strategic-merge `(name):` key
-  # match nothing and add nothing, silently — so a missing container is reported
+  # The signer first. A rename upstream makes the policy's lookup by container
+  # name find nothing and add nothing, silently — so a missing container is reported
   # as its own failure rather than folded into a missing reference.
   if ! names_in "${pod}" "${ns}" initContainers | grep -qx "${SIGNER}"; then
     echo "FAIL  ${ns}/${pod} — no ${SIGNER} sidecar under initContainers" >&2
-    echo "      The signer container was renamed upstream; policy.yaml's" >&2
-    echo "      \`(name): ${SIGNER}\` patch matches nothing and adds nothing." >&2
+    echo "      The signer container was renamed upstream; policy.yaml looks it up" >&2
+    echo "      as ${SIGNER}, finds nothing, and adds nothing." >&2
     failed=1
     continue
   fi

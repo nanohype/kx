@@ -8,8 +8,9 @@
 # nothing and every call returns AccessDeniedException.
 #
 # This resolves the local profile once, stores it where Kyverno can clone it,
-# and installs the policy that clones it into each tenant namespace and points
-# the gateway's envoy container at it. Credentials are never patched onto a
+# and installs two policies: a GeneratingPolicy that clones it into each tenant
+# namespace, and a MutatingPolicy that points the gateway's signing sidecar (and
+# its envoy container) at the clone. Credentials are never patched onto a
 # running pod: the data plane is generated, so a patch is reconciled away.
 #
 # Optional slice. Without it the platform still installs and reconciles — only
@@ -48,7 +49,11 @@ SOURCE_NS="kyverno"
 # exits non-zero for a missing CRD and for an unreachable cluster alike, and
 # asserting the first while discarding the evidence sends an operator to install
 # Kyverno when nothing is listening.
-if ! kyverno_err="$(kubectl get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
+#
+# Both kinds policy.yaml declares, asked for by name: a Kyverno old enough to
+# serve neither is a Kyverno this slice cannot install into, and the remedy for
+# that is the same one.
+if ! kyverno_err="$(kubectl get crd generatingpolicies.policies.kyverno.io mutatingpolicies.policies.kyverno.io 2>&1 >/dev/null)"; then
   if printf '%s' "${kyverno_err}" | grep -qiE 'not found|NotFound'; then
     echo "Kyverno is not installed — run 'task stack:security:enable' first." >&2
   else
@@ -96,11 +101,53 @@ print(json.dumps({
 }))
 PY
 
+# ── Retire the ClusterPolicy this slice used to install ────────────────────
+#
+# Kyverno 1.20 no longer executes kyverno.io/v1 policies, and its chart refuses
+# to upgrade while one exists, so a cluster that ran an earlier version of this
+# slice has to lose it before the security slice can move. It is retired here,
+# by the slice that installed it, before its replacements go in.
+#
+# Its copies go with it, explicitly. A synchronizing generate rule deletes what
+# it made when its policy is deleted, but in the background and with nothing
+# here to wait on — and the GeneratingPolicy below will not overwrite a Secret it
+# does not own. Left to race, the old cleanup can land after the new backfill
+# skipped a namespace, and that tenant ends with no credentials at all. Deleted
+# by the label the old rule stamped, so a copy is gone before anything is asked
+# to make a new one, and nothing else in the namespace is touched: the rule-name
+# label is one only the ClusterPolicy wrote, since a GeneratingPolicy has no
+# rules to name.
+#
+# The kind is looked up rather than assumed: a Kyverno that no longer serves
+# clusterpolicies.kyverno.io has no legacy policy to retire, and `kubectl delete`
+# of a kind the server does not know is an error rather than a no-op. The CRD is
+# asked for by name, and only a NotFound answer counts as absent, for the reason
+# the Kyverno check above gives.
+LEGACY_POLICY="inject-local-bedrock-credentials"
+if legacy_err="$(kubectl get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
+  kubectl delete clusterpolicies.kyverno.io "${LEGACY_POLICY}" --ignore-not-found
+elif ! printf '%s' "${legacy_err}" | grep -qiE 'not found|NotFound'; then
+  echo "Could not determine whether the old ClusterPolicy kind is served — kubectl said:" >&2
+  printf '%s\n' "${legacy_err}" | sort -u | sed 's/^/  /' >&2
+  exit 1
+fi
+kubectl delete secrets --all-namespaces \
+  -l "generate.kyverno.io/policy-name=${LEGACY_POLICY},generate.kyverno.io/rule-name=clone-bedrock-credentials" \
+  --field-selector "metadata.name=${SECRET}" --ignore-not-found
+
+# The grant first, so the background controller can read the source and write
+# the copies by the time the GeneratingPolicy asks it to backfill.
+kubectl apply -f "${SCRIPT_DIR}/rbac.yaml"
 kubectl apply -f "${SCRIPT_DIR}/policy.yaml"
 
-# Wait for Kyverno to accept the policy. An unready ClusterPolicy silently
-# mutates nothing, which is the failure this slice exists to make impossible.
-kubectl wait --for=condition=Ready clusterpolicy/inject-local-bedrock-credentials --timeout=60s
+# Wait for Kyverno to accept both policies. An unready policy silently mutates
+# or generates nothing, which is the failure this slice exists to make
+# impossible. A CEL policy reports readiness as a boolean rather than as a
+# condition named Ready, so the wait reads that field.
+kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+  generatingpolicies.policies.kyverno.io/clone-local-bedrock-credentials \
+  mutatingpolicies.policies.kyverno.io/inject-local-bedrock-credentials \
+  --timeout=60s
 
 echo
 echo "── local Bedrock credentials installed ──"

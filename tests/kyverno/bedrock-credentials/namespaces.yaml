@@ -1,0 +1,16 @@
+# The triggers the GeneratingPolicy is offered: one tenant namespace, and two
+# that must not match — one outside the prefix, one carrying it mid-name.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenants-alpha
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kx-tenants-alpha

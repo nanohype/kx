@@ -1,0 +1,18 @@
+# What resource.get reads offline: the source Secret, where install.sh puts it.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Context
+metadata:
+  name: bedrock-credentials
+spec:
+  resources:
+    - apiVersion: v1
+      kind: Secret
+      metadata:
+        name: kx-bedrock-credentials
+        namespace: kyverno
+      type: Opaque
+      data:
+        AWS_ACCESS_KEY_ID: QUtJQUVYQU1QTEU=
+        AWS_SECRET_ACCESS_KEY: bm90LWEtcmVhbC1rZXk=
+        AWS_SESSION_TOKEN: bm90LWEtcmVhbC10b2tlbg==
+        AWS_REGION: dXMtZWFzdC0x

@@ -366,6 +366,73 @@ jobs:
           SIBLING_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
         run: python3 scripts/check-operator-flags.py --render "$RENDER_DIR" --chart-source "$SIBLING_DIR"
 
+  kyverno:
+    name: Kyverno policies behave as specified
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The suite runs twice, under two engines, and both are blocking.
+      #
+      # First, the Kyverno the security slice installs. Its release is read out
+      # of stack/security/kyverno/values.yaml, where the readiness-checker tags
+      # are held to the chart's own release by check-images.py, so this run
+      # moves with the chart pin and cannot quietly test a different engine from
+      # the one a workstation gets. Its digest comes from the checksums file the
+      # same release publishes: that catches a truncated or substituted archive,
+      # not a compromised release, which is the guarantee the kubeconform
+      # download gives too.
+      #
+      # Then the release pinned here, which is the one the policies were written
+      # against and the one the next chart bump installs. Renovate watches this
+      # pin; the first run needs no watching because it follows the chart.
+      #
+      # Downloaded to a file and checked before it is unpacked and run, with the
+      # retry set the kubeconform step above explains.
+      - name: Under the engine the security slice pins
+        run: |
+          ver="$(sed -n '/^webhooksCleanup:/,/^[^ ]/ s/^    tag: *\(v[0-9][^ ]*\)$/\1/p' stack/security/kyverno/values.yaml)"
+          if [[ ! "$ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "FAIL  read the security slice's Kyverno release as '$ver', which is not a version."
+            echo "      Testing against an unresolved release would grade the policies under"
+            echo "      whatever engine the download happened to name."
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/kyverno-$ver"
+          mkdir -p "$dir"
+          base="https://github.com/kyverno/kyverno/releases/download/$ver"
+          asset="kyverno-cli_${ver}_linux_x86_64.tar.gz"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+            -o "$dir/$asset" "$base/$asset"
+          curl -sSfL --max-time 60 --retry 3 --retry-connrefused --retry-all-errors \
+            -o "$dir/checksums.txt" "$base/checksums.txt"
+          sum="$(awk -v a="$asset" '$2 == a {print $1}' "$dir/checksums.txt")"
+          if [[ ! "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "FAIL  $ver's checksums.txt carries no digest for $asset."
+            exit 1
+          fi
+          (cd "$dir" && echo "$sum  $asset" | sha256sum -c -)
+          tar -xz -C "$dir" -f "$dir/$asset" kyverno
+          PATH="$dir:$PATH" ./scripts/kyverno-test.sh
+
+      - name: Under the release the policies target
+        env:
+          KYVERNO_VERSION: v1.20.0
+          KYVERNO_SHA256: 06b8f3ca7b5626473be8fb4d343ad54ab84e317142766f72420e7d44b80942e2
+        run: |
+          dir="$RUNNER_TEMP/kyverno-$KYVERNO_VERSION"
+          mkdir -p "$dir"
+          asset="kyverno-cli_${KYVERNO_VERSION}_linux_x86_64.tar.gz"
+          url="https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/$asset"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+            -o "$dir/$asset" "$url"
+          (cd "$dir" && echo "${KYVERNO_SHA256}  $asset" | sha256sum -c -)
+          tar -xz -C "$dir" -f "$dir/$asset" kyverno
+          PATH="$dir:$PATH" ./scripts/kyverno-test.sh
+
   merge-gate:
     name: merge gate
     runs-on: ubuntu-latest
@@ -377,6 +444,7 @@ jobs:
         chart-provenance,
         mirror,
         render,
+        kyverno,
       ]
     # always() is load-bearing: without it a failed dependency SKIPS this job,
     # and GitHub counts a skipped check as passing for branch protection, so the

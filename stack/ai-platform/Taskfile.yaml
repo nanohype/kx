@@ -36,10 +36,10 @@ tasks:
       - bash {{.TASKFILE_DIR}}/bedrock-credentials/verify.sh
 
   # The credential outlives the slice unless something withdraws it, and the
-  # copies outlive the policy unless something names them. uninstall.sh deletes
-  # the clones itself rather than waiting on Kyverno's background retraction,
-  # which has no barrier and which the last step of a teardown would race by
-  # revoking the Secret grant that controller needs.
+  # copies outlive the policy unless something names them: Kyverno leaves a
+  # cloned Secret in place when the GeneratingPolicy that cloned it is deleted,
+  # and puts back one deleted while the policy lives. uninstall.sh deletes the
+  # policies first and then the copies by name.
   credentials:disable:
     desc: Withdraw the local Bedrock credentials and the rights they needed
     cmds:

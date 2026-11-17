@@ -1,45 +1,95 @@
-# Kyverno ships with no rights over Secrets, so the clone rule below is
-# rejected at admission — "requires permissions list,get for resource v1/Secret"
-# — and the whole policy fails to install. Its controllers pick up rights from
-# ClusterRoles carrying these aggregation labels.
+# ── Clone the credentials into each tenant namespace ────────────────────────
 #
-# Granted by aggregation rather than by binding to Kyverno's ServiceAccounts
-# directly: the chart owns those bindings, so a direct binding would be a second
-# owner of the same subject and would drift on upgrade. Both controllers need
-# it — the admission controller evaluates the rule when a namespace is created,
-# the background controller owns synchronize.
-#
-# The grant is cluster-wide over Secrets, and the resource scope is the only
-# bound on it: a generate-clone reads a source in one namespace and writes
-# targets in namespaces that do not exist yet, so it cannot be namespaced or
-# named. Installing this opt-in slice widens Kyverno from no Secret rights to
-# reading every Secret in the cluster, for as long as the ClusterRole exists.
-# `task stack:ai-platform:credentials:disable` removes it.
-#
-# The verb set is what the generate rule calls: create and update to write the
-# clone, delete to withdraw it when the source goes, get/list/watch to read the
-# source and reconcile the copies. Not `patch` — nothing here patches a Secret.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+# envFrom.secretRef is namespace-local, so the Secret has to exist beside every
+# gateway. Generating it when a tenants-* namespace is created means a tenant
+# vended after setup is covered without re-running anything — the case a
+# one-shot script gets wrong precisely because nobody re-runs it.
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
 metadata:
-  name: kyverno:bedrock-credentials-secrets
-  labels:
-    rbac.kyverno.io/aggregate-to-admission-controller: "true"
-    rbac.kyverno.io/aggregate-to-background-controller: "true"
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  name: clone-local-bedrock-credentials
+  annotations:
+    policies.kyverno.io/title: Clone Local Bedrock Credentials
+    policies.kyverno.io/category: AI Platform
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/subject: Namespace, Secret
+    policies.kyverno.io/description: >-
+      Copies the kx-bedrock-credentials Secret from the kyverno namespace into
+      every tenants-* namespace, and keeps the copies equal to it. The
+      inject-local-bedrock-credentials MutatingPolicy points each tenant's
+      gateway at the copy in its own namespace. Local only: nothing installs
+      this on a real cluster, where each tenant reaches Bedrock through its own
+      Pod Identity association.
+spec:
+  # A GeneratingPolicy carries no failurePolicy field: Kyverno registers every
+  # one with failurePolicy Ignore, which is what the ClusterPolicy this replaced
+  # set by hand. Generation runs after admission, in the background controller,
+  # so it never decides whether a namespace is created.
+  evaluation:
+    admission:
+      enabled: true
+    # synchronize keeps the copies current: rotating the source Secret updates
+    # every tenant, deleting it removes them, and a copy deleted or edited by
+    # hand is put back. The ClusterPolicy rule set `synchronize: true` for the
+    # same three.
+    synchronize:
+      enabled: true
+    # Tenant namespaces that already exist when the policy is installed get
+    # their copy then, rather than at their next update. The ClusterPolicy did
+    # not backfill (its generateExisting defaulted to false), and that was safe
+    # only because it was the first thing ever installed here. It no longer is:
+    # install.sh retires that ClusterPolicy and the copies it made, so without
+    # the backfill every running tenant would lose its credentials until
+    # something next touched its namespace. The backfill writes a copy only where none is, or over one
+    # this policy already owns; a same-named Secret someone else put there is
+    # left alone.
+    generateExisting:
+      enabled: true
+    # Deleting this policy leaves its copies where they are. That is Kyverno's
+    # behaviour for a cloned resource whatever this says — the copies carry
+    # their source's UID, and only resources generated from data are removed
+    # with their policy — and it is stated so nobody reads the default as the
+    # opposite. uninstall.sh deletes the copies by name, after this policy.
+    orphanDownstreamOnPolicyDelete:
+      enabled: false
+    # Requests the background controller makes are not triggers. Kyverno's
+    # default, written out so the stored object matches this file.
+    skipBackgroundRequests: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        # The operations the ClusterPolicy's generate rule acted on. A
+        # namespace UPDATE regenerates a copy that is missing, as before.
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
+  # The ClusterPolicy matched `names: [tenants-*]`. resourceNames takes no
+  # wildcard, so the prefix is a condition. For a synchronizing policy Kyverno
+  # applies match conditions to CREATE only and lets every other operation
+  # through, so a namespace that stops matching can have its copy withdrawn —
+  # a namespace cannot be renamed, so here that never happens.
+  matchConditions:
+    - name: tenant-namespace
+      expression: object.metadata.name.startsWith('tenants-')
+  variables:
+    # The source. resource.get, not a copy of its data: the generator labels
+    # what it writes with the UID of what it read, and that label is how a
+    # change to the source reaches every copy.
+    - name: source
+      expression: resource.get("v1", "secrets", "kyverno", "kx-bedrock-credentials")
+  generate:
+    - expression: generator.apply(object.metadata.name, [variables.source])
 ---
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+# ── Point the gateway's containers at the copy ──────────────────────────────
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
 metadata:
   name: inject-local-bedrock-credentials
   annotations:
     policies.kyverno.io/title: Inject Local Bedrock Credentials
     policies.kyverno.io/category: AI Platform
     policies.kyverno.io/severity: low
-    policies.kyverno.io/subject: Pod, Secret
+    policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
       On a cluster the eks-agent-platform operator reconciles, each tenant's
       model gateway reaches Bedrock as the tenant: the operator points the
@@ -49,12 +99,12 @@ metadata:
       Pod Identity, so that chain resolves to nothing and every Bedrock call
       fails with AccessDeniedException.
 
-      This supplies the credentials the chain would have found. The Secret is
-      cloned into each tenant namespace as it appears, and referenced from the
-      ai-gateway-extproc sidecar of that namespace's gateway data plane — the
-      container that evaluates the chain, since Envoy AI Gateway resolves
-      credentials and SigV4-signs inside its external processor rather than in
-      Envoy.
+      This supplies the credentials the chain would have found. The
+      clone-local-bedrock-credentials GeneratingPolicy copies the Secret into
+      each tenant namespace; this references it from the ai-gateway-extproc
+      sidecar of that namespace's gateway data plane — the container that
+      evaluates the chain, since Envoy AI Gateway resolves credentials and
+      SigV4-signs inside its external processor rather than in Envoy.
 
       It exists because the alternative does not survive. The data plane is
       generated: Envoy Gateway renders the Deployment from the EnvoyProxy the
@@ -65,102 +115,145 @@ metadata:
       Local only. Nothing installs this on a real cluster, where the identity
       it stands in for actually exists.
 spec:
-  admission: true
-  # Mutation applies as pods are admitted. There is no value in scanning
-  # existing pods: a running gateway that predates the Secret is replaced by
-  # Envoy Gateway on the next reconcile and picks the mutation up then.
-  background: false
-  emitWarning: false
-  # Fail open. This policy only ever ADDS an envFrom reference and clones a
-  # Secret; it never rejects. A local-credentials shortcut must not be able to
-  # block pod admission in the namespaces that run the platform's own data
-  # plane — if Kyverno cannot evaluate it, the pod is still admitted and the
-  # symptom is the AccessDeniedException this existed to prevent, on that one
-  # gateway, rather than a cluster that will not schedule.
-  #
-  # Set under webhookConfiguration, the field GetFailurePolicy() consults first:
-  # the top-level spec.failurePolicy is deprecated, and leaving this path unset
-  # defaults the effective policy to Fail.
-  webhookConfiguration:
-    failurePolicy: Ignore
-  rules:
-    # ── Clone the credentials into each tenant namespace as it appears ────────
-    #
-    # envFrom.secretRef is namespace-local, so the Secret has to exist beside
-    # every gateway. Generating it on namespace creation means a tenant vended
-    # after setup is covered without re-running anything — the case a one-shot
-    # script gets wrong precisely because nobody re-runs it.
-    #
-    # synchronize keeps the copies current: rotating the source Secret updates
-    # every tenant, and deleting it removes them.
-    - name: clone-bedrock-credentials
-      match:
-        any:
-          - resources:
-              kinds:
-                - Namespace
-              names:
-                - tenants-*
-      generate:
-        apiVersion: v1
-        kind: Secret
-        name: kx-bedrock-credentials
-        namespace: "{{request.object.metadata.name}}"
-        synchronize: true
-        clone:
-          namespace: kyverno
-          name: kx-bedrock-credentials
-
-    # ── Point the gateway's envoy container at it ─────────────────────────────
-    #
+  # Fail open. This policy only ever ADDS an envFrom reference; it never
+  # rejects. A local-credentials shortcut must not be able to block pod
+  # admission in the namespaces that run the platform's own data plane — if
+  # Kyverno cannot evaluate it, the pod is still admitted and the symptom is the
+  # AccessDeniedException this existed to prevent, on that one gateway, rather
+  # than a cluster that will not schedule. Unset, a MutatingPolicy fails closed.
+  failurePolicy: Ignore
+  # The ClusterPolicy's mutating webhook was registered with reinvocationPolicy
+  # IfNeeded; a MutatingPolicy defaults to Never, so the old behaviour is stated
+  # here. The patch adds a reference only where it is absent, so running again
+  # after a later webhook changes the pod adds nothing twice.
+  reinvocationPolicy: IfNeeded
+  # Admission only. There is no value in scanning existing pods: a running
+  # gateway that predates the policy is replaced by Envoy Gateway on the next
+  # reconcile and picks the mutation up then — and a container's envFrom cannot
+  # be changed on a running pod anyway. Every field is written out, CRD defaults
+  # included, so the stored object matches this file field for field.
+  evaluation:
+    admission:
+      enabled: true
+    background:
+      enabled: false
+    mutateExisting:
+      enabled: false
+    skipBackgroundRequests: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        # CREATE only, where the ClusterPolicy also matched UPDATE. On a pod
+        # admitted after the policy an UPDATE has nothing to add; on one
+        # admitted before it, adding the reference would change a container's
+        # envFrom, which the API server refuses on an existing pod — so the
+        # UPDATE match could only ever turn an unrelated pod update, a label
+        # change, into a rejected one.
+        operations: ["CREATE"]
+        resources: ["pods"]
     # The label set is Envoy Gateway's own, read off a running data plane rather
     # than assumed: managed-by identifies the renderer and component
-    # distinguishes the proxy from the control plane. The container is named
-    # envoy; shutdown-manager sits beside it and needs nothing.
+    # distinguishes the proxy from the control plane. An object selector also
+    # keeps Kyverno from generating rules for Deployments and other pod
+    # controllers: autogen applies only to policies without one, and the
+    # ClusterPolicy carried a generate rule, which turned autogen off there too.
+    objectSelector:
+      matchLabels:
+        app.kubernetes.io/managed-by: envoy-gateway
+        app.kubernetes.io/component: proxy
+  # The ClusterPolicy matched `namespaces: [tenants-*]`. A namespace selector
+  # cannot express a name prefix, so it is a condition on the request.
+  matchConditions:
+    - name: tenant-namespace
+      expression: request.namespace.startsWith('tenants-')
+  variables:
+    - name: secret
+      expression: "'kx-bedrock-credentials'"
+    # The reference, optional. optional: true is what keeps this from being a
+    # footgun: a tenant namespace that has no Secret — someone ran the gateway
+    # slice without the credentials slice — gets a gateway that starts and
+    # fails on the Bedrock call, which is legible. Without it the pod would sit
+    # in CreateContainerConfigError and the cause would be three layers from
+    # the symptom.
     #
-    # optional: true is what keeps this from being a footgun. A tenant namespace
-    # that has no Secret — someone ran the gateway slice without the credentials
-    # slice — gets a gateway that starts and fails on the Bedrock call, which is
-    # legible. Without it the pod would sit in CreateContainerConfigError and
-    # the cause would be three layers from the symptom.
-    - name: mount-bedrock-credentials
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
-              namespaces:
-                - tenants-*
-              selector:
-                matchLabels:
-                  app.kubernetes.io/managed-by: envoy-gateway
-                  app.kubernetes.io/component: proxy
-      mutate:
-        patchStrategicMerge:
-          spec:
-            # The extproc sidecar is what signs. Envoy AI Gateway resolves the
-            # AWS credential chain and SigV4-signs the upstream Bedrock call
-            # inside its external processor, not inside Envoy — so this is the
-            # container that has to see the credentials. It is declared as a
-            # native sidecar, which means it lives under initContainers even
-            # though it runs for the life of the pod.
-            #
-            # Get this wrong and nothing looks broken: the pod is 3/3, the
-            # Gateway reports Programmed, and every model call returns 500 with
-            # "cannot retrieve AWS credentials ... no EC2 IMDS role found" from
-            # a container nobody was looking at.
-            initContainers:
-              - (name): ai-gateway-extproc
-                envFrom:
-                  - secretRef:
-                      name: kx-bedrock-credentials
-                      optional: true
-            # Envoy keeps them too. It needs no AWS identity for the Bedrock
-            # call, but leaving the reference here costs nothing and covers a
-            # future aigw release moving signing back into the proxy.
-            containers:
-              - (name): envoy
-                envFrom:
-                  - secretRef:
-                      name: kx-bedrock-credentials
-                      optional: true
+    # A plain map rather than a typed Object.spec.containers.envFrom value: the
+    # Kyverno 1.19 the security slice pins panics converting a list of typed
+    # objects into a JSONPatch value, which the envFrom-absent branch below
+    # needs. The dyn() calls give the map one value type, as CEL requires.
+    - name: ref
+      expression: >-
+        {"secretRef": {"name": dyn(variables.secret), "optional": dyn(true)}}
+    # The extproc sidecar is what signs. Envoy AI Gateway resolves the AWS
+    # credential chain and SigV4-signs the upstream Bedrock call inside its
+    # external processor, not inside Envoy — so this is the container that has
+    # to see the credentials. It is declared as a native sidecar, which means it
+    # lives under initContainers even though it runs for the life of the pod.
+    #
+    # Get this wrong and nothing looks broken: the pod is 3/3, the Gateway
+    # reports Programmed, and every model call returns 500 with "cannot
+    # retrieve AWS credentials ... no EC2 IMDS role found" from a container
+    # nobody was looking at.
+    #
+    # Each container is found by name, as the ClusterPolicy's `(name):` anchor
+    # found it: a pod without one gets nothing added for it, never a new
+    # container. -1 is the absent case.
+    - name: initContainers
+      expression: object.spec.?initContainers.orValue([])
+    - name: extproc
+      expression: variables.initContainers.map(c, c.name).indexOf('ai-gateway-extproc')
+    # Envoy keeps them too. It needs no AWS identity for the Bedrock call, but
+    # the reference costs nothing and covers a future aigw release moving
+    # signing back into the proxy. shutdown-manager sits beside it and needs
+    # nothing.
+    - name: envoy
+      expression: object.spec.containers.map(c, c.name).indexOf('envoy')
+    # Whether a container already carries the reference, so a pod mutated once
+    # is not given it twice — by a reinvocation, or by a template that already
+    # names it.
+    - name: extprocHasRef
+      expression: >-
+        variables.extproc >= 0 &&
+        variables.initContainers[variables.extproc].?envFrom.orValue([]).exists(e,
+          e.?secretRef.?name.orValue('') == variables.secret)
+    - name: envoyHasRef
+      expression: >-
+        variables.envoy >= 0 &&
+        object.spec.containers[variables.envoy].?envFrom.orValue([]).exists(e,
+          e.?secretRef.?name.orValue('') == variables.secret)
+  # Appended, never replacing. The ClusterPolicy's strategic-merge patch
+  # replaced the container's whole envFrom list, because envFrom has no merge
+  # key — a container that arrived with an envFrom entry of its own lost it.
+  # Envoy Gateway renders neither container with one, so on every pod this
+  # policy has actually met the result is the same list; where one does carry
+  # an entry, it is kept and the reference added after it.
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          (variables.extproc < 0 || variables.extprocHasRef ? [] : [
+            has(variables.initContainers[variables.extproc].envFrom)
+              ? JSONPatch{
+                  op: "add",
+                  path: "/spec/initContainers/" + string(variables.extproc) + "/envFrom/-",
+                  value: variables.ref
+                }
+              : JSONPatch{
+                  op: "add",
+                  path: "/spec/initContainers/" + string(variables.extproc) + "/envFrom",
+                  value: [variables.ref]
+                }
+          ]) +
+          (variables.envoy < 0 || variables.envoyHasRef ? [] : [
+            has(object.spec.containers[variables.envoy].envFrom)
+              ? JSONPatch{
+                  op: "add",
+                  path: "/spec/containers/" + string(variables.envoy) + "/envFrom/-",
+                  value: variables.ref
+                }
+              : JSONPatch{
+                  op: "add",
+                  path: "/spec/containers/" + string(variables.envoy) + "/envFrom",
+                  value: [variables.ref]
+                }
+          ])
