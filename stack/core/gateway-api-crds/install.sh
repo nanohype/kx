@@ -12,7 +12,7 @@ GATEWAY_API_VERSION="v1.7.0"
 # of the call — on the core path of every `task up`, before anything else is
 # installed. Checked here rather than trusted, the same way ci.yml checks
 # kubeconform before putting it on PATH.
-GATEWAY_API_SHA256="64ec76609a6ac885e0405dea79ca509c229fa019d342f0857aa8b6bdc8b8ba92"
+GATEWAY_API_SHA256="e6d2d3407717f54b579b22ad4d164b6863895b3524f21250b0da0c1ff9a05d53"
 
 # Experimental channel — superset of standard. Required by Cilium's Gateway API controller,
 # which references TLSRoute v1alpha2 (still alpha → ships only in the experimental channel).
