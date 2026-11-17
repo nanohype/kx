@@ -3,6 +3,8 @@
 #
 #   clone-local-bedrock-credentials (GeneratingPolicy)
 #     tenants-alpha       → a copy of the source Secret, data and type intact
+#     tenants-beta        → the same, in tenants-beta: each copy lands in the
+#                           namespace that triggered it
 #     default             → nothing; not a tenant namespace
 #     kx-tenants-alpha    → nothing; the prefix is anchored, not a substring
 #
@@ -14,10 +16,15 @@
 #     gw-no-extproc       → envoy only; no sidecar is invented
 #     gw-envoy-only       → the sidecar only; envoy already had it
 #     gw-mutated          → unchanged: gw-plain's output admitted again
+#     gw-reordered        → the reference at the index each name was found at,
+#                           with another container ahead of each
 #     gw-outside          → skipped: a gateway outside the tenants-* namespaces
+#     gw-kx-tenants       → skipped: the prefix is anchored, not a substring
 #     app-with-envoy      → skipped: containers named like the gateway's, in a
 #                           tenant namespace, without Envoy Gateway's proxy
 #                           labels — the object selector is what excludes it
+#     gw-managed-by-only, gw-component-only
+#                         → skipped: the selector needs both proxy labels
 #
 # The policies' own settings that no fixture can exercise offline —
 # synchronize, the backfill, fail-open, admission-only — are held by the
@@ -38,6 +45,12 @@ results:
     kind: Namespace
     resources: [tenants-alpha]
     generatedResource: generated/tenants-alpha.yaml
+    result: pass
+  - policy: clone-local-bedrock-credentials
+    isGeneratingPolicy: true
+    kind: Namespace
+    resources: [tenants-beta]
+    generatedResource: generated/tenants-beta.yaml
     result: pass
   - policy: clone-local-bedrock-credentials
     isGeneratingPolicy: true
@@ -77,10 +90,16 @@ results:
   - policy: inject-local-bedrock-credentials
     isMutatingPolicy: true
     kind: Pod
+    resources: [gw-reordered]
+    patchedResources: patched/gw-reordered.yaml
+    result: pass
+  - policy: inject-local-bedrock-credentials
+    isMutatingPolicy: true
+    kind: Pod
     resources: [gw-outside]
     result: skip
   - policy: inject-local-bedrock-credentials
     isMutatingPolicy: true
     kind: Pod
-    resources: [app-with-envoy]
+    resources: [app-with-envoy, gw-kx-tenants, gw-managed-by-only, gw-component-only]
     result: skip

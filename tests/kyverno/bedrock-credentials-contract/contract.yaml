@@ -42,6 +42,19 @@ spec:
       message: >-
         useServerSideApply would write the copies with patch, which rbac.yaml does
         not grant the background controller.
+    - expression: object.spec.?evaluation.?orphanDownstreamOnPolicyDelete.?enabled.orValue(false) == false
+      message: >-
+        orphanDownstreamOnPolicyDelete must stay off, so the stored policy states
+        what uninstall.sh is written against: it deletes this policy first and
+        then the copies by name.
+    - expression: >-
+        object.spec.matchConstraints.resourceRules.all(r,
+          r.resources == ['namespaces'] &&
+          sets.equivalent(r.operations, ['CREATE', 'UPDATE']))
+      message: >-
+        the policy must match namespaces on CREATE and UPDATE: CREATE gives a new
+        tenant its copy, and UPDATE regenerates a missing copy when an existing
+        tenant namespace is next touched, as the legacy generate rule did.
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
@@ -74,6 +87,13 @@ spec:
       message: >-
         mutateExisting must stay off: a running container's envFrom cannot be
         changed, so mutating existing pods could only fail.
+    - expression: >-
+        object.spec.matchConstraints.resourceRules.all(r,
+          r.resources == ['pods'] && r.operations == ['CREATE'])
+      message: >-
+        the policy must match pod CREATE only: a container's envFrom cannot change
+        on an existing pod, so matching UPDATE could only turn an unrelated pod
+        update into a rejected one.
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy

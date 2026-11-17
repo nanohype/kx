@@ -72,21 +72,6 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: app
-  namespace: tenants-alpha
-  labels:
-    app.kubernetes.io/name: app
-spec:
-  initContainers:
-    - name: ai-gateway-extproc
-      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
-  containers:
-    - name: envoy
-      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
----
-apiVersion: v1
-kind: Pod
-metadata:
   name: gw-mutated
   namespace: tenants-alpha
   labels:
@@ -142,6 +127,86 @@ metadata:
   namespace: tenants-alpha
   labels:
     app.kubernetes.io/name: app-with-envoy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+# The gateway's containers, each behind one that is not: a pod a later Envoy
+# Gateway or aigw release renders with another init container ahead of the
+# sidecar and another container ahead of envoy. The containers are found by
+# name, so this is the row that fails if the patch addresses an index it
+# assumed rather than the one it looked up.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-reordered
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: wait-for-xds
+      image: docker.io/library/busybox:1.37
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: shutdown-manager
+      image: docker.io/envoyproxy/gateway:v1.6.0
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+# A labelled gateway in a namespace carrying the prefix mid-name. The match is
+# anchored, as the GeneratingPolicy's kx-tenants-alpha row holds on its side.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-kx-tenants
+  namespace: kx-tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    app.kubernetes.io/component: proxy
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+# Each of Envoy Gateway's two proxy labels alone. managed-by alone is also on
+# the control plane's own resources and component alone is a common label, so
+# the selector needs both; each row fails if one of the two is dropped.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-managed-by-only
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+spec:
+  initContainers:
+    - name: ai-gateway-extproc
+      image: docker.io/envoyproxy/ai-gateway-extproc:v0.4.0
+      restartPolicy: Always
+  containers:
+    - name: envoy
+      image: docker.io/envoyproxy/envoy:distroless-v1.36.0
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gw-component-only
+  namespace: tenants-alpha
+  labels:
+    app.kubernetes.io/component: proxy
 spec:
   initContainers:
     - name: ai-gateway-extproc

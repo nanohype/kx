@@ -17,11 +17,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTS="tests/kyverno"
 
-# Rows that evaluated a resource. Set to what the suite holds — the clone into a
-# tenant namespace, six pods, and the three manifests the contract suite
+# Rows that evaluated a resource. Set to what the suite holds — the clone into
+# two tenant namespaces, eight pods, and the three manifests the contract suite
 # validates — so a fixture that stops reaching its policy fails here rather than
 # passing as one fewer row.
-MIN_EVALUATED=10
+MIN_EVALUATED=13
 
 if ! command -v kyverno >/dev/null 2>&1; then
   echo "Cannot run: kyverno is not on PATH. No policy was tested — that is"
