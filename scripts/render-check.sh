@@ -10,10 +10,14 @@
 # NOT the same command the installer runs, and the difference is deliberate:
 # `--wait` and `--hide-notes` are stripped because they are meaningless to
 # `helm template`, and `--include-crds` is added because helm omits a chart's
-# crds/ directory otherwise. What is guaranteed is narrower: the chart, its
-# version pin, and its values file are the installer's. Anything else added to or
-# stripped from that transform belongs in this list, so the header stays true as
-# the transform widens.
+# crds/ directory otherwise. A slice that renders rather than installs —
+# `helm template ... >"${VAR}"` into a kubectl apply, as envoy-gateway-crds does
+# because its chart is too large to store as a release — is lifted as written,
+# minus that trailing redirect: the render goes to this script's pipe, not the
+# installer's file. What is guaranteed is narrower: the chart, its version pin,
+# and its values file are the installer's. Anything else added to or stripped
+# from that transform belongs in this list, so the header stays true as the
+# transform widens.
 #
 # `--self-test` proves the lifting works, over the shapes the tree actually
 # contains. This script is the input to check-rendered-schemas.py, so an
@@ -23,14 +27,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Collapse the `helm upgrade --install ...` continuation block to one line.
+# Collapse the `helm upgrade --install ...` (or `helm template ...`) continuation
+# block to one line. On the block's last line, a redirect of stdout to a shell
+# variable is dropped: that is where a rendering installer sends its output, and
+# here the output belongs to the pipe below. Bracket expressions rather than
+# escapes, so BSD awk on a workstation reads the pattern the way the runner does.
 extract_helm_block() {
   awk '
-    /^helm upgrade --install/ { collecting = 1 }
+    /^helm (upgrade --install|template) / { collecting = 1 }
     collecting {
       line = $0
       cont = (line ~ /\\$/)
       sub(/[[:space:]]*\\$/, "", line)
+      if (!cont) sub(/[[:space:]]+>[[:space:]]*"?[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?"?[[:space:]]*$/, "", line)
       printf "%s ", line
       if (!cont) exit
     }
@@ -63,6 +72,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
 
   printf 'helm upgrade --install a oci://ghcr.io/o/c \\\n  --version 0.1.0\nkubectl apply -f x.yaml\n' >"$t/oci.sh"
   check "stops at the end of the block" "helm upgrade --install a oci://ghcr.io/o/c   --version 0.1.0 " "$t/oci.sh"
+
+  # shellcheck disable=SC2016  # the fixture is shell source; nothing here expands
+  printf 'M="$(mktemp)"\nhelm template a oci://r/c \\\n  --version 1.0.0 \\\n  --values "${SCRIPT_DIR}/v.yaml" >"${M}"\nkubectl apply -f "${M}"\n' >"$t/rendered.sh"
+  # shellcheck disable=SC2016  # the expected lift, verbatim, unexpanded
+  check "a rendering block, minus its redirect" 'helm template a oci://r/c   --version 1.0.0   --values "${SCRIPT_DIR}/v.yaml" ' "$t/rendered.sh"
 
   printf '#!/usr/bin/env bash\nkubectl apply -f x.yaml\n' >"$t/none.sh"
   check "no helm block yields nothing" "" "$t/none.sh"
@@ -214,7 +228,7 @@ for script in "${scripts[@]}"; do
   block="$(extract_helm_block "$script")"
 
   if [[ -z "$block" ]]; then
-    echo "FAIL  $slice — no helm upgrade --install block found (update SKIP if intentional)"
+    echo "FAIL  $slice — no helm upgrade --install or helm template block found (update SKIP if intentional)"
     fail=1
     continue
   fi

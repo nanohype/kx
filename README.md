@@ -58,7 +58,7 @@ kubectl -n my-project apply -f ...
 | secrets | external-secrets (kubernetes provider) | `task stack:secrets:enable` |
 | data | minio, velero, cloudnative-pg, nats | `task stack:data:enable` |
 | data → druid | apache druid (~4.5 GB resident) | `task stack:data:druid:enable` (requires the data slice) |
-| ai-platform | envoy-ai-gateway (+ CRDs), envoy-gateway, eks-agent-platform operator | `task stack:ai-platform:enable` |
+| ai-platform | envoy-ai-gateway (+ CRDs), envoy-gateway (+ CRDs), eks-agent-platform operator | `task stack:ai-platform:enable` |
 | ai-platform → credentials | local AWS identity for the model gateways (needs the security slice) | `task stack:ai-platform:credentials` |
 
 Each slice has a matching `:disable` target; the core stack stays up. `task stack:all:enable` enables every slice in a single command (excluding druid).

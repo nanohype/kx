@@ -47,6 +47,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 import yaml
 
@@ -65,7 +66,11 @@ SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE_RECORDS = SOURCE_ROOT / "stack" / "chart-provenance.json"
 
 REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
-HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
+# Both verbs, because a chart a slice renders and applies is pinned exactly as
+# one it installs as a release: envoy-gateway-crds runs `helm template` into a
+# server-side apply, since its chart is too large to store as a release, and its
+# pin needs a provenance record like any other.
+HELM_INSTALL = re.compile(r"^[ \t]*helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M)
 VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
 
 
@@ -299,8 +304,24 @@ def self_test() -> int:
     r_nodesc = json.loads(json.dumps(real_records))
     r_nodesc[name]["description"] = ""
 
+    # A pin carried by `helm template` rather than `helm upgrade --install`,
+    # read through the real parser out of a fixture tree. A parser that dropped
+    # the shape would hand check_offline nothing to miss a record for.
+    with tempfile.TemporaryDirectory(prefix="provenance-") as tmp:
+        script = pathlib.Path(tmp) / "stack" / "s" / "rendered" / "install.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text(
+            "helm template r oci://r.example/o/rendered-chart \\\n"
+            "  --version 1.0.0 >\"${MANIFEST}\"\n"
+            "kubectl apply --server-side -f \"${MANIFEST}\"\n"
+        )
+        rendered = pins(pathlib.Path(tmp))
+    p_rendered = {**real_pins, **rendered}
+
     breaks = [
         ("a pinned chart with no provenance record", p_extra, real_records),
+        ("a chart pinned by helm template with no provenance record",
+         p_rendered, real_records),
         ("a record for a chart no longer pinned", real_pins, r_stale),
         ("the recorded repository differs from the pin", real_pins, r_repo),
         ("a chart recorded deprecated but still pinned", real_pins, r_dep),

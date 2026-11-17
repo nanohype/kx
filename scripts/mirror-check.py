@@ -231,12 +231,17 @@ def upstream_pins(gitops):
     return pins
 
 
-HELM_INSTALL = re.compile(r"^[ \t]*helm upgrade --install\s+(\S+)\s+(\S+)", re.M)
+# A chart a slice renders and applies is pinned as surely as one it installs as
+# a release, so both verbs are read. envoy-gateway-crds is why: its chart is too
+# large to store as a helm release, so it runs `helm template` into a server-side
+# apply, and a parser reading only `upgrade --install` would report the
+# catalog's gateway-crds-helm as a chart kx never installs.
+HELM_INSTALL = re.compile(r"^[ \t]*helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M)
 VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
 
 
 def helm_block(text):
-    """(span, command) for the `helm upgrade --install` invocation, or None.
+    """(span, command) for the helm invocation that pins the chart, or None.
 
     Scoped to the invocation rather than the file, and the file is read with
     comment bodies blanked first. Both matter here, and the second one bit:
@@ -697,6 +702,32 @@ def self_test() -> int:
     else:
         print("  rejected  a rewrite lands on the live pin, not the commented-out one")
 
+    # The rendered shape. A slice that pipes `helm template` into kubectl pins
+    # its chart on that invocation, and both the read and the rewrite have to
+    # find it there rather than reporting the slice as installing nothing.
+    rendered = ("MANIFEST=\"$(mktemp)\"\n"
+                "helm template c oci://r.example/o/c \\\n"
+                "  --version 4.5.6 \\\n"
+                "  --values \"${SCRIPT_DIR}/values.yaml\" >\"${MANIFEST}\"\n"
+                "kubectl apply --server-side -f \"${MANIFEST}\"\n")
+    got = helm_block(rendered)
+    pinned = VERSION_FLAG.search(got[1]).group(1) if got else None
+    if pinned != "4.5.6" or HELM_INSTALL.search(got[1]).group(2).split("/")[-1] != "c":
+        print(f"  ACCEPTED  a chart rendered with helm template was not read as a pin "
+              f"(read {pinned!r}, pinned 4.5.6)")
+        failures += 1
+    else:
+        print("  rejected  a chart rendered with helm template is read as a pin, not dropped")
+    if got:
+        (start, end), cmd = got
+        rewritten = (rendered[:start] + VERSION_FLAG.sub("--version 7.8.9", cmd, count=1)
+                     + rendered[end:])
+        if "--version 7.8.9" not in rewritten or "kubectl apply" not in rewritten:
+            print("  ACCEPTED  a rewrite of a helm template pin missed it or ate the apply")
+            failures += 1
+        else:
+            print("  rejected  a rewrite of a helm template pin lands on it and keeps the apply")
+
     control = cmp({})
     if any(control):
         print(f"  ACCEPTED  (control) two agreeing sides are reported as diverging: {control}")
@@ -707,7 +738,7 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {failures} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 3 + len(name_cases)} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + 5 + len(name_cases)} case(s) behave as specified.")
     return 0
 
 
