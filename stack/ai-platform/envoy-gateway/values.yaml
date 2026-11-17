@@ -20,10 +20,11 @@ config:
           # than one shared controller namespace.
           #
           # This is what makes per-tenant identity work. The operator points each
-          # Platform's EnvoyProxy at the tenant ServiceAccount, which already
-          # carries a Pod Identity association to the tenant IAM role — so the
-          # gateway reaches Bedrock as the tenant, with no credential of its own,
-          # and Bedrock attributes every invocation to the right tenant.
+          # Platform's EnvoyProxy at a gateway ServiceAccount of its own
+          # (<platform>-gateway, which Envoy Gateway creates and owns) and binds
+          # it to the tenant IAM role with a second Pod Identity association —
+          # so the gateway reaches Bedrock as the tenant, with no credential of
+          # its own, and Bedrock attributes every invocation to the right tenant.
           #
           # Locally there is no Pod Identity to attach, but the topology is the
           # part worth reproducing: a workspace where every tenant shared one

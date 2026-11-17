@@ -2,8 +2,9 @@
 # bedrock-credentials — give the local model gateways an AWS identity.
 #
 # On a real cluster the gateway reaches Bedrock as the tenant: the operator
-# points each Platform's EnvoyProxy at the tenant ServiceAccount, which carries
-# a Pod Identity association, and the BackendSecurityPolicy names only a region
+# points each Platform's EnvoyProxy at the gateway's own ServiceAccount
+# (<platform>-gateway), which it binds to the tenant role with a Pod Identity
+# association, and the BackendSecurityPolicy names only a region
 # — the ambient credential chain. kind has no Pod Identity, so that chain finds
 # nothing and every call returns AccessDeniedException.
 #

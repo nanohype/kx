@@ -93,8 +93,9 @@ metadata:
     policies.kyverno.io/description: >-
       On a cluster the eks-agent-platform operator reconciles, each tenant's
       model gateway reaches Bedrock as the tenant: the operator points the
-      Platform's EnvoyProxy at the tenant ServiceAccount, which carries a Pod
-      Identity association to the tenant IAM role, and the BackendSecurityPolicy
+      Platform's EnvoyProxy at the gateway's own ServiceAccount
+      (<platform>-gateway), which it binds to the tenant IAM role with a Pod
+      Identity association, and the BackendSecurityPolicy
       names only a region — meaning the ambient credential chain. kind has no
       Pod Identity, so that chain resolves to nothing and every Bedrock call
       fails with AccessDeniedException.
