@@ -1,0 +1,18 @@
+# envoy-gateway-crds for kx — Envoy Gateway's own CRDs (gateway.envoyproxy.io),
+# from upstream's CRD-only chart.
+#
+# Both halves of this chart default off, so the one that is wanted has to be
+# turned on here. Only the Envoy Gateway half is: the Gateway API CRDs
+# (gateway.networking.k8s.io) belong to stack/core/gateway-api-crds, at one
+# release and one channel, and a second copy from this chart would be applied
+# over core's.
+#
+# The same two values as the eks-gitops catalog. There the Gateway API half is
+# off because applicationsets/gateway-api-crds.yaml owns those CRDs; here it is
+# off because core does, at the experimental channel rather than the catalog's
+# standard one (see stack/upstream.json, crdInstallers).
+crds:
+  gatewayAPI:
+    enabled: false
+  envoyGateway:
+    enabled: true
