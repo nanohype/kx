@@ -46,6 +46,30 @@ extract_helm_block() {
   ' "$1"
 }
 
+# The pattern a helm block starts with, for the SKIP guard below. Wider than the
+# extractor's anchor (leading whitespace allowed), so the guard sees every block
+# extraction could lift and some it could not.
+HELM_BLOCK_RE='^[[:space:]]*helm (upgrade --install|template) '
+
+# Succeeds when the script's helm block renders a chart read from a sibling
+# eks-gitops checkout: no --version pin, and a chart argument that is one shell
+# variable whose assignment in the same script points at ../eks-gitops/. That is
+# a chart this repository does not pin and a CI runner does not have, so there is
+# nothing here to render; it is validated in eks-gitops CI, where it lives.
+# Anything else — a pinned chart, a literal path, a variable assigned elsewhere —
+# fails, so the exemption below cannot stretch over a chart this gate could
+# render.
+renders_sibling_chart() { # file
+  local block arg var re
+  block="$(extract_helm_block "$1")"
+  [[ -n "$block" && "$block" != *" --version "* ]] || return 1
+  arg="$(awk '{ print ($2 == "template") ? $4 : $5 }' <<<"$block")"
+  re='^"?[$][{]([A-Za-z_][A-Za-z0-9_]*)[}]"?$'
+  [[ "$arg" =~ $re ]] || return 1
+  var="${BASH_REMATCH[1]}"
+  grep -qE "^${var}=.*[.][.]/eks-gitops/" "$1"
+}
+
 # Prove the lifting handles the shapes in the tree, and reports nothing rather
 # than something wrong when there is no block. Runs before the render in CI.
 if [[ "${1:-}" == "--self-test" ]]; then
@@ -81,6 +105,30 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf '#!/usr/bin/env bash\nkubectl apply -f x.yaml\n' >"$t/none.sh"
   check "no helm block yields nothing" "" "$t/none.sh"
 
+  # The sibling-chart classifier the druid exemption rests on: the druid shape
+  # passes, and each way a chart could be one this gate can render does not.
+  sibling() { # name want(0|1) file
+    checks=$((checks + 1))
+    local rc=0
+    renders_sibling_chart "$3" || rc=$?
+    if [[ "$rc" -ne "$2" ]]; then
+      echo "FAIL  $1 (classifier returned $rc, want $2)"; fails=$((fails + 1))
+    else
+      echo "  ok  $1"
+    fi
+  }
+  # shellcheck disable=SC2016  # fixtures are shell source; nothing here expands
+  printf 'C="${X:-${SCRIPT_DIR}/../../eks-gitops/catalog/c/chart}"\nhelm template ds "${C}" \\\n  --values v.yaml \\\n  | kubectl apply -f -\n' >"$t/sibling.sh"
+  sibling "a sibling eks-gitops chart is classified as one" 0 "$t/sibling.sh"
+  # shellcheck disable=SC2016
+  printf 'C="${X:-${SCRIPT_DIR}/../../eks-gitops/catalog/c/chart}"\nhelm template ds "${C}" \\\n  --version 1.0.0\n' >"$t/sibling-pinned.sh"
+  sibling "a pinned chart is not a sibling chart" 1 "$t/sibling-pinned.sh"
+  # shellcheck disable=SC2016
+  printf 'C="${SCRIPT_DIR}/chart"\nhelm template ds "${C}"\n' >"$t/local.sh"
+  sibling "a chart inside this repository is not a sibling chart" 1 "$t/local.sh"
+  sibling "a pinned OCI render is not a sibling chart" 1 "$t/rendered.sh"
+  sibling "no helm block is not a sibling chart" 1 "$t/none.sh"
+
   # The one that matters: a trailing kubectl line must not be swallowed into the
   # command. An extractor that ran to EOF would return something that still looks
   # like a helm invocation and renders, so the schema gate downstream would grade
@@ -108,13 +156,22 @@ if ! "${BASH_SOURCE[0]}" --self-test >/dev/null 2>&1; then
   exit 2
 fi
 
-# Slices with no `helm upgrade --install` block:
-# - gateway-api-crds is kubectl-apply only
-# - druid renders via helm template → filter → kubectl apply (Helm v4 dropped
-#   the exec post-renderer); its chart is validated in eks-gitops CI, where it lives
-# - bedrock-credentials installs no chart: it applies two Kyverno policies and
-#   an aggregated ClusterRole, plain manifests listed in MANIFESTS below
-SKIP=("stack/core/gateway-api-crds" "stack/data/druid" "stack/ai-platform/bedrock-credentials")
+# Slices the render loop does not lift, each as `slice:reason`. The reason is
+# not a comment: the guard below asserts it against the slice's install.sh.
+# - no-helm: the script has no helm block at all, so there is nothing to lift.
+#   gateway-api-crds is kubectl-apply only; bedrock-credentials installs no
+#   chart, it applies two Kyverno policies and an aggregated ClusterRole, plain
+#   manifests listed in MANIFESTS below.
+# - sibling-chart: the script does have a helm block, but its chart is read from
+#   a sibling eks-gitops checkout rather than pinned here (see
+#   renders_sibling_chart). druid renders via helm template → filter → kubectl
+#   apply (Helm v4 dropped the exec post-renderer), against the catalog's own
+#   chart, which is validated in eks-gitops CI, where it lives.
+SKIP=(
+  "stack/core/gateway-api-crds:no-helm"
+  "stack/data/druid:sibling-chart"
+  "stack/ai-platform/bedrock-credentials:no-helm"
+)
 
 # Plain manifests a slice applies with `kubectl apply -f`, written into the
 # render output unchanged so the schema gate validates them with everything
@@ -134,29 +191,49 @@ MANIFESTS=(
 # no longer exists silently exempts whatever takes that path next, and an entry
 # naming a slice that HAS grown a helm block exempts a render nobody asked to
 # skip. Both rot toward permissive, which is why neither is left to a reader.
-for s in "${SKIP[@]}"; do
+for entry in "${SKIP[@]}"; do
+  s="${entry%%:*}"
+  reason="${entry#*:}"
   if [[ ! -f "$ROOT/$s/install.sh" ]]; then
     echo "FAIL  SKIP names $s, which has no install.sh — an exemption that outlives its slice."
     exit 2
   fi
-  # The status is read rather than the condition being taken, because grep has
-  # three answers and `if grep` has two. 0 is a match, 1 is a definite no match,
-  # and anything above that is grep declining to answer — 2 for a file it cannot
-  # read, 127 for a grep that is not there. Written as a condition, every one of
-  # those reads as "no match" and the exemption stands unexamined: a guard
-  # against an exemption hiding a slice, removed by the absence of the tool it
-  # asks with. Only a definite no-match may let an exemption through.
-  rc=0
-  grep -qE '^[[:space:]]*helm upgrade --install' "$ROOT/$s/install.sh" || rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    echo "FAIL  SKIP names $s, but it does run \`helm upgrade --install\` — it would be rendered"
-    echo "      if it were not exempt, so the exemption is hiding a slice from this gate."
-    exit 2
-  elif [[ "$rc" -ne 1 ]]; then
-    echo "FAIL  could not determine whether $s runs \`helm upgrade --install\` — grep exited $rc."
-    echo "      The exemption is unexamined, so it cannot be allowed to stand."
-    exit 2
-  fi
+  case "$reason" in
+    no-helm)
+      # The status is read rather than the condition being taken, because grep
+      # has three answers and `if grep` has two. 0 is a match, 1 is a definite
+      # no match, and anything above that is grep declining to answer — 2 for a
+      # file it cannot read, 127 for a grep that is not there. Written as a
+      # condition, every one of those reads as "no match" and the exemption
+      # stands unexamined: a guard against an exemption hiding a slice, removed
+      # by the absence of the tool it asks with. Only a definite no-match may
+      # let this exemption through.
+      rc=0
+      grep -qE "$HELM_BLOCK_RE" "$ROOT/$s/install.sh" || rc=$?
+      if [[ "$rc" -eq 0 ]]; then
+        echo "FAIL  SKIP exempts $s as no-helm, but it runs \`helm upgrade --install\` or \`helm template\`"
+        echo "      — it would be rendered if it were not exempt, so the exemption is hiding a slice."
+        exit 2
+      elif [[ "$rc" -ne 1 ]]; then
+        echo "FAIL  could not determine whether $s has a helm block — grep exited $rc."
+        echo "      The exemption is unexamined, so it cannot be allowed to stand."
+        exit 2
+      fi
+      ;;
+    sibling-chart)
+      # Fails closed: a grep that cannot answer reads as "not a sibling chart",
+      # which rejects the exemption rather than granting it.
+      if ! renders_sibling_chart "$ROOT/$s/install.sh"; then
+        echo "FAIL  SKIP exempts $s as sibling-chart, but its helm block does not render an"
+        echo "      unpinned chart from a sibling eks-gitops checkout — this gate could render it."
+        exit 2
+      fi
+      ;;
+    *)
+      echo "FAIL  SKIP gives $s the reason '$reason', which the guard does not know how to assert."
+      exit 2
+      ;;
+  esac
 done
 
 # The manifest entries, asserted like the exemptions: a file that is gone, or
@@ -218,9 +295,9 @@ fail=0
 for script in "${scripts[@]}"; do
   slice="${script#"$ROOT"/}"
   slice="${slice%/install.sh}"
-  for s in "${SKIP[@]}"; do
-    if [[ "$slice" == "$s" ]]; then
-      echo "SKIP  $slice (no helm invocation)"
+  for entry in "${SKIP[@]}"; do
+    if [[ "$slice" == "${entry%%:*}" ]]; then
+      echo "SKIP  $slice (${entry#*:})"
       continue 2
     fi
   done

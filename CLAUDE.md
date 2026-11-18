@@ -71,11 +71,15 @@ whose install applies manifests of its own carries those too. Anything beyond
 `install.sh` + `values.yaml` earns its place by being applied by that
 `install.sh` — a file in an addon directory that nothing applies is dead.
 
+An addon whose chart cannot be stored as a helm release renders it with
+`helm template` into a server-side `kubectl apply` instead, and carries an
+`uninstall.sh` that the slice's disable runs (envoy-gateway-crds).
+
 ## Taskfile model
 
 - Top-level: `task up | down | reset | status | stack:* | port-forward:*`
 - Per-slice: `stack/<slice>/Taskfile.yaml` provides `enable` and `disable` targets that loop over the slice's addons
-- Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon
+- Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon, or the addon's `uninstall.sh` where there is no release to uninstall (envoy-gateway-crds, bedrock-credentials)
 
 ## What NOT to do
 

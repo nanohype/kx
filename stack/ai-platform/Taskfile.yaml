@@ -79,7 +79,10 @@ tasks:
       # After the controller, not before: deleting a CRD deletes every resource
       # of its kind, so the definitions outlive what reconciles them. No helm
       # release to uninstall — install.sh applies these without one, so
-      # uninstall.sh deletes them by group.
+      # uninstall.sh deletes them by group. The `|| true` above keeps disable
+      # re-runnable, which also lets it carry on past a failed uninstall, so
+      # uninstall.sh refuses while the envoy-gateway release or Deployment is
+      # still there rather than relying on this order.
       - bash {{.TASKFILE_DIR}}/envoy-gateway-crds/uninstall.sh
       - helm uninstall -n envoy-gateway-system envoy-ai-gateway-crds || true
       # Cluster-scoped, so no namespace delete reaches it. Applied by

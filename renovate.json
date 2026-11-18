@@ -22,7 +22,7 @@
     {
       "description": [
         "The same pins for charts pulled straight from an OCI registry, where there is no `helm repo add` line and the chart reference is the image path.",
-        "Two verbs carry such a pin. envoy-gateway-crds renders its chart with `helm template` and applies the result server-side, because the chart is too large to store as a helm release; its version moves with gateway-helm's, and a pin only the second pattern sees would be left behind by the first."
+        "Two verbs carry such a pin. envoy-gateway-crds renders its chart with `helm template` and applies the result server-side, because the chart is too large to store as a helm release; without the second pattern Renovate would bump gateway-helm and leave gateway-crds-helm behind, splitting a controller from its CRDs."
       ],
       "customType": "regex",
       "managerFilePatterns": [

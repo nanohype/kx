@@ -6,8 +6,9 @@
 #
 # gateway-helm can install these itself, but only bundled with a Gateway API
 # release and that release's safe-upgrades policy, and
-# stack/core/gateway-api-crds already owns both. So envoy-gateway runs with that bundle off and this addon
-# installs only the Envoy Gateway half (see values.yaml).
+# stack/core/gateway-api-crds already owns both. So envoy-gateway runs with
+# that bundle off and this addon installs only the Envoy Gateway half (see
+# values.yaml).
 #
 # Rendered and applied rather than installed as a helm release, the way
 # upstream's own install instructions for this chart do it. Helm stores a
@@ -18,13 +19,16 @@
 # slice's disable runs uninstall.sh.
 #
 # Server-side apply because the envoyproxies schema alone is far past the
-# 256 KiB last-applied-configuration annotation client-side apply writes. The field manager names this addon, so `kubectl get crd -o yaml
-# --show-managed-fields` shows who owns them. --force-conflicts because this
-# addon is the only thing in kx that installs this group: a cluster that ran
-# gateway-helm with its bundle on still has these CRDs under helm's manager as
-# well. At the same version the two agree on every field, so taking them over
-# here costs nothing, and it is what lets the next version bump apply instead
-# of stopping at the first field the two managers disagree on.
+# 256 KiB last-applied-configuration annotation client-side apply writes. The
+# field manager names this addon, so
+# `kubectl get crd -o yaml --show-managed-fields` shows who owns them.
+#
+# --force-conflicts because this addon is the only thing in kx that installs
+# this group, and a cluster that ran gateway-helm with its bundle on still has
+# these CRDs under helm's manager as well. At the same version the two managers
+# share every field, since a conflict arises only where values differ;
+# --force-conflicts is what moves those fields to this manager at the next
+# version bump, instead of stopping on the first field that changed.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
