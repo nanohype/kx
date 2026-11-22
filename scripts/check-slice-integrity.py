@@ -253,7 +253,8 @@ MINIMUM_EXAMINED = {
     "every Python file compiles": 9,
     # The shell scripts and Taskfiles together, 55 today.
     "no shell script runs Python from a string or stdin": 40,
-    # 43 scripts and 49 Taskfile commands reach the cluster today.
+    # Counts every script and Taskfile command that reaches the cluster, which
+    # the run prints as its denominator; set well under it, like the others.
     "nothing kx runs can reach a cluster other than kind-kx": 70,
 }
 
