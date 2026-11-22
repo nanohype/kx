@@ -102,6 +102,7 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | A chart bump fails `Validate every rendered resource against a schema` | A rendered resource no longer matches its CRD — the API server would reject it too | Read the reported path (e.g. `/spec/endpoints/0/port`); for any kind whose CRD is in the render, this is a real incompatibility |
 | ...but the failing kind is a `Cilium*` resource | Cilium registers its CRDs at operator runtime, so that schema comes from the community catalog and is **not** version-matched to the pinned chart | Triage schema skew first — compare against the CRD the running operator registered before treating the manifest as wrong |
 | `mirror-check.py check` refuses to run | It reads `eks-gitops` at the exact ref in `stack/upstream.json`, and the checkout is elsewhere | Check that commit out, or ask `freshness` instead, which compares against upstream's default branch |
+| The weekly `image cves` run is red | Its job summary names the state. **findings**: a CRITICAL nothing covers, or an exception that expired or matches nothing. **could not run**: the scanner or a registry could not answer, which says nothing about the images | For findings, move the chart pin to a fixed image, or record a time-boxed exception in `stack/image-cve-exceptions.json` with the reason. For could not run, fix the scan's reach |
 
 Recovery of last resort is `task reset` (down, then up) — the cluster holds no state worth
 preserving, so rebuilding it is cheaper than debugging it. Anything you needed to keep should

@@ -20,11 +20,22 @@ name: image cves
 # there. This is the other half: the images a pin resolves to, checked where the
 # pin can actually be changed.
 #
-# A red run means: read what upstream has published. Where the image publisher
-# has rebuilt on a patched base, move the chart pin — noting that moving ahead
-# of the catalog is a divergence mirror-check will report and that
-# stack/upstream.json is where it gets declared. Where they have not, the
-# finding stands until they do.
+# A run ends in one of three states, each with its own exit status, and the job
+# summary names it, so a red run says which one it is before anyone opens the
+# log:
+#
+#   clean          Every image scanned; every CRITICAL is covered by an
+#                  unexpired exception in stack/image-cve-exceptions.json.
+#   findings       A CRITICAL nothing covers, or an exception that expired or
+#                  matches nothing the scan reports. Read what upstream has
+#                  published. Where the image publisher has rebuilt on a
+#                  patched base, move the chart pin — noting that moving ahead
+#                  of the catalog is a divergence mirror-check will report and
+#                  that stack/upstream.json is where it gets declared. Where
+#                  they have not, record a time-boxed exception with the reason.
+#   could not run  The scanner or a registry could not answer for an image.
+#                  That is about this run, not about the image, and it is never
+#                  folded into the findings.
 
 on:
   schedule:
