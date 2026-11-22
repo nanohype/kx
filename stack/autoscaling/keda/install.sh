@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add kedacore https://kedacore.github.io/charts --force-update >/dev/null
 helm repo update kedacore >/dev/null
 
-kubectl create namespace keda --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace keda --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install keda kedacore/keda \
   --namespace keda \

@@ -112,6 +112,7 @@ def upstream_dir(manifest, ref):
             capture_output=True,
             text=True,
             check=False,
+            timeout=60,
         ).stdout.strip()
         if head != ref:
             die(
@@ -552,6 +553,7 @@ def cmd_sync(manifest):
         capture_output=True,
         text=True,
         check=True,
+        timeout=60,
     ).stdout.strip()
 
     upstream = upstream_pins(gitops)

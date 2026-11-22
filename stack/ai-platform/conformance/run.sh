@@ -39,7 +39,7 @@ fi
 # failure three layers down.
 # Every match, not the first. Taking one of several and saying nothing about
 # the rest reports a pass for gateways this run never sent a byte through.
-read -r -a GATEWAYS <<<"$(kubectl get modelgateway -n "${NAMESPACE}" \
+read -r -a GATEWAYS <<<"$(kubectl --request-timeout=60s get modelgateway -n "${NAMESPACE}" \
   -o jsonpath="{.items[?(@.spec.platformRef.name=='${PLATFORM}')].metadata.name}")"
 if [ "${#GATEWAYS[@]}" -eq 0 ]; then
   echo "no ModelGateway in ${NAMESPACE} references Platform '${PLATFORM}'" >&2
@@ -52,10 +52,10 @@ if [ "${#GATEWAYS[@]}" -gt 1 ]; then
 fi
 GATEWAY="${GATEWAYS[0]}"
 
-PHASE="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}')"
+PHASE="$(kubectl --request-timeout=60s get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}')"
 echo "ModelGateway ${GATEWAY} (Platform ${PLATFORM}) reports phase=${PHASE:-<none>}"
 echo "Routes it publishes:"
-ROUTES="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" \
+ROUTES="$(kubectl --request-timeout=60s get modelgateway "${GATEWAY}" -n "${NAMESPACE}" \
   -o jsonpath='{.status.routes}')"
 if [ -z "${ROUTES}" ]; then
   echo "  (none — the operator has not published a route for this gateway)" >&2

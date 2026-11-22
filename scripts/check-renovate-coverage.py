@@ -350,6 +350,7 @@ def self_test() -> int:
          "m.compile_patterns({'customManagers': []})",
          str(pathlib.Path(__file__).resolve())],
         capture_output=True, text=True, check=False,
+        timeout=60,
     )
     if probe.returncode == 0:
         failures.append("a config with no customManagers is accepted")

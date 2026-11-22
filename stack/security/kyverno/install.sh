@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update >/dev/null
 helm repo update kyverno >/dev/null
 
-kubectl create namespace kyverno --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace kyverno --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install kyverno kyverno/kyverno \
   --namespace kyverno \

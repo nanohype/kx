@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add external-secrets https://charts.external-secrets.io --force-update >/dev/null
 helm repo update external-secrets >/dev/null
 
-kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace external-secrets --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install external-secrets external-secrets/external-secrets \
   --namespace external-secrets \

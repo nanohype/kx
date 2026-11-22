@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=kubeconfig.sh
 . "${SCRIPT_DIR}/kubeconfig.sh"
 
-kubectl -n kube-system apply -f - <<'EOF'
+kubectl --request-timeout=60s -n kube-system apply -f - <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,7 +53,7 @@ EOF
 if kubectl -n kube-system get pods -l k8s-app=kube-dns \
      -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
      | grep -q "True"; then
-  kubectl -n kube-system rollout restart deployment/coredns
+  kubectl --request-timeout=60s -n kube-system rollout restart deployment/coredns
   kubectl -n kube-system rollout status  deployment/coredns --timeout=60s
   echo "coredns: rolled with new Corefile (external DNS → 1.1.1.1 + 8.8.8.8)"
 else

@@ -29,6 +29,7 @@ numbers and column offsets survive and a file:line citation stays true.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
@@ -258,13 +259,16 @@ MINIMUM_EXAMINED = {
     "nothing kx runs can reach a cluster other than kind-kx": 70,
     # Unconditional: both ports, or the check did not look.
     "localhost:80 and :443 reach Cilium's Ingress": 2,
+    # Counts every outbound command and subprocess call, which the run prints;
+    # set well under it.
+    "every call that leaves this machine is bounded": 200,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 15
+MINIMUM_CHECKS = 16
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -919,6 +923,7 @@ def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
         return [err]
     tracked = subprocess.run(
         ["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=False,
+        timeout=60,
     )
     paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
     outside = [str(f) for f in paths if f.parts and f.parts[0] != GATE_DIR]
@@ -1152,7 +1157,7 @@ def require_git(root: pathlib.Path) -> str | None:
                 "so without git it cannot determine its own population and any verdict it "
                 "gave would be over an unknown corpus.")
     inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
-                            capture_output=True, text=True, check=False)
+                            capture_output=True, text=True, check=False, timeout=60)
     if inside.returncode != 0 or inside.stdout.strip() != "true":
         return (f"{root} is not a git repository, so the tracked set does not exist and the "
                 f"population this suite examines is undefined.")
@@ -1178,7 +1183,7 @@ def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
 def tracked_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
     """The tracked files matching any of `patterns`, for the reason above."""
     out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", *patterns],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, timeout=60)
     return sorted(root / f for f in out.stdout.split("\0") if f)
 
 
@@ -1296,7 +1301,7 @@ def remote_artifacts_are_verified(root: pathlib.Path = ROOT) -> list[str]:
     if err:
         return [err]
     out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, timeout=60)
     candidates = []
     for rel in (f for f in out.stdout.split("\0") if f):
         if not (rel.endswith(".sh") or rel.endswith(".yml") or rel.endswith(".yaml")):
@@ -1446,10 +1451,55 @@ def code_view(line: str) -> str:
     return "".join(out)
 
 
-def in_command_position(code_prefix: str) -> bool:
+# The program form of the deadline helper, as a Taskfile calls it.
+DEADLINE_PROGRAM = "/cluster/deadline.sh"
+
+
+def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bool, bool]:
+    """(is the next word a command, does it run under deadline) after a prefix.
+
+    `code_prefix` is a code view and `raw_prefix` the same text as written, which
+    code_view keeps aligned with it. Separators and word boundaries come from the
+    code view, so a `|` inside a string is not one and `NAME='a b'` is one word;
+    each word's text comes from the raw prefix, because a runner's own arguments
+    can be quoted — `bash '/repo/cluster/deadline.sh' 60`.
+
+    A word is a command when every word before it in its segment is a prefix —
+    an assignment, exec, command, time, a keyword, a Taskfile list's `-` — or a
+    runner: `xargs` with its flags, and the deadline helper with its limit,
+    called as the sourced function or as the program. Reading through a runner
+    is what keeps the command it runs in view; a check that stopped at `xargs`
+    would accept whatever followed it.
+    """
+    raw_prefix = code_prefix if raw_prefix is None else raw_prefix
+    segment = COMMAND_SEP.split(code_prefix)[-1]
+    start = len(code_prefix) - len(segment)
+    # Word boundaries from the code view, where a quoted value is one unbroken
+    # word, and each word's text from the raw prefix at the same span.
+    words = [raw_prefix[start + w.start():start + w.end()] for w in re.finditer(r"\S+", segment)]
+    i, bounded = 0, False
+    while i < len(words):
+        word = words[i]
+        if word in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(word):
+            i += 1
+        elif word == "xargs":
+            i += 1
+            while i < len(words) and words[i].startswith("-"):
+                i += 1
+        elif word == "deadline" and i + 1 < len(words) and words[i + 1].isdigit():
+            bounded, i = True, i + 2
+        elif (word == "bash" and i + 2 < len(words)
+              and words[i + 1].strip("'\"").endswith(DEADLINE_PROGRAM)
+              and words[i + 2].isdigit()):
+            bounded, i = True, i + 3
+        else:
+            return False, bounded
+    return True, bounded
+
+
+def in_command_position(code_prefix: str, raw_prefix: str | None = None) -> bool:
     """Whether a word following `code_prefix` (a code view) is the command word."""
-    tokens = COMMAND_SEP.split(code_prefix)[-1].split()
-    return all(t in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(t) for t in tokens)
+    return command_context(code_prefix, raw_prefix)[0]
 
 
 # What a single-letter interpreter option says about where the program comes
@@ -1531,7 +1581,7 @@ def python_runs_from_files(root: pathlib.Path = ROOT) -> list[str]:
         for n, cmd in logical_lines(strip_comments(f.read_text())):
             code = code_view(cmd)
             for m in PYTHON_MENTION.finditer(code):
-                if not in_command_position(code[:m.start()]):
+                if not in_command_position(code[:m.start()], cmd[:m.start()]):
                     continue
                 source = python_program(cmd[m.end():])
                 if source in ("string", "stdin"):
@@ -1575,7 +1625,7 @@ def cluster_commands(text: str) -> list[tuple[int, int, str]]:
     for n, cmd in logical_lines(strip_comments(text)):
         code = code_view(cmd)
         for m in CLUSTER_TOOL.finditer(code):
-            if not in_command_position(code[:m.start()]):
+            if not in_command_position(code[:m.start()], cmd[:m.start()]):
                 continue
             if m.group(1) == "helm":
                 after = code[m.end():].split()
@@ -1671,6 +1721,176 @@ def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+# The tools whose calls leave this machine, or wait on a daemon that can stop
+# answering, as command words.
+OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl)(?![\w.:-])")
+
+# helm verbs that ask a cluster and take no timeout of their own.
+HELM_UNBOUNDED_READS = {"list", "status", "history", "get", "test"}
+
+# kubectl's global flags that take the next word as their value, so that word
+# is not the verb.
+KUBECTL_VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "--cluster", "--user",
+                       "-l", "--selector", "-o", "--output"}
+
+# The subprocess entry points that block until their child exits.
+SUBPROCESS_BLOCKING = {"run", "call", "check_call", "check_output"}
+
+
+def kubectl_words(rest: str) -> tuple[str, str]:
+    """(verb, the word after it) of a kubectl command whose arguments start at `rest`."""
+    words = rest.split()
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word in KUBECTL_VALUE_FLAGS:
+            i += 2
+        elif word.startswith("-") or word == "\\":
+            i += 1
+        else:
+            return word, words[i + 1] if i + 1 < len(words) else ""
+    return "", ""
+
+
+def _has_timeout(segment: str) -> bool:
+    return bool(re.search(r"--timeout[=\s]", segment + " "))
+
+
+def _curl_unbounded(segment: str, rest: str) -> str | None:
+    if re.search(r"(^|\s)(--max-time|-m)[\s=]", segment + " "):
+        return None
+    return "curl without --max-time"
+
+
+def _runner_only(tool: str):
+    def check(segment: str, rest: str) -> str | None:
+        return f"{tool} has no bound of its own, and this call does not run under deadline"
+    return check
+
+
+def _helm_unbounded(segment: str, rest: str) -> str | None:
+    verb = next((w for w in rest.split() if not w.startswith("-")), "")
+    if verb in HELM_UNBOUNDED_READS:
+        return f"helm {verb} takes no timeout, and this call does not run under deadline"
+    return None
+
+
+def _kubectl_unbounded(segment: str, rest: str) -> str | None:
+    verb, after = kubectl_words(rest)
+    if verb in ("config", "port-forward") or (verb == "version" and "--client" in segment):
+        return None
+    if verb == "wait" or (verb == "rollout" and after == "status"):
+        return None if _has_timeout(segment) else f"kubectl {verb} without --timeout"
+    missing = [flag for flag, present in (
+        ("--request-timeout", "--request-timeout" in segment),
+        ("--timeout", verb != "delete" or _has_timeout(segment)),
+    ) if not present]
+    return f"kubectl {verb or '(no verb)'} without {' or '.join(missing)}" if missing else None
+
+
+UNBOUNDED_BY_TOOL = {
+    "curl": _curl_unbounded,
+    "docker": _runner_only("docker"),
+    "kind": _runner_only("kind"),
+    "aws": _runner_only("aws"),
+    "helm": _helm_unbounded,
+    "kubectl": _kubectl_unbounded,
+}
+
+
+def why_unbounded(tool: str, segment: str, bounded: bool) -> str | None:
+    """Why one command is unbounded, or None. `segment` is its text up to the next
+    separator, read from the folded line so a flag on a continuation counts."""
+    if bounded:
+        return None
+    rest = segment.split(None, 1)[1] if " " in segment else ""
+    return UNBOUNDED_BY_TOOL[tool](segment, rest)
+
+
+def unbounded_in(text: str) -> tuple[int, list[tuple[int, str]]]:
+    """(outbound commands found, [(line, why)] for the unbounded ones) in shell `text`."""
+    found, problems = 0, []
+    for n, cmd in logical_lines(strip_comments(text)):
+        code = code_view(cmd)
+        for m in OUTBOUND_TOOL.finditer(code):
+            is_command, bounded = command_context(code[:m.start()], cmd[:m.start()])
+            if not is_command:
+                continue
+            found += 1
+            tail = code[m.start():]
+            end = next((s.start() for s in COMMAND_SEP.finditer(tail)), len(tail))
+            why = why_unbounded(m.group(1), cmd[m.start():m.start() + end], bounded)
+            if why:
+                problems.append((n, why))
+    return found, problems
+
+
+def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
+    """Every call that leaves this machine names how long it may take.
+
+    A call with no bound waits on an unresponsive API server or a stuck daemon
+    until somebody notices, and the step it hangs reads exactly like a slow one.
+    Each tool is held to the bound it has:
+
+    - kubectl carries --request-timeout, and `wait`, `rollout status` and
+      `delete` carry --timeout as well, since each of those waits on the
+      cluster after its request returns. `config` is local and `port-forward`
+      runs until it is stopped, by design.
+    - helm's release verbs carry --timeout, which the invariant above holds.
+      `helm repo` verbs default to a two-minute timeout of their own. helm's
+      read verbs take none, so they run under deadline.
+    - docker, kind and the aws CLI's credential resolution have no bound of
+      their own, so they run under cluster/deadline.sh, sourced or as a program.
+    - curl carries --max-time.
+    - A Python gate's subprocess call carries timeout=.
+
+    The bound this cannot see: helm fetches a chart over HTTP before any of
+    its timeouts start, with Go's dial and handshake limits and no read limit,
+    so a stalled chart server is the one wait left unbounded. It is stated
+    here rather than wrapped around every install.
+    """
+    problems = []
+    examined = 0
+    for path in tracked_files(root, "*.sh"):
+        if path == root / "cluster" / "deadline.sh":
+            continue
+        found, unbounded = unbounded_in(path.read_text())
+        examined += found
+        problems.extend(f"{path.relative_to(root)}:{n}: {why}." for n, why in unbounded)
+    for taskfile in tracked_files(root, "*Taskfile.yaml"):
+        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
+        for name, task in tasks.items():
+            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
+                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+                if isinstance(text, str):
+                    found, unbounded = unbounded_in(text)
+                    examined += found
+                    problems.extend(f"{taskfile.relative_to(root)} task `{name}`: {why}."
+                                    for _, why in unbounded)
+    for path in tracked_files(root, "*.py"):
+        try:
+            tree = ast.parse(path.read_text(), str(path))
+        except SyntaxError:
+            continue  # the compile invariant reports this file
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "subprocess"):
+                examined += 1
+                if node.func.attr == "Popen":
+                    problems.append(f"{path.relative_to(root)}:{node.lineno}: subprocess.Popen "
+                                    f"takes no timeout; use subprocess.run with timeout=.")
+                elif (node.func.attr in SUBPROCESS_BLOCKING
+                      and not any(k.arg == "timeout" for k in node.keywords)):
+                    problems.append(f"{path.relative_to(root)}:{node.lineno}: "
+                                    f"subprocess.{node.func.attr} without timeout=.")
+    EXAMINED["every call that leaves this machine is bounded"] = examined
+    if not examined:
+        return ["found no outbound call in any script, Taskfile or gate — refusing to report "
+                "every one bounded over an empty set."]
+    return problems
+
+
 KIND_CONFIG = "cluster/kind-config.yaml"
 CILIUM_VALUES = "stack/core/cilium/values.yaml"
 
@@ -1743,6 +1963,7 @@ CHECKS = [
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
     ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
     ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
+    ("every call that leaves this machine is bounded", external_calls_are_bounded),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -2398,6 +2619,93 @@ CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
 ]
 
 
+_DEADLINE = "bash '{{.ROOT_DIR}}/cluster/deadline.sh'"
+
+CONTROLS["every call that leaves this machine is bounded"] = [
+    (
+        "kubectl with no request timeout",
+        {"s.sh": "kubectl get ns\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"},
+        "kubectl get without --request-timeout",
+    ),
+    (
+        "a delete that can wait on a finalizer forever",
+        {"s.sh": "kubectl --request-timeout=60s delete ns x\n"},
+        {"s.sh": "kubectl --request-timeout=60s --timeout=5m delete ns x\n"},
+        "kubectl delete without --timeout",
+    ),
+    (
+        "a wait is read across its continuation lines",
+        {"s.sh": "kubectl wait --for=condition=Ready pod/x \\\n  -n y\n"},
+        {"s.sh": "kubectl wait --for=condition=Ready pod/x \\\n  --timeout=60s\n"},
+        "kubectl wait without --timeout",
+    ),
+    (
+        "config is local and port-forward runs until stopped, so neither needs a bound",
+        {"s.sh": "kubectl config current-context\nkubectl port-forward svc/x 8080:80\n",
+         "t.sh": "kubectl get ns\n"},
+        {"s.sh": "kubectl config current-context\nkubectl port-forward svc/x 8080:80\n"},
+        "t.sh:1",
+    ),
+    (
+        "a kubectl that xargs runs",
+        {"s.sh": "kubectl --request-timeout=60s get crd -o name | xargs -r kubectl delete\n"},
+        {"s.sh": "kubectl --request-timeout=60s get crd -o name"
+                 " | xargs -r kubectl --request-timeout=60s --timeout=5m delete\n"},
+        "kubectl delete",
+    ),
+    (
+        "a docker build outside deadline",
+        {"s.sh": "docker build -t x .\n"},
+        {"s.sh": "deadline 1200 docker build -t x .\n"},
+        "docker has no bound",
+    ),
+    (
+        "a kind call in a Taskfile outside the deadline program",
+        {"Taskfile.yaml": _taskfile("kind get clusters")},
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 60 kind get clusters")},
+        "kind has no bound",
+    ),
+    (
+        "a helm read inside a command substitution, outside deadline",
+        {"s.sh": 'x="$(helm status r --namespace n 2>&1)"\n'},
+        {"s.sh": 'x="$(deadline 60 helm status r --namespace n 2>&1)"\n'},
+        "helm status takes no timeout",
+    ),
+    (
+        "the aws CLI resolving credentials outside deadline",
+        {"s.sh": 'J="$(aws configure export-credentials --profile p)"\n'},
+        {"s.sh": 'J="$(deadline 120 aws configure export-credentials --profile p)"\n'},
+        "aws has no bound",
+    ),
+    (
+        "curl with no --max-time",
+        {"s.sh": 'curl -sSfL -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL --max-time 60 -o x "https://example/x"\n'},
+        "curl without --max-time",
+    ),
+    (
+        "a gate's subprocess call with no timeout",
+        {"scripts/g.py": "import subprocess\nsubprocess.run(['git', 'status'], check=False)\n"},
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=60)\n"},
+        "subprocess.run without timeout=",
+    ),
+    (
+        "a gate that starts a process it cannot bound",
+        {"scripts/g.py": "import subprocess\nsubprocess.Popen(['git', 'status'])\n"},
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=60)\n"},
+        "Popen",
+    ),
+    (
+        "nothing outbound at all",
+        {"README.md": "nothing here\n"},
+        {"s.sh": "curl --max-time 5 https://example\n"},
+    ),
+]
+
+
 def _tree(files: dict[str, str]) -> pathlib.Path:
     """A fixture tree, as a real repository.
 
@@ -2421,10 +2729,10 @@ def _tree(files: dict[str, str]) -> pathlib.Path:
         f.write_text(body)
         if not untracked:
             staged.append(rel)
-    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True)
+    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True, timeout=60)
     if staged:
         subprocess.run(["git", "-C", str(d), "add", "--", *staged], check=False,
-                       capture_output=True)
+                       capture_output=True, timeout=60)
     return d
 
 

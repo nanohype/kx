@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
 helm repo update argo >/dev/null
 
-kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace argocd --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install argocd argo/argo-cd \
   --namespace argocd \

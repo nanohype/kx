@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add minio https://charts.min.io/ --force-update >/dev/null
 helm repo update minio >/dev/null
 
-kubectl create namespace minio --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace minio --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install minio minio/minio \
   --namespace minio \

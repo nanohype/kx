@@ -44,7 +44,7 @@ CHART_BASE_VALUES="${KX_DRUID_CHART_VALUES:-${SCRIPT_DIR}/../../../../eks-gitops
 require() { # description remedy kubectl-args...
   local what="$1" remedy="$2"; shift 2
   local err
-  if err="$(kubectl "$@" 2>&1 >/dev/null)"; then
+  if err="$(kubectl --request-timeout=60s "$@" 2>&1 >/dev/null)"; then
     return 0
   fi
   if printf '%s' "$err" | grep -qiE 'not found|NotFound'; then
@@ -75,11 +75,11 @@ if ! render_err="$(python3 "${SCRIPT_DIR}/post-renderer.py" </dev/null 2>&1 >/de
   exit 1
 fi
 
-kubectl create namespace druid --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace druid --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # ---- 1. Postgres for metadata (CNPG) ----
 echo "==> creating Postgres metadata cluster (CNPG)"
-kubectl apply -f "${SCRIPT_DIR}/pre-install/postgres.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/postgres.yaml"
 echo "==> waiting for Postgres to be Ready (up to 5min)..."
 kubectl -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300s
 
@@ -91,17 +91,17 @@ echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
 # holds these values base64-encoded, so metadata-secret.py copies them across
 # without decoding them into an argument list at all. The name is the one the
 # chart helper derives from the release step 5 renders: hostedId kx, release ds.
-kubectl -n druid get secret druid-metadata-app -o json \
+kubectl --request-timeout=60s -n druid get secret druid-metadata-app -o json \
   | python3 "${SCRIPT_DIR}/metadata-secret.py" kx-ds-druid-metadata druid \
-  | kubectl apply -f -
+  | kubectl --request-timeout=60s apply -f -
 
 # ---- 3. Admin + system credential secrets ----
-kubectl apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"
 
 # ---- 4. MinIO buckets ----
 echo "==> ensuring MinIO buckets exist"
-kubectl delete job -n druid druid-minio-buckets --ignore-not-found
-kubectl apply -f "${SCRIPT_DIR}/pre-install/minio-buckets-job.yaml"
+kubectl --request-timeout=60s --timeout=5m delete job -n druid druid-minio-buckets --ignore-not-found
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/minio-buckets-job.yaml"
 kubectl -n druid wait --for=condition=Complete job/druid-minio-buckets --timeout=120s
 
 # ---- 5. render chart, filter EKS-only resources, apply ----
@@ -111,7 +111,7 @@ helm template ds "${CHART_DIR}" \
   --values "${CHART_BASE_VALUES}" \
   --values "${SCRIPT_DIR}/values-local.yaml" \
   | python3 "${SCRIPT_DIR}/post-renderer.py" \
-  | kubectl apply --server-side --field-manager kx-druid -n druid -f -
+  | kubectl --request-timeout=60s apply --server-side --field-manager kx-druid -n druid -f -
 
 echo
 echo "==> waiting for Druid pods to be Ready (Druid startup probes are slow — up to 10min)"

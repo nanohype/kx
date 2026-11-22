@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add opencost https://opencost.github.io/opencost-helm-chart --force-update >/dev/null
 helm repo update opencost >/dev/null
 
-kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install opencost opencost/opencost \
   --namespace monitoring \

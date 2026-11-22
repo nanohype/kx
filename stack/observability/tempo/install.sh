@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add grafana-community https://grafana-community.github.io/helm-charts --force-update >/dev/null
 helm repo update grafana-community >/dev/null
 
-kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install tempo grafana-community/tempo \
   --namespace monitoring \

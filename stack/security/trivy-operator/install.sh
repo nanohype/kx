@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add aqua https://aquasecurity.github.io/helm-charts/ --force-update >/dev/null
 helm repo update aqua >/dev/null
 
-kubectl create namespace trivy-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace trivy-system --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install trivy-operator aqua/trivy-operator \
   --namespace trivy-system \

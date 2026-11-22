@@ -61,7 +61,7 @@ tasks:
   status:
     desc: Show helm releases across all namespaces, plus the CRD addon helm cannot list
     cmds:
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm list -A
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 helm list -A
       # envoy-gateway-crds is applied without a helm release (its chart is too
       # large to store as one), so `helm list` never shows it. Counted here
       # instead; a failed CRD listing fails the task rather than reading as 0.

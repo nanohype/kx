@@ -119,6 +119,7 @@ def added_prose(base: str) -> list[tuple[str, str]]:
         )
     merge_base = subprocess.run(
         ["git", "merge-base", base, "HEAD"], capture_output=True, text=True, check=False,
+        timeout=60,
     )
     if merge_base.returncode != 0:
         raise RangeUnavailable(
@@ -129,6 +130,7 @@ def added_prose(base: str) -> list[tuple[str, str]]:
     diff = subprocess.run(
         ["git", "diff", "--unified=0", f"{base}...HEAD"],
         capture_output=True, text=True, check=False,
+        timeout=60,
     )
     if diff.returncode != 0:
         raise RangeUnavailable(

@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 helm repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
 helm repo update nats >/dev/null
 
-kubectl create namespace nats --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace nats --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 helm upgrade --install nats nats/nats \
   --namespace nats \
