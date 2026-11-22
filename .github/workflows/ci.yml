@@ -5,9 +5,6 @@ on:
   push:
     branches: [main]
 
-# Every job here only reads the tree. Declared explicitly rather than inherited:
-# the org default is already `read`, but a default is a setting someone can change
-# without touching this file, and the two sibling workflows declare it too.
 # One run per ref. A push that lands on top of another leaves the first run
 # grading a tree nobody is proposing any more, and its verdict arrives against
 # the newer commit.
@@ -15,6 +12,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job here only reads the tree. Declared explicitly rather than inherited:
+# the org default is already `read`, but a default is a setting someone can change
+# without touching this file, and the two sibling workflows declare it too.
 permissions:
   contents: read
 
@@ -34,10 +34,19 @@ jobs:
           # wrong is a red job rather than a silent pass.
           fetch-depth: 0
 
+      # Every Python tool this job runs, from one hash-locked file: each
+      # package, transitive ones included, at one version and the hashes PyPI
+      # publishes for it, so the job installs exactly those files or fails.
+      # Pinned in the file rather than resolved here, because a resolver picks
+      # by interpreter: a laptop on an older python silently caps an install at
+      # the last release that supports it — zizmor once resolved to 1.16.3
+      # against 1.29.0 published — so an unpinned install lets a workstation's
+      # python choose the scanner CI runs.
+      - name: Install the lint tools
+        run: pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/lint-requirements.txt
+
       - name: yamllint
-        run: |
-          pip install --quiet --timeout 60 --retries 3 yamllint==1.38.0
-          yamllint .
+        run: yamllint .
 
       # Grafana ships a default password and is published as a NodePort on a
       # mapped host port, so that credential is defensible only while the port
@@ -64,15 +73,32 @@ jobs:
           print(f"ok  {len(maps)} host port(s) bound to 127.0.0.1")
           PY
 
+      # Pinned and checked before it is unpacked onto PATH, the way kubeconform
+      # is below, rather than taken from apt at whatever version the runner
+      # image carries that week: a shellcheck release that adds a warning would
+      # otherwise redden this job with no change here to point at. shellcheck
+      # publishes no checksum file, so the digest was computed from the release
+      # asset when the version was pinned, and it catches a replaced or
+      # truncated asset from then on.
+      #
       # `git ls-files` rather than a glob: a glob names one filename and silently
       # excludes every other shell file in the tree, which is the reduced-corpus
       # failure the gates in this repo assert against for their own inputs. An
       # exclusion here has to be a `shellcheck disable` line carrying a reason,
       # where the reader of the script sees it.
       - name: shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck >/dev/null
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+            -o shellcheck.tar.xz "$url"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJ -C /usr/local/bin --strip-components=1 -f shellcheck.tar.xz \
+            "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          rm shellcheck.tar.xz
+          shellcheck --version
           mapfile -t sh < <(git ls-files '*.sh')
           if [ "${#sh[@]}" -eq 0 ]; then
             echo "no shell files found — refusing to report a clean lint over nothing" >&2
@@ -87,7 +113,6 @@ jobs:
       # for the reason the shellcheck step gives, and an empty set refused.
       - name: ruff
         run: |
-          pip install --quiet --timeout 60 --retries 3 ruff==0.16.4
           mapfile -t py < <(git ls-files '*.py')
           if [ "${#py[@]}" -eq 0 ]; then
             echo "no Python files found — refusing to report a clean lint over nothing" >&2
@@ -96,11 +121,6 @@ jobs:
           echo "linting ${#py[@]} Python file(s)"
           ruff check "${py[@]}"
 
-      # Advisory, and exits 0 whatever it finds. Prose conformance is read
-      # rather than matched — a pattern finds only the phrasings its author
-      # thought of — so this surfaces the prose a change adds next to the rules
-      # instead of claiming a verdict over it. Needs the base commit to diff
-      # against, which the default shallow checkout does not fetch.
       # The supply-chain scan, and it fails the build rather than warning. This
       # repository ships no package manifest, so its dependency surface is the
       # workflows themselves: the actions they call, the tokens they hold, and
@@ -109,12 +129,6 @@ jobs:
       # shell source before bash parses it.
       - name: zizmor
         run: |
-          # Pinned from the registry, not from a local resolver. A laptop on an
-          # older interpreter silently caps a pip install at the last version
-          # that supports it — zizmor resolved to 1.16.3 here against 1.29.0
-          # published, so the scanner CI ran was chosen by a workstation's
-          # python rather than by what the tool has released.
-          pip install --quiet --timeout 60 --retries 3 zizmor==1.29.0
           # --no-online-audits keeps the verdict a function of the commit under
           # test, the same rule the mirror job states: the online audits ask
           # GitHub whether an action has since been archived, which is a fact
@@ -127,8 +141,15 @@ jobs:
           # with no diff that looks like a permission change — is not merely
           # unreported, it is never looked for. A green tick from a check that
           # skipped the audit is worse than no check.
-          zizmor --no-online-audits --persona=auditor .github/workflows/
+          # The local actions are scanned with the workflows that call them: a
+          # composite action's run block executes with the calling job's token.
+          zizmor --no-online-audits --persona=auditor .github/workflows/ .github/actions/
 
+      # Advisory, and exits 0 whatever it finds. Prose conformance is read
+      # rather than matched — a pattern finds only the phrasings its author
+      # thought of — so this surfaces the prose a change adds next to the rules
+      # instead of claiming a verdict over it. Needs the base commit to diff
+      # against, which the checkout above fetches.
       - name: prose the change adds
         if: github.event_name == 'pull_request'
         env:
@@ -179,7 +200,7 @@ jobs:
       # covering something.
       - name: Every pin has a provenance record, and can fail
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/check-chart-deprecation.py
 
   mirror:
@@ -210,7 +231,7 @@ jobs:
         env:
           EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
           # Asserted before use. A substitution that produced nothing is not a
           # tree that pinned nothing, and `git checkout ""` is not a checkout of
@@ -266,7 +287,7 @@ jobs:
           ref: ${{ steps.sibling.outputs.ref }}
           persist-credentials: false
 
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - uses: ./.github/actions/helm
 
       # Downloaded to a file and checked before it is unpacked onto PATH and run.
       # Piping the response straight into tar executes whatever arrives: a
@@ -316,7 +337,7 @@ jobs:
       # has to run where every gate can run.
       - name: Slice invariants hold, and every gate still rejects
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/check-slice-integrity.py
 
       - name: helm template each slice at its pinned version
@@ -351,7 +372,7 @@ jobs:
         env:
           RENDER_DIR: ${{ runner.temp }}/render
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/check-rendered-schemas.py "$RENDER_DIR"
 
       # Third pass over the same render, and the only one that joins it to the

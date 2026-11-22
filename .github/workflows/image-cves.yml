@@ -57,7 +57,7 @@ jobs:
           path: .sibling/eks-agent-platform
           persist-credentials: false
 
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - uses: ./.github/actions/helm
 
       # Downloaded to a file and checked before it is unpacked onto PATH and run,
       # the same way ci.yml treats kubeconform. Piping the response straight into
@@ -87,7 +87,7 @@ jobs:
           KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
           KX_RENDER_OUT: ${{ runner.temp }}/render
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ./scripts/render-check.sh
 
       - name: Scan every image the pinned charts resolve to
