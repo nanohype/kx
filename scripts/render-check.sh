@@ -51,6 +51,19 @@ extract_helm_block() {
 # extraction could lift and some it could not.
 HELM_BLOCK_RE='^[[:space:]]*helm (upgrade --install|template) '
 
+# Succeeds when an installer applies one of its own manifests: a `kubectl apply
+# -f` naming the file beside it, with kubectl's flags allowed on either side of
+# the verb, since every kubectl call carries --request-timeout and that flag sits
+# between the binary and the verb. The name is matched as written rather than as
+# a pattern. Exits 1 when the installer does not apply the file, and with grep's
+# own status above that when it could not tell.
+applies_manifest() { # install.sh file
+  local name flags
+  name="$(printf '%s' "$2" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+  flags='([[:space:]]+-[-[:alnum:]]+((=|[[:space:]]+)[^-[:space:]][^[:space:]]*)?)*'
+  grep -qE "^[[:space:]]*kubectl${flags}[[:space:]]+apply${flags}[[:space:]]+-f[[:space:]]+\"[\$][{]SCRIPT_DIR[}]/${name}\"" "$1"
+}
+
 # Succeeds when the script's helm block renders a chart read from a sibling
 # eks-gitops checkout: no --version pin, and a chart argument that is one shell
 # variable whose assignment in the same script points at ../eks-gitops/. That is
@@ -128,6 +141,33 @@ if [[ "${1:-}" == "--self-test" ]]; then
   sibling "a chart inside this repository is not a sibling chart" 1 "$t/local.sh"
   sibling "a pinned OCI render is not a sibling chart" 1 "$t/rendered.sh"
   sibling "no helm block is not a sibling chart" 1 "$t/none.sh"
+
+  # The match MANIFESTS rests on: an apply of the file beside the installer
+  # counts with kubectl's flags around the verb, and a commented-out apply, an
+  # apply of another file and a name that matches only as a pattern do not.
+  applies() { # name want(0|1) install.sh file
+    checks=$((checks + 1))
+    local rc=0
+    applies_manifest "$3" "$4" || rc=$?
+    if [[ "$rc" -ne "$2" ]]; then
+      echo "FAIL  $1 (returned $rc, want $2)"; fails=$((fails + 1))
+    else
+      echo "  ok  $1"
+    fi
+  }
+  # shellcheck disable=SC2016  # fixtures are shell source; nothing here expands
+  printf 'kubectl apply -f "${SCRIPT_DIR}/m.yaml"\n' >"$t/apply.sh"
+  applies "a plain apply of the manifest" 0 "$t/apply.sh" m.yaml
+  # shellcheck disable=SC2016
+  printf 'kubectl --request-timeout=60s -n x apply --server-side -f "${SCRIPT_DIR}/m.yaml"\n' >"$t/flags.sh"
+  applies "an apply with kubectl's flags around the verb" 0 "$t/flags.sh" m.yaml
+  # shellcheck disable=SC2016
+  printf '# kubectl apply -f "${SCRIPT_DIR}/m.yaml"\n' >"$t/commented.sh"
+  applies "a commented-out apply is not one" 1 "$t/commented.sh" m.yaml
+  # shellcheck disable=SC2016
+  printf 'kubectl apply -f "${SCRIPT_DIR}/mXyaml"\n' >"$t/pattern.sh"
+  applies "a name is matched as written, not as a pattern" 1 "$t/pattern.sh" m.yaml
+  applies "an apply of another file is not one" 1 "$t/apply.sh" n.yaml
 
   # The one that matters: a trailing kubectl line must not be swallowed into the
   # command. An extractor that ran to EOF would return something that still looks
@@ -247,7 +287,7 @@ for m in "${MANIFESTS[@]}"; do
     exit 2
   fi
   rc=0
-  grep -qE "^[[:space:]]*kubectl apply -f \"\\\$\{SCRIPT_DIR\}/$file\"" "$ROOT/$slice/install.sh" || rc=$?
+  applies_manifest "$ROOT/$slice/install.sh" "$file" || rc=$?
   if [[ "$rc" -eq 1 ]]; then
     echo "FAIL  MANIFESTS names $slice/$file, but $slice/install.sh does not apply it."
     exit 2
