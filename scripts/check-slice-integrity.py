@@ -242,16 +242,17 @@ MINIMUM_EXAMINED = {
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
     "every gate refuses when its authority is unavailable": 5,
-    # Sized to the corpus, not to the finding: 45 tracked shell scripts today,
-    # and a floor that only a collapse can breach.
+    # Sized to the corpus, not to the finding: every tracked shell script, which
+    # the run prints as its denominator, under a floor only a collapse can breach.
     "no script hands a secret to a command on argv": 30,
     # Three files both fetch and consume. Two is a floor a rename cannot pass
     # through quietly while leaving the class unexamined.
     "every fetched artifact is verified before it is used": 2,
-    # 12 tracked Python files today: the gates, and the helpers two installers
-    # run.
+    # Every tracked Python file, the gates and the helpers installers run, which
+    # the run prints as its denominator.
     "every Python file compiles": 9,
-    # The shell scripts and Taskfiles together, 55 today.
+    # The shell scripts and Taskfiles together, which the run prints as its
+    # denominator.
     "no shell script runs Python from a string or stdin": 40,
     # Counts every script and Taskfile command that reaches the cluster, which
     # the run prints as its denominator; set well under it, like the others.
@@ -1369,9 +1370,30 @@ def python_files_compile(root: pathlib.Path = ROOT) -> list[str]:
 # `python`, `python3` or `python3.N` as a command word.
 PYTHON_MENTION = re.compile(r"(?<![\w./-])python(?:3(?:\.\d+)?)?(?![\w.-])")
 
-# Words that may stand before a command without being it: a prefix (`exec`), a
-# keyword that opens a command list, and the `- ` of a Taskfile's cmds list.
-COMMAND_PREFIX_WORDS = {"exec", "command", "time", "then", "do", "else", "!", "-"}
+# Words that may stand before a command without being it, each with a shape it
+# opens, CMD marking where the command goes: a reserved word that opens a
+# command list or a pipeline, and a precommand that runs its operand. A word
+# missing here hides the command behind it from every check that reads command
+# positions, so each shape is also a control, and a word is proven by the shape
+# added with it.
+COMMAND_OPENERS = {
+    "if": "if CMD; then :; fi",
+    "elif": "if false; then :; elif CMD; then :; fi",
+    "then": "if true; then CMD; fi",
+    "else": "if false; then :; else CMD; fi",
+    "while": "while CMD; do :; done",
+    "until": "until CMD; do :; done",
+    "do": "for x in a; do CMD; done",
+    "!": "! CMD",
+    "{": "f() { CMD; }",
+    "exec": "exec CMD",
+    "command": "command CMD",
+    "time": "time CMD",
+    "env": "env A=1 CMD",
+}
+
+# The openers, and the `- ` of a Taskfile's cmds list.
+COMMAND_PREFIX_WORDS = set(COMMAND_OPENERS) | {"-"}
 
 # Interpreter options that take the next word as their value, so that word is
 # not the program.
@@ -2255,6 +2277,19 @@ CONTROLS = {
     ],
 }
 
+# A program behind each word that opens a command. The words are bash grammar
+# rather than commands, and a reading that stopped at one would accept every
+# program an installer runs as a condition, in a loop or in a function.
+CONTROLS["no shell script runs Python from a string or stdin"] += [
+    (
+        f"a program behind `{word}`",
+        {"s.sh": shape.replace("CMD", "python3 -c 'x'") + "\n"},
+        {"s.sh": shape.replace("CMD", 'python3 "${SCRIPT_DIR}/p.py"') + "\n"},
+        "s.sh:1",
+    )
+    for word, shape in COMMAND_OPENERS.items()
+]
+
 
 _BINDING = {KUBECONFIG_BINDING: "# the binding\n"}
 _SCRIPT_DIR = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
@@ -2319,6 +2354,16 @@ CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
         "a Taskfile command that uninstalls without the binding",
         {**_BINDING, "Taskfile.yaml": _taskfile("helm uninstall -n a a || true")},
         {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "helm uninstall -n a a || true")},
+        "task `d`",
+    ),
+    (
+        # Each word that opens a command is proven under the Python invariant;
+        # this proves the binding reads through one as well.
+        "a Taskfile command that asks the cluster as an if condition, without the binding",
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if kubectl get ns x; then echo up; fi")},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if " + _PREFIX + "kubectl get ns x; then echo up; fi")},
         "task `d`",
     ),
     (
