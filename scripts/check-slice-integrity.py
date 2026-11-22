@@ -1376,6 +1376,10 @@ COMMAND_ENDS = {"|", "||", "&", "&&", ";", ";;", ")", "("}
 # Redirections that make stdin the program when no script came first.
 STDIN_REDIRECTS = {"<", "<<", "<<-", "<<<"}
 
+# What code_view writes over a literal's text: a word character, so a quoted
+# word stays one word, and one that spells no command a check looks for.
+BLANK = "_"
+
 
 def code_view(line: str) -> str:
     """The line with the text of every string literal blanked and all code kept.
@@ -1384,7 +1388,10 @@ def code_view(line: str) -> str:
     `KEY="$(printf %s "$J" | python3 -c ...)"` is the shape an installer writes
     most often. Blanking every double-quoted body would hide exactly that
     invocation. Blanked rather than removed, so an offset in this view is an
-    offset in the original line.
+    offset in the original line, and blanked with a character that is not
+    whitespace, so a quoted word stays one word: `FOO='a b' python3` is an
+    assignment and then a command, and blanking `a b` to spaces would split the
+    assignment and leave python3 reading as an argument.
     """
     out: list[str] = []
     stack: list[list] = [["code", 0]]
@@ -1393,13 +1400,13 @@ def code_view(line: str) -> str:
         c = line[i]
         kind = stack[-1][0]
         if kind == "single":
-            out.append(c if c == "'" else " ")
+            out.append(c if c == "'" else BLANK)
             if c == "'":
                 stack.pop()
             i += 1
         elif kind == "double":
             if c == "\\" and i + 1 < len(line):
-                out.append("  ")
+                out.append(BLANK * 2)
                 i += 2
             elif c == '"':
                 stack.pop()
@@ -1410,7 +1417,7 @@ def code_view(line: str) -> str:
                 out.append("$(")
                 i += 2
             else:
-                out.append(" ")
+                out.append(BLANK)
                 i += 1
         elif c == "\\" and i + 1 < len(line):
             out.append(line[i:i + 2])
@@ -2015,6 +2022,14 @@ CONTROLS = {
             "a -c program inside a quoted command substitution",
             {"s.sh": 'K="$(printf \'%s\' "$J" | python3 -c \'import json\')"\n'},
             {"s.sh": 'K="$(printf \'%s\' "$J" | python3 "${SCRIPT_DIR}/k.py")"\n'},
+            "s.sh:1",
+        ),
+        (
+            # A quoted value blanked to spaces would split the assignment and
+            # leave python3 reading as one of its arguments.
+            "a program behind an assignment whose quoted value holds a space",
+            {"s.sh": "LC_ALL='C.UTF-8 x' python3 -c 'print(1)'\n"},
+            {"s.sh": "LC_ALL='C.UTF-8 x' python3 \"${SCRIPT_DIR}/p.py\"\n"},
             "s.sh:1",
         ),
         (
