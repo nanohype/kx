@@ -256,13 +256,15 @@ MINIMUM_EXAMINED = {
     # Counts every script and Taskfile command that reaches the cluster, which
     # the run prints as its denominator; set well under it, like the others.
     "nothing kx runs can reach a cluster other than kind-kx": 70,
+    # Unconditional: both ports, or the check did not look.
+    "localhost:80 and :443 reach Cilium's Ingress": 2,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 14
+MINIMUM_CHECKS = 15
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -1669,6 +1671,60 @@ def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+KIND_CONFIG = "cluster/kind-config.yaml"
+CILIUM_VALUES = "stack/core/cilium/values.yaml"
+
+# Each host port the cluster's Ingress is reached on, and the field of Cilium's
+# shared Ingress Service that fixes the NodePort behind it.
+INGRESS_PORTS = {80: "insecureNodePort", 443: "secureNodePort"}
+
+
+def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
+    """localhost:80 and :443 reach Cilium's Ingress.
+
+    kind publishes a host port to a container port on a node, and Cilium's shared
+    Ingress Service listens on the NodePorts its values fix. The two numbers live
+    in different files, and nothing fails when they part: the cluster comes up,
+    every Ingress is admitted, and localhost answers with a reset. So each host
+    port's mapping is held to the NodePort it has to reach.
+    """
+    try:
+        kind = yaml.safe_load((root / KIND_CONFIG).read_text()) or {}
+        values = yaml.safe_load((root / CILIUM_VALUES).read_text()) or {}
+    except FileNotFoundError as e:
+        return [f"{pathlib.Path(e.filename).relative_to(root)} does not exist — refusing to report "
+                f"the Ingress ports reachable without it."]
+    except yaml.YAMLError as e:
+        return [f"{KIND_CONFIG} or {CILIUM_VALUES} does not parse ({e}), so the ports it names "
+                f"cannot be read."]
+    ingress = values.get("ingressController") or {}
+    if not ingress.get("enabled"):
+        return [f"{CILIUM_VALUES} does not enable ingressController, so nothing serves Ingress "
+                f"behind localhost:80 and :443."]
+    service = ingress.get("service") or {}
+    problems = []
+    if service.get("type") not in ("NodePort", "LoadBalancer"):
+        problems.append(f"{CILIUM_VALUES} gives the shared Ingress Service type "
+                        f"{service.get('type')!r}, which allocates no NodePort for kind to map.")
+    mappings = {m.get("hostPort"): m for node in kind.get("nodes") or []
+                for m in node.get("extraPortMappings") or []}
+    for host, field in INGRESS_PORTS.items():
+        nodeport, mapping = service.get(field), mappings.get(host)
+        if nodeport is None:
+            problems.append(f"{CILIUM_VALUES} fixes no ingressController.service.{field}, so the "
+                            f"port localhost:{host} has to reach is whatever the cluster allocates.")
+        elif mapping is None:
+            problems.append(f"{KIND_CONFIG} publishes nothing on host port {host}, so localhost:"
+                            f"{host} does not reach Cilium's Ingress on NodePort {nodeport}.")
+        elif mapping.get("containerPort") != nodeport:
+            problems.append(f"{KIND_CONFIG} maps localhost:{host} to container port "
+                            f"{mapping.get('containerPort')}, but Cilium's Ingress listens on "
+                            f"NodePort {nodeport} ({CILIUM_VALUES} ingressController.service."
+                            f"{field}).")
+    EXAMINED["localhost:80 and :443 reach Cilium's Ingress"] = len(INGRESS_PORTS)
+    return problems
+
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -1686,6 +1742,7 @@ CHECKS = [
     ("every Python file compiles", python_files_compile),
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
     ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
+    ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -2289,6 +2346,54 @@ CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
         "nothing that reaches a cluster at all",
         {"README.md": "nothing here\n"},
         {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+    ),
+]
+
+
+def _ingress(http: int | None = 31080, https: int | None = 31443, enabled: bool = True,
+             maps: dict[int, int] | None = None) -> dict[str, str]:
+    """kind-config.yaml and cilium's values.yaml, publishing `maps` (host -> container)."""
+    maps = {80: 31080, 443: 31443} if maps is None else maps
+    ports = "".join(f"          - {{containerPort: {c}, hostPort: {h}}}\n" for h, c in maps.items())
+    fixed = "".join(f"    {k}: {v}\n" for k, v in
+                    (("insecureNodePort", http), ("secureNodePort", https)) if v is not None)
+    return {
+        KIND_CONFIG: f"nodes:\n  - role: control-plane\n    extraPortMappings:\n{ports}",
+        CILIUM_VALUES: (f"ingressController:\n  enabled: {str(enabled).lower()}\n"
+                        f"  service:\n    type: NodePort\n{fixed}"),
+    }
+
+
+CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
+    (
+        "localhost:80 mapped to the port ingress-nginx used to hold",
+        _ingress(maps={80: 80, 443: 31443}),
+        _ingress(),
+        "maps localhost:80 to container port 80",
+    ),
+    (
+        "the HTTPS NodePort moved without its mapping",
+        _ingress(https=31444),
+        _ingress(),
+        "NodePort 31444",
+    ),
+    (
+        "no mapping on host port 443",
+        _ingress(maps={80: 31080}),
+        _ingress(),
+        "publishes nothing on host port 443",
+    ),
+    (
+        "no NodePort fixed for plain HTTP",
+        _ingress(http=None),
+        _ingress(),
+        "insecureNodePort",
+    ),
+    (
+        "the Ingress controller switched off",
+        _ingress(enabled=False),
+        _ingress(),
+        "does not enable ingressController",
     ),
 ]
 

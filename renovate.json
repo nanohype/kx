@@ -7,7 +7,7 @@
     {
       "description": [
         "Chart pins in stack/*/*/install.sh. Renovate ships no manager that reads a version out of a shell script, and this repo keeps every pin there by design — explicit install scripts are the point, so the fix is to teach Renovate the shape rather than move the pins.",
-        "Every chart version in this repo lives in an install.sh, and mirror-check.py skips anything declared kx-only in stack/upstream.json — so without a customManager the kx-only charts (argo-cd, cloudnative-pg, ingress-nginx, kube-prometheus-stack, minio, nats, trust-manager) have no currency instrument at all.",
+        "Every chart version in this repo lives in an install.sh, and mirror-check.py skips anything declared kx-only in stack/upstream.json — so without a customManager the kx-only charts (argo-cd, cloudnative-pg, kube-prometheus-stack, minio, nats, trust-manager) have no currency instrument at all.",
         "One `helm repo add` per file is what lets the URL and the chart be captured separately without a backreference. Renovate's regex engine is RE2, which has none."
       ],
       "customType": "regex",

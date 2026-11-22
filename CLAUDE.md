@@ -6,20 +6,20 @@ Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https
 
 - **Workspace, not curriculum.** No `labs/`, no walkthroughs, no "break it on purpose" exercises. The user lives in this cluster across many projects; learning happens through use.
 - **Always-complete.** `task up` brings the cluster and the core stack online. No "now install cert-manager yourself."
-- **Core + opt-in slices.** Core (always on): gateway-api CRDs, cilium (with Gateway API enabled), prometheus-operator-crds, cert-manager, trust-manager, metrics-server, ingress-nginx, reloader, argo-cd (idle). Opt-in slices in `stack/<slice>/`: observability, security, autoscaling, argo-platform, secrets, data, ai-platform.
+- **Core + opt-in slices.** Core (always on): gateway-api CRDs, cilium (with Ingress and Gateway API enabled), prometheus-operator-crds, cert-manager, trust-manager, metrics-server, reloader, argo-cd (idle). Opt-in slices in `stack/<slice>/`: observability, security, autoscaling, argo-platform, secrets, data, ai-platform.
 - **Convention-based project attachment.** kx has no project registry. Projects live wherever they live and target the `kind-kx` context with their own namespace, through kx's kubeconfig at `.kube/config` (or a `kind export kubeconfig --name kx` of their own).
 - **kx acts on kind-kx and nothing else.** The cluster's kubeconfig lives in `.kube/config` at the repo root, which `task up` writes and `task down` removes. kx never reads, writes or switches the context of the user's own kubeconfig.
 - **ArgoCD installed but idle.** It's part of the stack to learn against, but it does not own the addon lifecycle. No App-of-Apps Application is created by `task up`.
 
 ## Substitutes are invisible
 
-When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (ingress-nginx is `stack/core/ingress-nginx`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
+When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (cloudnative-pg, standing in for Aurora, is `stack/data/cloudnative-pg`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
 
 Local mappings:
 
 | eks-gitops | kx | Note |
 |---|---|---|
-| aws-load-balancer-controller | ingress-nginx (+ Cilium Gateway API) | Different product, same role |
+| aws-load-balancer-controller | cilium (Ingress + Gateway API) | Different product, same role. The same Cilium chart as the CNI serves Ingress, published on NodePorts kind maps to `localhost:80`/`:443` |
 | external-secrets (AWS SM) | external-secrets (kubernetes provider) | Same chart, swap provider |
 | external-dns (Route53) | (not installed by default; coredns RFC2136 if needed) | Add to data/ slice if a project requires it |
 | velero (S3) | velero + minio | Same Velero, S3-compatible backend |

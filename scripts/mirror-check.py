@@ -617,7 +617,7 @@ def self_test() -> int:
         ("kx pinned behind the catalog", cmp({}, up={**upstream, "cilium": "1.20.0"})),
         ("a catalog chart with no kx slice", cmp({}, up={**upstream, "velero": "12.1.0"})),
         ("a kx chart the catalog does not pin",
-         cmp({}, loc={**local, "ingress-nginx": ("4.15.1", Path("x"))})),
+         cmp({}, loc={**local, "only-in-kx": ("1.0.0", Path("x"))})),
         ("a divergence declared gitops-only that kx now has",
          cmp({"cilium": {"chart": "cilium", "kind": "gitops-only"}})),
         ("a divergence declared kx-only that the catalog now pins",

@@ -83,6 +83,30 @@ gatewayAPI:
   enableAlpn: true
   enableAppProtocol: true
 
+# Ingress controller — the local role aws-load-balancer-controller plays on a
+# real cluster, served by the same Envoy as the Gateway API above. Default
+# class, so an Ingress that names none is served too.
+#
+# One shared entrypoint for every Ingress, published as fixed NodePorts that
+# cluster/kind-config.yaml maps to localhost:80 and localhost:443 on loopback.
+# The listeners are not put on the host network: that mode binds one shared
+# port, so 80 and 443 could not both be served, and it needs the bind-service
+# capability on Envoy besides. kube-proxy replacement serves the NodePorts.
+#
+# An Ingress served this way carries no address in its status, since nothing
+# allocates a load-balancer IP on kind. A tool that waits for one waits forever.
+#
+# TLS passthrough is per Ingress, with the ingress.cilium.io/tls-passthrough
+# annotation, rather than a controller flag.
+ingressController:
+  enabled: true
+  default: true
+  loadbalancerMode: shared
+  service:
+    type: NodePort
+    insecureNodePort: 31080
+    secureNodePort: 31443
+
 # ─── Resource bounds ────────────────────────────────────────────────────────
 # Follows eks-gitops' cilium bounds in SHAPE, not in numbers. The chart ships
 # `resources: {}` for every component, so unset, the agent and the Envoy proxy
