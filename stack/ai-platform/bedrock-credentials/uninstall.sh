@@ -14,6 +14,9 @@
 # the source, then the grant. Every step is reached even if an earlier one finds
 # nothing.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"

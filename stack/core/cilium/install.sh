@@ -3,6 +3,8 @@
 # Must be installed first or nodes stay NotReady (kind default CNI is disabled in cluster/kind-config.yaml).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add cilium https://helm.cilium.io --force-update >/dev/null
 helm repo update cilium >/dev/null

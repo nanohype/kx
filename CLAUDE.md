@@ -7,7 +7,8 @@ Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https
 - **Workspace, not curriculum.** No `labs/`, no walkthroughs, no "break it on purpose" exercises. The user lives in this cluster across many projects; learning happens through use.
 - **Always-complete.** `task up` brings the cluster and the core stack online. No "now install cert-manager yourself."
 - **Core + opt-in slices.** Core (always on): gateway-api CRDs, cilium (with Gateway API enabled), prometheus-operator-crds, cert-manager, trust-manager, metrics-server, ingress-nginx, reloader, argo-cd (idle). Opt-in slices in `stack/<slice>/`: observability, security, autoscaling, argo-platform, secrets, data, ai-platform.
-- **Convention-based project attachment.** kx has no project registry. Projects live wherever they live and target the `kind-kx` context with their own namespace.
+- **Convention-based project attachment.** kx has no project registry. Projects live wherever they live and target the `kind-kx` context with their own namespace, through kx's kubeconfig at `.kube/config` (or a `kind export kubeconfig --name kx` of their own).
+- **kx acts on kind-kx and nothing else.** The cluster's kubeconfig lives in `.kube/config` at the repo root, which `task up` writes and `task down` removes. kx never reads, writes or switches the context of the user's own kubeconfig.
 - **ArgoCD installed but idle.** It's part of the stack to learn against, but it does not own the addon lifecycle. No App-of-Apps Application is created by `task up`.
 
 ## Substitutes are invisible
@@ -87,6 +88,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 - Top-level: `task up | down | reset | status | stack:* | port-forward:*`
 - Per-slice: `stack/<slice>/Taskfile.yaml` provides `enable` and `disable` targets that loop over the slice's addons
 - Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon, or the addon's `uninstall.sh` where there is no release to uninstall (envoy-gateway-crds, bedrock-credentials)
+- Every script that reaches the cluster sources `cluster/kubeconfig.sh` right after it sets `SCRIPT_DIR`, and every Taskfile command that runs kubectl, helm or kind carries `KUBECONFIG='{{.ROOT_DIR}}/.kube/config'` itself. A Taskfile's `env:` cannot do this, because it never overrides a `KUBECONFIG` the shell already exports. `check-slice-integrity.py` refuses a command that reaches a cluster without its binding
 
 ## What NOT to do
 

@@ -24,6 +24,8 @@
 # Tear down: task stack:data:druid:disable
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 # Path to the eks-gitops Druid chart. Resolves relative to kx's repo location
 # (kx/stack/data/druid → ../../../../eks-gitops). Override via env if your repos

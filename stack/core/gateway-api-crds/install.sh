@@ -4,6 +4,9 @@
 # and so any workload that references HTTPRoute / Gateway / GatewayClass applies cleanly.
 # Upstream: https://github.com/kubernetes-sigs/gateway-api
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 GATEWAY_API_VERSION="v1.7.0"
 # The digest of the manifest that version publishes. `kubectl apply -f <url>`

@@ -12,6 +12,9 @@
 # registry. Nothing else in kx installs gateway.envoyproxy.io; the AI layer's
 # kinds are aigateway.envoyproxy.io, which the anchored pattern does not match.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 NS=envoy-gateway-system
 

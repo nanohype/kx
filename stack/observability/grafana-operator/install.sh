@@ -2,6 +2,8 @@
 # grafana-operator — manage Grafana dashboards/datasources/folders via CRDs
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add grafana https://grafana.github.io/helm-charts --force-update >/dev/null
 helm repo update grafana >/dev/null

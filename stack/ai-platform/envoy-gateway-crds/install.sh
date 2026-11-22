@@ -31,6 +31,8 @@
 # version bump, instead of stopping on the first field that changed.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 # Rendered to a file before anything reaches the API server, so a render that
 # fails partway applies nothing rather than whatever it had written.

@@ -15,6 +15,12 @@ version: '3'
 #
 # The ArgoCD and Grafana UIs need no task — they are NodePorts published on
 # loopback at localhost:30080 and localhost:30030.
+#
+# Every command here that reaches the cluster names kx's own kubeconfig,
+# .kube/config at this directory, which holds the kind-kx context alone: the
+# scripts by sourcing cluster/kubeconfig.sh, a direct kubectl, helm or kind
+# command by carrying KUBECONFIG itself. Task's `env:` cannot do it, since it
+# never overrides a KUBECONFIG the shell already exports.
 
 includes:
   cluster:
@@ -66,7 +72,7 @@ tasks:
   port-forward:model-gateway:
     desc: A Platform's model gateway on http://localhost:8080 (PLATFORM=<name>, requires ai-platform slice)
     cmds:
-      - kubectl -n tenants-{{.PLATFORM}} port-forward svc/{{.PLATFORM}}-gateway 8080:8080
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl -n tenants-{{.PLATFORM}} port-forward svc/{{.PLATFORM}}-gateway 8080:8080
     requires:
       vars: [PLATFORM]
 
@@ -81,5 +87,5 @@ tasks:
   argocd:initial-password:
     desc: Print the ArgoCD admin password
     cmds:
-      - kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
       - echo

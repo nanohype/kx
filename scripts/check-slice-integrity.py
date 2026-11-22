@@ -42,6 +42,8 @@ import subprocess
 import sys
 import tempfile
 
+import yaml
+
 # Overridable so the suite-wide floor can point a gate at a fixture it wrote and
 # observe the real exit status instead of asking the gate about itself.
 ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "")
@@ -251,13 +253,15 @@ MINIMUM_EXAMINED = {
     "every Python file compiles": 9,
     # The shell scripts and Taskfiles together, 55 today.
     "no shell script runs Python from a string or stdin": 40,
+    # 43 scripts and 49 Taskfile commands reach the cluster today.
+    "nothing kx runs can reach a cluster other than kind-kx": 70,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 13
+MINIMUM_CHECKS = 14
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -1538,6 +1542,132 @@ def python_runs_from_files(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+# The binding every script that reaches the cluster sources, and the prefix every
+# Taskfile command that reaches it carries. Both name kx's own kubeconfig, which
+# holds the kind-kx context alone.
+KUBECONFIG_BINDING = "cluster/kubeconfig.sh"
+KUBECONFIG_PREFIX = "KUBECONFIG='{{.ROOT_DIR}}/.kube/config'"
+KUBECONFIG_EXPORT = "export " + KUBECONFIG_PREFIX
+SOURCES_BINDING = re.compile(r'^\s*(?:\.|source)\s+"\$\{SCRIPT_DIR\}/([^"]+)"\s*$')
+
+# kubectl, kind or helm as a command word. A colon after the word is YAML — a
+# heredoc's `kind: ConfigMap` — not a command.
+CLUSTER_TOOL = re.compile(r"(?<![\w./-])(kubectl|kind|helm)(?![\w.:-])")
+
+# helm verbs that work from the chart and the local cache alone. Every other
+# verb, including a read like `list` or `status`, asks a cluster.
+HELM_CLUSTERLESS = {
+    "repo", "template", "search", "show", "version", "lint", "dependency", "plugin", "env",
+    "completion", "package", "verify", "pull", "inspect",
+}
+
+
+def cluster_commands(text: str) -> list[tuple[int, int, str]]:
+    """Every command in shell `text` that reaches a cluster, as (line, offset, folded line).
+
+    The offset is where the tool's name starts in the folded line, so a caller can
+    read the command it belongs to.
+    """
+    found = []
+    for n, cmd in logical_lines(strip_comments(text)):
+        code = code_view(cmd)
+        for m in CLUSTER_TOOL.finditer(code):
+            if not in_command_position(code[:m.start()]):
+                continue
+            if m.group(1) == "helm":
+                after = code[m.end():].split()
+                if after and after[0] in HELM_CLUSTERLESS:
+                    continue
+            found.append((n, m.start(), cmd))
+    return found
+
+
+def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
+    """Nothing kx runs can reach a cluster other than kind-kx.
+
+    kx keeps its cluster's kubeconfig in .kube/config at the repository root, and
+    every command that reaches a cluster is pointed at that file rather than at
+    whatever the shell's KUBECONFIG or current context names. Without that, a
+    `task stack:data:disable` run in a shell pointed at a production cluster
+    runs its `helm uninstall` and `kubectl delete ns` there, and the
+    bedrock-credentials installer writes a profile's AWS keys into it.
+
+    Two shapes, because Task cannot bind its children: a Taskfile's `env:` never
+    overrides a variable the shell already exports.
+
+    - A shell script sources cluster/kubeconfig.sh before its first such command,
+      by a path that resolves to that file. The binding points KUBECONFIG at kx's
+      file and stops the script unless the context there is kind-kx, so it also
+      holds when the script is run without task.
+    - A Taskfile command carries KUBECONFIG='{{.ROOT_DIR}}/.kube/config' in the
+      command itself, or exports it on an earlier line of the same block.
+      ROOT_DIR is task's own path to the root Taskfile, which the environment
+      cannot override; run any other way it names a file that does not exist,
+      and kubectl refuses rather than falling back to the user's kubeconfig.
+
+    A command that reaches a cluster is kubectl, kind, or a helm verb other than
+    the ones that work from the chart and the local cache alone.
+    """
+    problems = []
+    binding = root / KUBECONFIG_BINDING
+    examined = 0
+    for script in tracked_files(root, "*.sh"):
+        if script == binding:
+            continue
+        lines = strip_comments(script.read_text()).splitlines()
+        reaches = cluster_commands(script.read_text())
+        if not reaches:
+            continue
+        examined += 1
+        first = reaches[0][0]
+        bound = None
+        for n, line in enumerate(lines, 1):
+            m = SOURCES_BINDING.match(line)
+            if m and (script.parent / m.group(1)).resolve() == binding.resolve():
+                bound = n
+                break
+        rel = script.relative_to(root)
+        if bound is None:
+            problems.append(f"{rel}:{first} reaches a cluster, and the script never sources "
+                            f"{KUBECONFIG_BINDING} by a path that resolves to it, so it acts on "
+                            f"whatever cluster the shell points at.")
+        elif bound > first:
+            problems.append(f"{rel}:{first} reaches a cluster before line {bound} sources "
+                            f"{KUBECONFIG_BINDING}, so that command acts on whatever cluster "
+                            f"the shell points at.")
+    if not binding.is_file() and examined:
+        problems.append(f"{KUBECONFIG_BINDING} does not exist, so no script can be bound by it.")
+    for taskfile in tracked_files(root, "*Taskfile.yaml"):
+        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
+        for name, task in tasks.items():
+            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
+                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+                if not isinstance(text, str):
+                    continue
+                reaches = cluster_commands(text)
+                if not reaches:
+                    continue
+                examined += 1
+                exported = next((n for n, line in enumerate(text.splitlines(), 1)
+                                 if line.strip() == KUBECONFIG_EXPORT), None)
+                for n, at, folded in reaches:
+                    if exported is not None and exported < n:
+                        continue
+                    segment = COMMAND_SEP.split(folded[:at])[-1].split()
+                    if KUBECONFIG_PREFIX not in segment:
+                        problems.append(
+                            f"{taskfile.relative_to(root)} task `{name}`: "
+                            f"`{folded.strip()[:70]}` reaches a cluster without "
+                            f"{KUBECONFIG_PREFIX}, so it acts on whatever cluster the shell "
+                            f"points at."
+                        )
+    EXAMINED["nothing kx runs can reach a cluster other than kind-kx"] = examined
+    if not examined:
+        return ["found no script or Taskfile command that reaches a cluster — refusing to report "
+                "every one bound over an empty set."]
+    return problems
+
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -1554,6 +1684,7 @@ CHECKS = [
     ("every fetched artifact is verified before it is used", remote_artifacts_are_verified),
     ("every Python file compiles", python_files_compile),
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
+    ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -2065,6 +2196,100 @@ CONTROLS = {
         ),
     ],
 }
+
+
+_BINDING = {KUBECONFIG_BINDING: "# the binding\n"}
+_SCRIPT_DIR = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+_SOURCES = '. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"\n'
+_BOUND_SCRIPT = _SCRIPT_DIR + _SOURCES + "kubectl apply -f x.yaml\n"
+_PREFIX = KUBECONFIG_PREFIX + " "
+
+
+def _taskfile(*cmds: str) -> str:
+    """A Taskfile with one task, `d`, running `cmds`."""
+    body = "".join(f"      - {c}\n" for c in cmds)
+    return f"version: '3'\ntasks:\n  d:\n    cmds:\n{body}"
+
+
+CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
+    (
+        "a script that runs kubectl without the binding",
+        {**_BINDING, "stack/s/a/install.sh": "kubectl apply -f x.yaml\n"},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "stack/s/a/install.sh:1",
+    ),
+    (
+        "a script that binds only after its first cluster command",
+        {**_BINDING, "stack/s/a/install.sh":
+            "helm upgrade --install a x/a --version 1 --timeout 1m\n" + _SCRIPT_DIR + _SOURCES},
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + _SOURCES + "helm upgrade --install a x/a --version 1 --timeout 1m\n"},
+        "before line 3",
+    ),
+    (
+        "a binding sourced by a path that resolves somewhere else",
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + '. "${SCRIPT_DIR}/../../cluster/kubeconfig.sh"\nkubectl get ns\n'},
+        {**_BINDING, "stack/s/a/install.sh": _SCRIPT_DIR + _SOURCES + "kubectl get ns\n"},
+        "never sources",
+    ),
+    (
+        "the binding file itself is missing",
+        {"stack/s/a/install.sh": _BOUND_SCRIPT},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "does not exist",
+    ),
+    (
+        "a script that only renders charts needs no binding",
+        {**_BINDING, "scripts/r.sh": "helm repo update\nhelm template a x/a\n",
+         "stack/s/a/install.sh": "kubectl get ns\n"},
+        {**_BINDING, "scripts/r.sh": "helm repo update\nhelm template a x/a\n",
+         "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "stack/s/a/install.sh:1",
+    ),
+    (
+        # If `kind:` counted as a command, the report would cite line 3.
+        "a heredoc's `kind:` is YAML, not a command",
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + "cat >m.yaml <<EOF\nkind: ConfigMap\nEOF\nkubectl apply -f m.yaml\n"},
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + "cat >m.yaml <<EOF\nkind: ConfigMap\nEOF\n" + _SOURCES
+            + "kubectl apply -f m.yaml\n"},
+        "install.sh:5 reaches a cluster",
+    ),
+    (
+        "a Taskfile command that uninstalls without the binding",
+        {**_BINDING, "Taskfile.yaml": _taskfile("helm uninstall -n a a || true")},
+        {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "helm uninstall -n a a || true")},
+        "task `d`",
+    ),
+    (
+        "the binding on one side of a pipe does not reach the other",
+        {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "kubectl get ns | kubectl apply -f -")},
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile(_PREFIX + "kubectl get ns | " + _PREFIX + "kubectl apply -f -")},
+    ),
+    (
+        "a Taskfile block that exports the binding after its first command",
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile("|\n        kubectl get crd\n        " + KUBECONFIG_EXPORT)},
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile("|\n        " + KUBECONFIG_EXPORT + "\n        kubectl get crd")},
+    ),
+    (
+        "a Taskfile command that runs a bound script needs no binding of its own",
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("bash stack/s/a/install.sh", "kubectl get ns")},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("bash stack/s/a/install.sh")},
+        "kubectl get ns",
+    ),
+    (
+        "nothing that reaches a cluster at all",
+        {"README.md": "nothing here\n"},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+    ),
+]
 
 
 def _tree(files: dict[str, str]) -> pathlib.Path:

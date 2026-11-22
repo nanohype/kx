@@ -2,6 +2,8 @@
 # cloudnative-pg — postgres operator. Per-project Postgres clusters via the Cluster CR.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add cnpg https://cloudnative-pg.github.io/charts --force-update >/dev/null
 helm repo update cnpg >/dev/null

@@ -4,6 +4,8 @@
 # Password: task argocd:initial-password
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
 helm repo update argo >/dev/null

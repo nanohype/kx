@@ -2,6 +2,8 @@
 # opencost — Kubernetes cost monitoring (reads from in-cluster prometheus)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add opencost https://opencost.github.io/opencost-helm-chart --force-update >/dev/null
 helm repo update opencost >/dev/null

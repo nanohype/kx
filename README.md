@@ -23,13 +23,20 @@ task stack:observability:enable          # enable an opt-in slice
 task down                                # tear down the cluster
 ```
 
-Projects target the cluster by convention: pick a namespace and point kubeconfig at the `kind-kx` context.
+kx keeps its cluster's kubeconfig in `.kube/config` at the root of this repository and never reads, writes or
+switches the context of yours. Every task and every script is bound to that file, so no kx command can act on
+another cluster, whatever your shell's `KUBECONFIG` or current context names.
+
+Projects target the cluster by convention: pick a namespace and point kubectl at kx's kubeconfig.
 
 ```
-kind export kubeconfig --name kx
+export KUBECONFIG=/path/to/kx/.kube/config   # stays current across task reset
 kubectl create namespace my-project
 kubectl -n my-project apply -f ...
 ```
+
+`kind export kubeconfig --name kx` merges the `kind-kx` context into your own kubeconfig instead, and makes it
+the current context there. Run it again after `task reset`, which gives the API server a new address.
 
 ## What's installed
 
@@ -92,6 +99,7 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | Symptom | Cause | Remedy |
 |---|---|---|
 | `task up` fails immediately | Docker Desktop / OrbStack not running | Start it; kind needs a container runtime |
+| A task or script stops with `.kube/config holds no kind-kx context` | There is no cluster, `task down` removed its kubeconfig, or the cluster was created by a kx that kept its context in your own kubeconfig | `task up` — it creates the cluster, or writes `.kube/config` for one that already exists |
 | A slice enables but pods sit `Pending` | kind node is out of CPU/memory — the data slice and druid are the usual causes | Raise the VM's limits, or disable a slice you are not using |
 | `task stack:ai-platform:enable` fails on the operator | No sibling `eks-agent-platform` checkout — the operator image is built locally, not published | Clone it beside `kx`, or set `KX_EKS_AGENT_PLATFORM_DIR` |
 | `task stack:data:druid:enable` fails on a missing chart | Druid runs the unmodified `eks-gitops` chart from a sibling checkout | Clone `eks-gitops` beside `kx`, or set `KX_DRUID_CHART_DIR` |

@@ -2,6 +2,8 @@
 # nats — message broker. Single-node, no JetStream by default; flip on per-project.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update >/dev/null
 helm repo update nats >/dev/null

@@ -2,6 +2,8 @@
 # reloader — pod restart on ConfigMap/Secret change. Cheap, convenient.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add stakater https://stakater.github.io/stakater-charts --force-update >/dev/null
 helm repo update stakater >/dev/null

@@ -4,6 +4,9 @@
 # Standard kind-with-registry pattern. Idempotent.
 
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=kubeconfig.sh
+. "${SCRIPT_DIR}/kubeconfig.sh"
 
 REG_NAME="kx-registry"
 REG_PORT="5001"

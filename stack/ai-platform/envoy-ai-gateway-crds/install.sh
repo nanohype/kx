@@ -7,6 +7,9 @@
 # installing the controller first leaves it watching kinds the API server has
 # never heard of, which reports healthy and reconciles nothing.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm upgrade --install envoy-ai-gateway-crds oci://docker.io/envoyproxy/ai-gateway-crds-helm \
   --namespace envoy-gateway-system \

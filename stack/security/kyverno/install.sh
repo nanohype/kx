@@ -2,6 +2,8 @@
 # kyverno — admission policy engine
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update >/dev/null
 helm repo update kyverno >/dev/null
