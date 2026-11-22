@@ -1750,10 +1750,14 @@ OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl)(?![
 # helm verbs that ask a cluster and take no timeout of their own.
 HELM_UNBOUNDED_READS = {"list", "status", "history", "get", "test"}
 
-# kubectl's global flags that take the next word as their value, so that word
-# is not the verb.
+# kubectl's flags that take the next word as their value, so that word is not
+# the verb.
 KUBECTL_VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "--cluster", "--user",
-                       "-l", "--selector", "-o", "--output"}
+                       "-l", "--selector", "-o", "--output", "--request-timeout", "--timeout"}
+
+# A duration as kubectl and curl spell one: Go's `1h30m`, `90s` or `500ms`, or
+# a bare number of seconds.
+DURATION = re.compile(r"(\d+(\.\d+)?(h|m|s|ms|us|µs|ns))+|\d+(\.\d+)?")
 
 # The subprocess entry points that block until their child exits.
 SUBPROCESS_BLOCKING = {"run", "call", "check_call", "check_output"}
@@ -1774,14 +1778,28 @@ def kubectl_words(rest: str) -> tuple[str, str]:
     return "", ""
 
 
-def _has_timeout(segment: str) -> bool:
-    return bool(re.search(r"--timeout[=\s]", segment + " "))
+def _bound(segment: str, flag: str, *aliases: str) -> str | None:
+    """None when `segment` gives `flag` a positive duration, else why it does not.
+
+    The last value given is the one read, as the tools themselves read a
+    repeated flag. Zero is how kubectl's --request-timeout, rollout status's
+    --timeout and curl's --max-time each spell "no limit", so a zero is refused
+    rather than read as a bound, and so is a value this cannot read as a
+    duration: a bound that is named has to be one a reader can see.
+    """
+    names = "|".join(re.escape(f) for f in (flag, *aliases))
+    values = re.findall(rf"(?<![\w-])(?:{names})(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
+    if not values:
+        return f"without {flag}"
+    value = values[-1]
+    if not DURATION.fullmatch(value) or not re.search(r"[1-9]", value):
+        return f"with {flag} {value or '(empty)'}, which is no bound"
+    return None
 
 
 def _curl_unbounded(segment: str, rest: str) -> str | None:
-    if re.search(r"(^|\s)(--max-time|-m)[\s=]", segment + " "):
-        return None
-    return "curl without --max-time"
+    problem = _bound(segment, "--max-time", "-m")
+    return f"curl {problem}" if problem else None
 
 
 def _runner_only(tool: str):
@@ -1801,13 +1819,11 @@ def _kubectl_unbounded(segment: str, rest: str) -> str | None:
     verb, after = kubectl_words(rest)
     if verb in ("config", "port-forward") or (verb == "version" and "--client" in segment):
         return None
-    if verb == "wait" or (verb == "rollout" and after == "status"):
-        return None if _has_timeout(segment) else f"kubectl {verb} without --timeout"
-    missing = [flag for flag, present in (
-        ("--request-timeout", "--request-timeout" in segment),
-        ("--timeout", verb != "delete" or _has_timeout(segment)),
-    ) if not present]
-    return f"kubectl {verb or '(no verb)'} without {' or '.join(missing)}" if missing else None
+    name = f"rollout {after}" if verb == "rollout" else verb or "(no verb)"
+    waits = verb in ("wait", "delete") or name == "rollout status"
+    flags = ("--request-timeout", "--timeout") if waits else ("--request-timeout",)
+    problems = [p for p in (_bound(segment, flag) for flag in flags) if p]
+    return f"kubectl {name} {' and '.join(problems)}" if problems else None
 
 
 UNBOUNDED_BY_TOOL = {
@@ -1818,6 +1834,23 @@ UNBOUNDED_BY_TOOL = {
     "helm": _helm_unbounded,
     "kubectl": _kubectl_unbounded,
 }
+
+
+def _subprocess_unbounded(call: ast.Call) -> str | None:
+    """Why a blocking subprocess call is unbounded, or None.
+
+    `timeout=None` is the default spelled out, and a timeout that is not a
+    positive number expires before the child can run; a name or an expression
+    is read as the bound it names.
+    """
+    timeout = next((k.value for k in call.keywords if k.arg == "timeout"), None)
+    if timeout is None:
+        return "without timeout="
+    if isinstance(timeout, ast.Constant):
+        value = timeout.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            return f"with timeout={value!r}, which is no bound"
+    return None
 
 
 def why_unbounded(tool: str, segment: str, bounded: bool) -> str | None:
@@ -1854,10 +1887,17 @@ def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
     until somebody notices, and the step it hangs reads exactly like a slow one.
     Each tool is held to the bound it has:
 
-    - kubectl carries --request-timeout, and `wait`, `rollout status` and
-      `delete` carry --timeout as well, since each of those waits on the
-      cluster after its request returns. `config` is local and `port-forward`
-      runs until it is stopped, by design.
+    - kubectl carries --request-timeout, which bounds each request it makes.
+      `wait`, `rollout status` and `delete` carry --timeout as well, since each
+      of those goes on waiting on the cluster after its request returns. Each
+      bounds what the other cannot: --timeout bounds the wait, but not the
+      request that fetches the object before it, which kubectl sends with no
+      deadline of its own; and when --request-timeout closes the wait's watch,
+      kubectl opens another, so the wait still runs to its --timeout. `config`
+      is local and `port-forward` runs until it is stopped, by design.
+    - A bound is a positive duration. Zero is how kubectl's --request-timeout,
+      `rollout status` and curl each say "no limit", and `timeout=None` is
+      subprocess's default spelled out.
     - helm's release verbs carry --timeout, which the invariant above holds.
       `helm repo` verbs default to a two-minute timeout of their own. helm's
       read verbs take none, so they run under deadline.
@@ -1902,10 +1942,11 @@ def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
                 if node.func.attr == "Popen":
                     problems.append(f"{path.relative_to(root)}:{node.lineno}: subprocess.Popen "
                                     f"takes no timeout; use subprocess.run with timeout=.")
-                elif (node.func.attr in SUBPROCESS_BLOCKING
-                      and not any(k.arg == "timeout" for k in node.keywords)):
-                    problems.append(f"{path.relative_to(root)}:{node.lineno}: "
-                                    f"subprocess.{node.func.attr} without timeout=.")
+                elif node.func.attr in SUBPROCESS_BLOCKING:
+                    why = _subprocess_unbounded(node)
+                    if why:
+                        problems.append(f"{path.relative_to(root)}:{node.lineno}: "
+                                        f"subprocess.{node.func.attr} {why}.")
     EXAMINED["every call that leaves this machine is bounded"] = examined
     if not examined:
         return ["found no outbound call in any script, Taskfile or gate — refusing to report "
@@ -2681,9 +2722,43 @@ CONTROLS["every call that leaves this machine is bounded"] = [
     ),
     (
         "a wait is read across its continuation lines",
-        {"s.sh": "kubectl wait --for=condition=Ready pod/x \\\n  -n y\n"},
-        {"s.sh": "kubectl wait --for=condition=Ready pod/x \\\n  --timeout=60s\n"},
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x \\\n  -n y\n"},
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x \\\n"
+                 "  --timeout=60s\n"},
         "kubectl wait without --timeout",
+    ),
+    (
+        "a wait bounded by --timeout alone, whose first request has no deadline",
+        {"s.sh": "kubectl wait --for=condition=Ready pod/x --timeout=60s\n"},
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x --timeout=60s\n"},
+        "kubectl wait without --request-timeout",
+    ),
+    (
+        "a rollout status, which waits forever unless told otherwise",
+        {"s.sh": "kubectl --request-timeout=60s -n y rollout status deployment/x\n"},
+        {"s.sh": "kubectl --request-timeout=60s -n y rollout status deployment/x --timeout=5m\n"},
+        "kubectl rollout status without --timeout",
+    ),
+    (
+        "a zero request timeout, which is kubectl's spelling of none",
+        {"s.sh": "kubectl --request-timeout=0s get ns\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"},
+        "kubectl get with --request-timeout 0s, which is no bound",
+    ),
+    (
+        "a request timeout given as its own word, which is not the verb",
+        {"s.sh": "kubectl --request-timeout 0 get ns\n"},
+        {"s.sh": "kubectl --request-timeout 60s get ns\n"},
+        "kubectl get with --request-timeout 0",
+    ),
+    (
+        # Each word that opens a command is proven under the Python invariant;
+        # this proves the bound check reads through one as well.
+        "a kubectl asked as an if condition",
+        {"s.sh": "kubectl --request-timeout=60s get ns\nif kubectl get ns x; then :; fi\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"
+                 "if kubectl --request-timeout=60s get ns x; then :; fi\n"},
+        "s.sh:2",
     ),
     (
         "config is local and port-forward runs until stopped, so neither needs a bound",
@@ -2730,11 +2805,25 @@ CONTROLS["every call that leaves this machine is bounded"] = [
         "curl without --max-time",
     ),
     (
+        "curl with a zero -m, which is curl's spelling of none",
+        {"s.sh": 'curl -sSfL -m 0 -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL -m 2 -o x "https://example/x"\n'},
+        "curl with --max-time 0",
+    ),
+    (
         "a gate's subprocess call with no timeout",
         {"scripts/g.py": "import subprocess\nsubprocess.run(['git', 'status'], check=False)\n"},
         {"scripts/g.py": "import subprocess\n"
                          "subprocess.run(['git', 'status'], check=False, timeout=60)\n"},
         "subprocess.run without timeout=",
+    ),
+    (
+        "a gate's subprocess call that spells out no timeout",
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=None)\n"},
+        {"scripts/g.py": "import subprocess\nT = 60\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=T)\n"},
+        "timeout=None, which is no bound",
     ),
     (
         "a gate that starts a process it cannot bound",

@@ -49,4 +49,4 @@ kubectl --request-timeout=60s apply --server-side --force-conflicts --field-mana
 # Established before the controller installs. Without the wait, envoy-gateway's
 # install can start its controller while a kind it watches is still being
 # registered, and the ordering this slice relies on becomes a race.
-kubectl wait --for condition=Established --timeout=120s -f "${MANIFEST}"
+kubectl --request-timeout=60s wait --for condition=Established --timeout=120s -f "${MANIFEST}"

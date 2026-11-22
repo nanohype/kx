@@ -73,7 +73,7 @@ helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/oper
 if [ "${BEFORE}" != "${AFTER}" ]; then  # empty BEFORE means there was no image
   echo "Operator image changed — rolling the Deployment onto it ..."
   kubectl --request-timeout=60s -n eks-agent-platform rollout restart deployment/eks-agent-platform-operator
-  kubectl -n eks-agent-platform rollout status deployment/eks-agent-platform-operator --timeout=180s
+  kubectl --request-timeout=60s -n eks-agent-platform rollout status deployment/eks-agent-platform-operator --timeout=180s
 else
   echo "Operator image unchanged (${AFTER#sha256:}) — nothing to roll."
 fi

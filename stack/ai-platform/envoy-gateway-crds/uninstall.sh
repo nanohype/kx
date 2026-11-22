@@ -34,7 +34,7 @@ fi
 deploy="$(kubectl --request-timeout=60s get deploy envoy-gateway -n "${NS}" --ignore-not-found \
   -o name --request-timeout=60s)"
 if [[ -n "${deploy}" ]]; then
-  if ! kubectl wait --for=delete "${deploy}" -n "${NS}" --timeout=120s; then
+  if ! kubectl --request-timeout=60s wait --for=delete "${deploy}" -n "${NS}" --timeout=120s; then
     echo "the envoy-gateway Deployment is still running — not deleting the CRDs it watches." >&2
     exit 1
   fi

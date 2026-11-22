@@ -25,7 +25,7 @@ GATEWAY_API_SHA256="e6d2d3407717f54b579b22ad4d164b6863895b3524f21250b0da0c1ff9a0
 # already present, drop them (along with the policy) so the experimental install lands clean.
 # Safe on first install (no-op deletes). On re-runs of experimental, this is a no-op too —
 # the policy permits experimental→experimental updates.
-if kubectl get crd gatewayclasses.gateway.networking.k8s.io \
+if kubectl --request-timeout=60s get crd gatewayclasses.gateway.networking.k8s.io \
    -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/channel}' 2>/dev/null \
    | grep -qx standard; then
   echo "==> existing gateway-api CRDs are standard-channel; removing before experimental install"

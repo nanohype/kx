@@ -135,7 +135,7 @@ kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/policy.yaml"
 # or generates nothing, which is the failure this slice exists to make
 # impossible. A CEL policy reports readiness as a boolean rather than as a
 # condition named Ready, so the wait reads that field.
-kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+kubectl --request-timeout=60s wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
   generatingpolicies.policies.kyverno.io/clone-local-bedrock-credentials \
   mutatingpolicies.policies.kyverno.io/inject-local-bedrock-credentials \
   --timeout=60s

@@ -81,7 +81,7 @@ kubectl --request-timeout=60s create namespace druid --dry-run=client -o yaml | 
 echo "==> creating Postgres metadata cluster (CNPG)"
 kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/postgres.yaml"
 echo "==> waiting for Postgres to be Ready (up to 5min)..."
-kubectl -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300s
+kubectl --request-timeout=60s -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300s
 
 # ---- 2. Translate CNPG-generated app credentials into the chart-expected secret name + keys ----
 echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
@@ -102,7 +102,7 @@ kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"
 echo "==> ensuring MinIO buckets exist"
 kubectl --request-timeout=60s --timeout=5m delete job -n druid druid-minio-buckets --ignore-not-found
 kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/minio-buckets-job.yaml"
-kubectl -n druid wait --for=condition=Complete job/druid-minio-buckets --timeout=120s
+kubectl --request-timeout=60s -n druid wait --for=condition=Complete job/druid-minio-buckets --timeout=120s
 
 # ---- 5. render chart, filter EKS-only resources, apply ----
 echo "==> rendering Druid chart through post-renderer + applying"
@@ -115,11 +115,11 @@ helm template ds "${CHART_DIR}" \
 
 echo
 echo "==> waiting for Druid pods to be Ready (Druid startup probes are slow — up to 10min)"
-kubectl -n druid rollout status statefulset/kx-ds-druid-coordinator --timeout=10m
-kubectl -n druid rollout status statefulset/kx-ds-druid-overlord    --timeout=10m
-kubectl -n druid rollout status statefulset/kx-ds-druid-historical  --timeout=10m
-kubectl -n druid rollout status deployment/kx-ds-druid-broker       --timeout=10m
-kubectl -n druid rollout status deployment/kx-ds-druid-router       --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-coordinator --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-overlord    --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-historical  --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status deployment/kx-ds-druid-broker       --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status deployment/kx-ds-druid-router       --timeout=10m
 
 echo
 echo "Druid is up."

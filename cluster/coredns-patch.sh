@@ -50,11 +50,11 @@ EOF
 # cluster has no CNI yet (cilium is installed by stack:core), so coredns pods are Pending
 # and a rollout-restart would block forever. The coredns reload plugin in the Corefile
 # above will pick up ConfigMap changes automatically once the pods do come up.
-if kubectl -n kube-system get pods -l k8s-app=kube-dns \
+if kubectl --request-timeout=60s -n kube-system get pods -l k8s-app=kube-dns \
      -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
      | grep -q "True"; then
   kubectl --request-timeout=60s -n kube-system rollout restart deployment/coredns
-  kubectl -n kube-system rollout status  deployment/coredns --timeout=60s
+  kubectl --request-timeout=60s -n kube-system rollout status  deployment/coredns --timeout=60s
   echo "coredns: rolled with new Corefile (external DNS → 1.1.1.1 + 8.8.8.8)"
 else
   echo "coredns: ConfigMap applied; restart deferred (no Ready pod yet — coredns will load it after cilium comes up)"
