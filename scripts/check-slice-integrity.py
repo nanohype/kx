@@ -2300,6 +2300,16 @@ CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
         "task `d`",
     ),
     (
+        # Each word that opens a command is proven under the Python invariant;
+        # this proves the binding reads through one as well.
+        "a Taskfile command that asks the cluster as an if condition, without the binding",
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if kubectl get ns x; then echo up; fi")},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if " + _PREFIX + "kubectl get ns x; then echo up; fi")},
+        "task `d`",
+    ),
+    (
         "the binding on one side of a pipe does not reach the other",
         {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "kubectl get ns | kubectl apply -f -")},
         {**_BINDING, "Taskfile.yaml":
