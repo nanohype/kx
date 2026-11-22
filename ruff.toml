@@ -1,6 +1,8 @@
-# Lint config for the gate scripts under scripts/. They are a third of this
-# repository's code and the only part of it that parses another repository's
-# YAML, so an unused name or a stray `f` prefix is worth catching here.
+# Lint config for every tracked Python file: the gate scripts under scripts/,
+# which are a third of this repository's code and the only part of it that
+# parses another repository's YAML, and the helpers installers run, which
+# nothing in CI executes. An unused name or a stray `f` prefix is worth
+# catching in both.
 line-length = 100
 
 [lint]

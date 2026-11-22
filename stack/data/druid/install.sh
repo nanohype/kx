@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Apache Druid for kx — runs the eks-gitops/catalog/druid chart unmodified, with a local
-# filter (post-renderer.sh) that strips EKS-only resources before kubectl apply.
+# filter (post-renderer.py) that strips EKS-only resources before kubectl apply.
 #
 # Why kubectl apply instead of `helm upgrade --install`:
 #   Helm v4 dropped the arbitrary-executable --post-renderer flag in favor of a plugin model.
 #   Rather than ship a helm plugin, this renders → filters → applies. `helm history` is
-#   unavailable for druid,
-#   but disable is just `kubectl delete ns druid` (which sweeps CNPG cluster + all resources).
+#   unavailable for druid, but disable is just `kubectl delete ns druid` (which sweeps the
+#   CNPG cluster and every other resource).
+#
+# The Python this needs lives in post-renderer.py and metadata-secret.py beside this file
+# rather than in quoted strings here, so the lint job reads it and the integrity gate
+# compiles it. Nothing in CI runs this installer, so a program embedded in it would meet
+# its first parser on a workstation.
 #
 # Heaviest single addition to kx. Allow 5–10 minutes on first install.
 # Resident footprint after Ready: ~4.5GB.
@@ -58,10 +63,13 @@ require "CNPG"         "Run: task stack:data:enable" get crd clusters.postgresql
 require "MinIO"        "Run: task stack:data:enable" get ns minio
 require "cert-manager" "It is in core; run: task up"  get crd certificates.cert-manager.io
 
-if ! yaml_err="$(python3 -c "import yaml" 2>&1)"; then
-  echo "ERROR: the post-renderer needs python3 with PyYAML — python3 said:" >&2
-  printf '  %s\n' "$yaml_err" >&2
-  echo "Run: pip3 install pyyaml" >&2
+# The post-renderer run over an empty render, before anything is created. It is
+# the program step 5 runs, so this proves that program starts — PyYAML imports
+# and the file compiles under this python3 — rather than proving something
+# adjacent to it. Its own message names the remedy.
+if ! render_err="$(python3 "${SCRIPT_DIR}/post-renderer.py" </dev/null 2>&1 >/dev/null)"; then
+  echo "ERROR: the post-renderer cannot run — python3 said:" >&2
+  printf '  %s\n' "$render_err" >&2
   exit 1
 fi
 
@@ -78,28 +86,11 @@ echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
 # Re-keyed on stdin rather than with --from-literal. That flag puts the Postgres
 # password in this process's argv, where `ps` shows it to every other process on
 # the workstation for as long as the command runs. CNPG's own Secret already
-# holds these values base64-encoded, so they are copied across without being
-# decoded into an argument list at all.
+# holds these values base64-encoded, so metadata-secret.py copies them across
+# without decoding them into an argument list at all. The name is the one the
+# chart helper derives from the release step 5 renders: hostedId kx, release ds.
 kubectl -n druid get secret druid-metadata-app -o json \
-  | python3 -c '
-import json, sys
-src = json.load(sys.stdin)["data"]
-# The chart helper reads exactly these four keys off a Secret named for the
-# release; CNPG publishes them under the same names, so this is a rename rather
-# than a translation. A key CNPG stops publishing fails here rather than
-# producing a Secret the chart mounts with a field missing.
-keys = ("username", "password", "host", "dbname")
-missing = [k for k in keys if k not in src]
-if missing:
-    sys.exit(f"druid: druid-metadata-app has no {\", \".join(missing)} — "
-             f"CNPG did not publish what the chart helper reads.")
-print(json.dumps({
-    "apiVersion": "v1",
-    "kind": "Secret",
-    "metadata": {"name": "kx-ds-druid-metadata", "namespace": "druid"},
-    "type": "Opaque",
-    "data": {k: src[k] for k in keys},
-}))' \
+  | python3 "${SCRIPT_DIR}/metadata-secret.py" kx-ds-druid-metadata druid \
   | kubectl apply -f -
 
 # ---- 3. Admin + system credential secrets ----
@@ -117,7 +108,7 @@ helm template ds "${CHART_DIR}" \
   --namespace druid \
   --values "${CHART_BASE_VALUES}" \
   --values "${SCRIPT_DIR}/values-local.yaml" \
-  | bash "${SCRIPT_DIR}/post-renderer.sh" \
+  | python3 "${SCRIPT_DIR}/post-renderer.py" \
   | kubectl apply --server-side --field-manager kx-druid -n druid -f -
 
 echo

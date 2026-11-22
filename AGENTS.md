@@ -71,7 +71,7 @@ distance count only gestures at.
 ## Add an addon to the local stack
 
 1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
-2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself; nothing else belongs in the directory.
+2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
 3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
 4. Record the pin in `stack/chart-provenance.json` — repo URL and a description. `scripts/check-chart-deprecation.py` fails a pin with no record, and a record naming no pin.
 5. If the catalog does not pin this chart, declare the divergence in `stack/upstream.json` with a reason and a `kind` of `kx-only`. `scripts/mirror-check.py` fails on any difference from the catalog that is not declared.
