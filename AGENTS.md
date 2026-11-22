@@ -49,6 +49,8 @@ a workload you bring here behaves:
   profile into each `tenants-*` namespace. That slice states its own fidelity gap: one
   credential is shared by every local tenant, so local tenants are not isolated from each
   other on the AWS side and a local Bedrock call is not a test of the production authz path.
+  It takes a session that stops working by itself, and refuses a long-lived access key
+  unless `KX_ALLOW_LONG_LIVED_AWS_KEY=1` asks for one.
 - **Druid post-renderer**: `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) unmodified through a post-renderer that strips EKS-only resources (Karpenter `NodePool`/`EC2NodeClass`, `ExternalSecret`) and EKS node-selector labels.
 
 A chart that runs under kx is one that renders and schedules against the same
@@ -113,7 +115,7 @@ gateway holds a credential. To take it end to end:
 ```sh
 task stack:security:enable                  # bedrock-credentials needs Kyverno
 task stack:ai-platform:credentials          # clone a local AWS profile into each tenant namespace
-task stack:ai-platform:credentials:verify   # assert every gateway data plane carries it
+task stack:ai-platform:credentials:verify   # assert every gateway data plane carries it, and when it expires
 task stack:ai-platform:conformance PLATFORM=<name>   # send real traffic through the gateway
 ```
 

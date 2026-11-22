@@ -20,6 +20,11 @@
 # is sufficient: with the reference present and the Secret in the namespace,
 # injection is the kubelet's guarantee, and the GeneratingPolicy is what puts
 # the Secret there.
+#
+# It also reports when the credentials stop working, from the expiry install.sh
+# recorded on the source Secret, and fails once that has passed. A gateway whose
+# reference reaches an expired session fails every model call with the same
+# AccessDeniedException as one whose reference reaches nothing.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
@@ -27,7 +32,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SELECTOR="app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy"
 SECRET="kx-bedrock-credentials"
+SOURCE_NS="kyverno"
 SIGNER="ai-gateway-extproc"
+
+# The copies follow the source, so the source's expiry is every copy's.
+expired=0
+if ! recorded="$(kubectl --request-timeout=60s get secret "${SECRET}" -n "${SOURCE_NS}" \
+    -o jsonpath='{.metadata.annotations.kx-credentials-expiration}' 2>&1)"; then
+  echo "FAIL  could not read ${SOURCE_NS}/${SECRET} — kubectl said:" >&2
+  printf '%s\n' "${recorded}" | sed 's/^/      /' >&2
+  exit 1
+fi
+if [ -z "${recorded}" ]; then
+  echo "FAIL  ${SOURCE_NS}/${SECRET} records no expiry, so whether it still works is unknown." >&2
+  echo "      Re-run task stack:ai-platform:credentials, which records one." >&2
+  expired=1
+elif when="$(python3 "${SCRIPT_DIR}/credentials.py" remaining "${recorded}")"; then
+  echo "ok    credentials expire: ${when}"
+else
+  echo "FAIL  credentials expire: ${when}" >&2
+  expired=1
+fi
 
 # read -r rather than mapfile: mapfile is a bash 4 builtin and the documented
 # prerequisites install no bash, so on macOS this runs under /bin/bash 3.2.
@@ -94,6 +119,16 @@ if [ "${failed}" -ne 0 ]; then
   echo "was installed keep their original spec — delete them and let Envoy" >&2
   echo "Gateway recreate them:" >&2
   echo "  kubectl delete pod -A -l ${SELECTOR}" >&2
+fi
+if [ "${expired}" -ne 0 ]; then
+  echo >&2
+  echo "The gateways sign with credentials that no longer work, or that cannot be" >&2
+  echo "shown to. Renew the profile's session and reinstall; every copy follows" >&2
+  echo "the source Secret:" >&2
+  echo "  aws sso login --profile <profile>    # for an SSO profile" >&2
+  echo "  task stack:ai-platform:credentials" >&2
+fi
+if [ "${failed}" -ne 0 ] || [ "${expired}" -ne 0 ]; then
   exit 1
 fi
 
