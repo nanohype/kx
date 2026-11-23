@@ -1,0 +1,14 @@
+# A kind no chart in the stack renders a CRD for: Cilium's operator registers
+# it at runtime. Held to Cilium's own CRD, vendored at the pinned release.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: good
+spec:
+  endpointSelector:
+    matchLabels:
+      app: good
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: client

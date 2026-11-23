@@ -572,8 +572,13 @@ UNPROBEABLE: dict[str, str] = {
         "reads a manifest stream on stdin rather than a path, so a probe would drive a "
         "different interface than the one render-check.sh uses",
     "check-rendered-schemas.py":
-        "its verdict needs kubeconform and a reachable schema host, so a probe would make "
-        "this floor non-hermetic and fail on a network outage rather than on a defect",
+        "its verdict needs kubeconform and the schemas vendored under schemas/, and a "
+        "fixture tree could carry them only by copying megabytes of upstream documents "
+        "into every probe",
+    "vendor-schemas.py":
+        "it is the tool that writes schemas/ rather than a gate over the tree, and its one "
+        "verdict, --check, fetches each pinned release from proxy.golang.org and "
+        "sum.golang.org, so a probe would make this floor non-hermetic",
     "mirror-check.py":
         "compares against an eks-gitops checkout, which a fixture tree cannot stand in for "
         "without reimplementing the catalog's ApplicationSet shapes",
