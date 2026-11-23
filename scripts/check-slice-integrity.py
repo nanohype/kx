@@ -2411,7 +2411,7 @@ def _ingress(http: int | None = 31080, https: int | None = 31443, enabled: bool 
 
 CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
     (
-        "localhost:80 mapped to the port ingress-nginx used to hold",
+        "localhost:80 mapped to a container port other than the HTTP NodePort",
         _ingress(maps={80: 80, 443: 31443}),
         _ingress(),
         "maps localhost:80 to container port 80",
