@@ -38,10 +38,9 @@ jobs:
       # package, transitive ones included, at one version and the hashes PyPI
       # publishes for it, so the job installs exactly those files or fails.
       # Pinned in the file rather than resolved here, because a resolver picks
-      # by interpreter: a laptop on an older python silently caps an install at
-      # the last release that supports it — zizmor once resolved to 1.16.3
-      # against 1.29.0 published — so an unpinned install lets a workstation's
-      # python choose the scanner CI runs.
+      # by interpreter: an older python silently caps an install at the last
+      # release that still supports it, so an unpinned install lets whichever
+      # python runs it choose the scanner CI runs.
       - name: Install the lint tools
         run: pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/lint-requirements.txt
 
