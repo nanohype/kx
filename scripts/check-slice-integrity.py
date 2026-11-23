@@ -1745,7 +1745,7 @@ def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
 
 # The tools whose calls leave this machine, or wait on a daemon that can stop
 # answering, as command words.
-OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl)(?![\w.:-])")
+OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl|pnpm|npm|npx|yarn)(?![\w.:-])")
 
 # helm verbs that ask a cluster and take no timeout of their own.
 HELM_UNBOUNDED_READS = {"list", "status", "history", "get", "test"}
@@ -1831,6 +1831,9 @@ UNBOUNDED_BY_TOOL = {
     "docker": _runner_only("docker"),
     "kind": _runner_only("kind"),
     "aws": _runner_only("aws"),
+    # The JavaScript package runners: a script one runs reaches whatever it
+    # reaches, a registry or a gateway, and none takes a bound of its own.
+    **{tool: _runner_only(tool) for tool in ("pnpm", "npm", "npx", "yarn")},
     "helm": _helm_unbounded,
     "kubectl": _kubectl_unbounded,
 }
@@ -1901,8 +1904,9 @@ def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
     - helm's release verbs carry --timeout, which the invariant above holds.
       `helm repo` verbs default to a two-minute timeout of their own. helm's
       read verbs take none, so they run under deadline.
-    - docker, kind and the aws CLI's credential resolution have no bound of
-      their own, so they run under cluster/deadline.sh, sourced or as a program.
+    - docker, kind, the aws CLI's credential resolution and the JavaScript
+      package runners (pnpm, npm, npx, yarn) have no bound of their own, so they
+      run under cluster/deadline.sh, sourced or as a program.
     - curl carries --max-time.
     - A Python gate's subprocess call carries timeout=.
 
@@ -2673,7 +2677,7 @@ def _ingress(http: int | None = 31080, https: int | None = 31443, enabled: bool 
 
 CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
     (
-        "localhost:80 mapped to the port ingress-nginx used to hold",
+        "localhost:80 mapped to a container port other than the HTTP NodePort",
         _ingress(maps={80: 80, 443: 31443}),
         _ingress(),
         "maps localhost:80 to container port 80",
@@ -2706,6 +2710,7 @@ CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
 
 
 _DEADLINE = "bash '{{.ROOT_DIR}}/cluster/deadline.sh'"
+_BOUNDED_CURL = "curl --max-time 5 https://example\n"
 
 CONTROLS["every call that leaves this machine is bounded"] = [
     (
@@ -2797,6 +2802,19 @@ CONTROLS["every call that leaves this machine is bounded"] = [
         {"s.sh": 'J="$(aws configure export-credentials --profile p)"\n'},
         {"s.sh": 'J="$(deadline 120 aws configure export-credentials --profile p)"\n'},
         "aws has no bound",
+    ),
+    # Each beside a bounded call, so a reader that does not know the runner
+    # still has a call to examine and fails open rather than on an empty set.
+    (
+        "a pnpm script outside deadline, which waits as long as what it calls",
+        {"s.sh": _BOUNDED_CURL + "pnpm --filter x --silent conformance\n"},
+        {"s.sh": _BOUNDED_CURL + "deadline 600 pnpm --filter x --silent conformance\n"},
+        "pnpm has no bound",
+    ),
+    *(
+        (f"{tool} outside deadline", {"s.sh": _BOUNDED_CURL + f"{tool} run probe\n"},
+         {"s.sh": _BOUNDED_CURL + f"deadline 600 {tool} run probe\n"}, f"{tool} has no bound")
+        for tool in ("npm", "npx", "yarn")
     ),
     (
         "curl with no --max-time",
