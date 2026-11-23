@@ -50,13 +50,15 @@
     },
     {
       "description": [
-        "kubeconform is fetched by release URL in ci.yml, not by `uses:`, so neither the github-actions manager nor the chart regexes above can see it. Left unwatched it is a version pinned somewhere no instrument looks, drifting until someone happens to read the line.",
+        "kubeconform is fetched by release URL in .github/actions/kubeconform, not by `uses:`, so neither the github-actions manager nor the chart regexes above can see it. Left unwatched it is a version pinned somewhere no instrument looks, drifting until someone happens to read the line.",
         "It is the schema gate's only external binary, and a gate whose validator silently ages is worse than no gate, because the green tick keeps arriving.",
-        "The version is read from the env: entry rather than from the URL, because the URL interpolates it. Repository and version therefore sit on separate lines, which is why the pattern spans them."
+        "The version is read from the env: entry rather than from the URL, because the URL interpolates it. Repository and version therefore sit on separate lines, which is why the pattern spans them.",
+        "The composite actions under .github/actions are read alongside the workflows: a pin moved into one, so that two jobs install the same release, is still a pin a workflow runs."
       ],
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github/workflows/.+\\.yml$/"
+        "/^\\.github/workflows/.+\\.yml$/",
+        "/^\\.github/actions/.+/action\\.yml$/"
       ],
       "matchStrings": [
         "[A-Z][A-Z0-9_]*_VERSION:\\s*(?<currentValue>v[0-9][^\\s]*)[\\s\\S]*?https://github\\.com/(?<depName>[^/]+/[^/]+)/releases/download/"

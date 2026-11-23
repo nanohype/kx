@@ -77,7 +77,11 @@ never a `python3 -c` string or a heredoc. Nothing in CI runs an installer, so a
 program in a shell string meets its first parser on a workstation; as a file,
 the lint job reads it and `check-slice-integrity.py` compiles it, and that
 script refuses Python run from a string or stdin in any shell script or
-Taskfile.
+Taskfile. Its tests go under `tests/installers/` and reach every line and every
+branch: `scripts/python-test.sh`, which the test job runs, reads coverage over
+`stack/` and refuses anything less, so a helper added without tests fails
+there. The same run measures the gates through their own self-tests, against a
+floor in that script which is raised with their coverage and never lowered.
 
 An addon whose chart cannot be stored as a helm release renders it with
 `helm template` into a server-side `kubectl apply` instead, and carries an
@@ -85,7 +89,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 
 ## Taskfile model
 
-- Top-level: `task up | down | reset | status | stack:* | port-forward:*`
+- Top-level: `task up | down | reset | status | stack:* | port-forward:* | test:*`
 - Per-slice: `stack/<slice>/Taskfile.yaml` provides `enable` and `disable` targets that loop over the slice's addons
 - Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon, or the addon's `uninstall.sh` where there is no release to uninstall (envoy-gateway-crds, bedrock-credentials)
 - Every script that reaches the cluster sources `cluster/kubeconfig.sh` right after it sets `SCRIPT_DIR`, and every Taskfile command that runs kubectl, helm or kind carries `KUBECONFIG='{{.ROOT_DIR}}/.kube/config'` itself. A Taskfile's `env:` cannot do this, because it never overrides a `KUBECONFIG` the shell already exports. `check-slice-integrity.py` refuses a command that reaches a cluster without its binding

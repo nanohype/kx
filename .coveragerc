@@ -1,0 +1,17 @@
+# Coverage over the Python kx runs: the helpers its installers run, under
+# stack/, and the gates under scripts/. scripts/python-test.sh reads the result
+# against a floor for each, and states why each floor is where it is.
+[run]
+branch = true
+source =
+    scripts
+    stack
+
+[report]
+# A helper nothing imports is still reported, at zero. Otherwise coverage looks
+# for unexecuted files only in directories holding an __init__.py, which no
+# addon directory does, so a helper added without a test would go unreported
+# rather than fail its floor.
+include_namespace_packages = true
+precision = 1
+show_missing = true
