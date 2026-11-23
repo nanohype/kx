@@ -459,7 +459,9 @@ def report_scan(result: dict) -> int:
     """Print the scan's state and each section, and return the state's exit status.
 
     Also written to the job summary when GitHub provides one, so the run page
-    says which state a red run is in without anyone opening the log.
+    says which state a red run is in without anyone opening the log, and the
+    state to the step's outputs, so the step that opens the tracking issue
+    names it from here rather than from an exit status it would have to map.
     """
     sections = (
         ("findings", "Findings — a CRITICAL no exception covers"),
@@ -482,6 +484,10 @@ def report_scan(result: dict) -> int:
                     f.write(f"**{title}** ({len(result[key])})\n\n")
                     f.writelines(f"- `{item}`\n" for item in result[key])
                     f.write("\n")
+    outputs = os.environ.get("GITHUB_OUTPUT")
+    if outputs:
+        with open(outputs, "a") as f:
+            f.write(f"state={result['state']}\n")
     return STATE_EXIT[result["state"]]
 
 
@@ -675,6 +681,25 @@ def controls() -> int:
         failures += 1
     else:
         print("  control ok  each state exits with its own status, and only clean with 0")
+
+    # The tracking issue is written from the step output, so the state has to
+    # arrive there exactly as the scan names it.
+    with tempfile.TemporaryDirectory(prefix="kx-outputs-") as outdir:
+        outputs = pathlib.Path(outdir) / "outputs"
+        saved = {k: os.environ.pop(k, None) for k in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+        os.environ["GITHUB_OUTPUT"] = str(outputs)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                report_scan(scanned(refused))
+        finally:
+            os.environ.pop("GITHUB_OUTPUT", None)
+            os.environ.update({k: v for k, v in saved.items() if v is not None})
+        written = outputs.read_text() if outputs.exists() else ""
+    if written == "state=could not run\n":
+        print("  control ok  the scan's state reaches the step outputs as the scan names it")
+    else:
+        print(f"  WRONG       the step outputs read {written!r}, not the scan's state")
+        failures += 1
 
     # The exceptions file, read from a tree like the real one.
     def file_problems(entries):
