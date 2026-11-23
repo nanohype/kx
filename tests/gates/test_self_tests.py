@@ -16,7 +16,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-# The function each gate runs to prove itself, returning 0 when every case
+# The function each gate runs to prove itself, which returns zero when every case
 # behaved as specified. check-slice-integrity and check-images call theirs
 # controls(); the rest call theirs self_test().
 SELF_TESTS = {
