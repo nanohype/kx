@@ -64,6 +64,21 @@
       "datasourceTemplate": "github-releases"
     },
     {
+      "description": [
+        "helm, which every workflow renders with, installed by .github/actions/helm from get.helm.sh rather than through an action that defaults to the newest release. get.helm.sh is not a GitHub release URL, so the workflow binary manager above cannot see the pin; left unwatched, the renderer every gate's verdict rests on would age with nothing to say so.",
+        "Renovate moves HELM_VERSION and cannot move HELM_SHA256 beside it, so a bump fails at the digest check until the digest is updated — the same constraint the workflow binary pins carry, and the direction a mismatch should fail in."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/actions/.+/action\\.yml$/"
+      ],
+      "matchStrings": [
+        "HELM_VERSION:\\s*(?<currentValue>v[0-9][^\\s]*)"
+      ],
+      "depNameTemplate": "helm/helm",
+      "datasourceTemplate": "github-releases"
+    },
+    {
       "description": "Container images in the manifests kx applies directly. These are not chart pins, so neither the helm managers above nor any Renovate preset sees them — and an image is the one dependency that changes what runs without changing anything a reader would diff.",
       "customType": "regex",
       "managerFilePatterns": [

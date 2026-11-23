@@ -83,7 +83,7 @@ from inside the cluster without a remote registry. `task down` removes it.
 Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned,
 with an explicit `--timeout`) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
 A few carry more or fewer: CRD-only installers take chart defaults whole and have no values, and `druid` and
-`bedrock-credentials` ship the extra manifests their install applies.
+`bedrock-credentials` ship the extra manifests their install applies and the Python helpers it runs.
 
 ## When something breaks
 

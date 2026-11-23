@@ -39,10 +39,10 @@ eks-agent-platform mirror (these are direct mirrors, not substitutes):
 | operator (ns eks-agent-platform) | stack/ai-platform/operator | Built from the sibling eks-agent-platform checkout + kind-loaded (image isn't published); `--disable-aws`, self-signed webhook issuer, cilium netpol. Override the repo path with `KX_EKS_AGENT_PLATFORM_DIR` |
 | nvidia-gpu-operator / nvidia-dra-driver / aws-neuron-device-plugin | (not applicable) | No GPUs on kind |
 
-eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) **unmodified** via a post-renderer that strips EKS-only resources:
+eks-gitops catalog mirror — `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) **unmodified** via a post-renderer (`stack/data/druid/post-renderer.py`) that strips EKS-only resources:
 
-- **Chart drift policy:** when the upstream chart changes (eks-gitops), re-render and verify the post-renderer still cleanly removes what it expects. The post-renderer skips kinds `NodePool`, `EC2NodeClass`, `ExternalSecret` and strips nodeSelector labels in the set `karpenter.k8s.aws/instance-family`, `karpenter.sh/capacity-type`, `eks.amazonaws.com/nodegroup`. If the upstream chart adds new EKS-only resources, extend the skip list.
-- **Secret shape:** the chart's helper expects a Secret named `<hostedId>-<release>-druid-metadata` with keys `username/password/host/dbname`. `install.sh` reads CNPG's generated `druid-metadata-app` Secret and rewrites it into this shape — do not change naming on either side without updating both.
+- **Chart drift policy:** when the upstream chart changes (eks-gitops), re-render and verify the post-renderer still cleanly removes what it expects. The post-renderer skips kinds `NodePool`, `EC2NodeClass`, `ExternalSecret` and strips nodeSelector labels in the set `karpenter.k8s.aws/instance-family`, `karpenter.sh/capacity-type`, `eks.amazonaws.com/nodegroup`, plus the chart helper's hard-coded `kubernetes.io/arch` and `kubernetes.io/os`. If the upstream chart adds new EKS-only resources, extend the skip list.
+- **Secret shape:** the chart's helper expects a Secret named `<hostedId>-<release>-druid-metadata` with keys `username/password/host/dbname`. `install.sh` pipes CNPG's generated `druid-metadata-app` Secret through `stack/data/druid/metadata-secret.py`, which rewrites it into this shape — do not change naming on either side without updating both.
 - **S3 endpoint:** `values-local.yaml`'s `runtime:` adds `druid.s3.endpoint.url=http://minio.minio.svc.cluster.local:9000` + path-style + http. If MinIO moves or the service name changes, update that block.
 
 ## Labels on kx's own manifests
@@ -68,8 +68,15 @@ defaults has a `values.yaml` beside it:
 Two files is the shape to reach for, not a rule the tree satisfies everywhere.
 An addon that takes chart defaults whole carries no `values.yaml`, and an addon
 whose install applies manifests of its own carries those too. Anything beyond
-`install.sh` + `values.yaml` earns its place by being applied by that
+`install.sh` + `values.yaml` earns its place by being applied or run by that
 `install.sh` — a file in an addon directory that nothing applies is dead.
+
+Python an installer needs is a `.py` file beside it that `install.sh` runs,
+never a `python3 -c` string or a heredoc. Nothing in CI runs an installer, so a
+program in a shell string meets its first parser on a workstation; as a file,
+the lint job reads it and `check-slice-integrity.py` compiles it, and that
+script refuses Python run from a string or stdin in any shell script or
+Taskfile.
 
 An addon whose chart cannot be stored as a helm release renders it with
 `helm template` into a server-side `kubectl apply` instead, and carries an
@@ -88,7 +95,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
 - Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
 - Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
-- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them
+- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them. Every tool a workflow installs is pinned to a version and checked against a recorded digest: the Python tools from `.github/lint-requirements.txt` and `.github/gate-requirements.txt` with `--require-hashes`, helm through `.github/actions/helm`, and each binary from its release with a sha256
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
 - Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 
