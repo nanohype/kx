@@ -63,7 +63,7 @@ add to it.
 
 Every addon directory has an `install.sh`, and every addon that overrides chart
 defaults has a `values.yaml` beside it:
-- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running. Every call that leaves the machine names its bound: kubectl carries `--request-timeout` (and `--timeout` on `wait`, `rollout status` and `delete`), curl carries `--max-time`, and docker, kind, helm's read verbs and the aws CLI run under `cluster/deadline.sh`. `check-slice-integrity.py` refuses an unbounded one, and a gate's `subprocess` call without `timeout=`.
+- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running. Every call that leaves the machine names its bound: kubectl carries `--request-timeout` (and `--timeout` on `wait`, `rollout status` and `delete`), curl carries `--max-time`, and docker, kind, helm's read verbs, the aws CLI and the JavaScript package runners (pnpm, npm, npx, yarn) run under `cluster/deadline.sh`. `check-slice-integrity.py` refuses an unbounded one, and a gate's `subprocess` call without `timeout=`.
 - `values.yaml` — local-only deltas from chart defaults. **Do not copy values from eks-gitops** — those assume IRSA, ENI, NLB, etc.
 
 Two files is the shape to reach for, not a rule the tree satisfies everywhere.

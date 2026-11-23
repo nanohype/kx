@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 PLATFORM="${PLATFORM:?set PLATFORM to the Platform whose gateway to probe}"
 ROUTE="${ROUTE:-primary}"
@@ -107,6 +109,10 @@ if [ "${ready}" -ne 1 ]; then
   exit 1
 fi
 
+# The suite sends real model calls through the gateway, so a gateway that
+# accepts and never answers would hold it open. Ten minutes is far past a
+# passing run and bounds a stuck one. Exported rather than set on the command,
+# so the suite deadline starts in the background reads them for certain.
 cd "${REPO}"
-GATEWAY_ENDPOINT="http://localhost:${LOCAL_PORT}" GATEWAY_ROUTE="${ROUTE}" \
-  pnpm --filter @eks-agent/gateway-conformance --silent conformance
+export GATEWAY_ENDPOINT="http://localhost:${LOCAL_PORT}" GATEWAY_ROUTE="${ROUTE}"
+deadline 600 pnpm --filter @eks-agent/gateway-conformance --silent conformance
