@@ -1,0 +1,20 @@
+# replicaz is not a field. Rejected because the built-in schema admits only the
+# properties it names, which a schema fetched without its strict variant would
+# not.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unknown-field
+spec:
+  replicaz: 2
+  selector:
+    matchLabels:
+      app: unknown-field
+  template:
+    metadata:
+      labels:
+        app: unknown-field
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
