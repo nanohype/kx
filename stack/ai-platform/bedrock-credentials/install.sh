@@ -26,10 +26,10 @@
 # no business making. So local tenants are NOT isolated from each other on the
 # AWS side, and a local Bedrock call is not a test of the production authz path.
 # Acceptable because the blast radius is one kind cluster on one workstation and
-# the credential is a session that stops working by itself: a long-lived access
-# key is refused unless KX_ALLOW_LONG_LIVED_AWS_KEY=1 asks for it. Do not point
-# this at a profile whose permissions you would not hand to every namespace at
-# once.
+# the credential is a session that stops working by itself: credentials with no
+# expiry are refused. The residual risk, Kyverno's cluster-wide Secret access
+# while this slice is installed, is in docs/threat-model.md. Do not point this
+# at a profile whose permissions you would not hand to every namespace at once.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
@@ -84,18 +84,13 @@ fi
 echo "Resolving credentials from AWS profile '${PROFILE}' ..."
 CREDS_JSON="$(deadline 120 aws configure export-credentials --profile "${PROFILE}" --format process)"
 
-# A long-lived access key is refused unless asked for by name. It has no session
-# token and does not expire, and this Secret is cloned into every tenants-*
-# namespace, so a key copied there stays valid in each of them until someone
-# rotates it; a session stops working by itself. Checked here, before anything
-# is written to the cluster, and again by the manifest step, which cannot build
-# the Secret from a long-lived key unless it is told to allow one. What the
-# check prints is when the credentials stop working, which the Secret records.
-LONG_LIVED="refuse"
-if [ "${KX_ALLOW_LONG_LIVED_AWS_KEY:-0}" = "1" ]; then
-  LONG_LIVED="allow"
-fi
-EXPIRES="$(printf '%s' "${CREDS_JSON}" | python3 "${SCRIPT_DIR}/credentials.py" check "${LONG_LIVED}")"
+# Credentials with no expiry are refused. This Secret is cloned into every
+# tenants-* namespace, and only a session stops working there by itself: a
+# long-lived access key reports no expiry, and neither does a session the aws
+# CLI gave none for. Checked here, before anything is written to the cluster,
+# and again by the manifest step. What the check prints is when the session
+# stops working, which the Secret records.
+EXPIRES="$(printf '%s' "${CREDS_JSON}" | python3 "${SCRIPT_DIR}/credentials.py" check)"
 
 kubectl --request-timeout=60s create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
@@ -104,7 +99,7 @@ kubectl --request-timeout=60s create namespace "${SOURCE_NS}" --dry-run=client -
 # other process on the workstation. credentials.py does the base64 and the
 # quoting, and records the expiry as an annotation for the verify task.
 printf '%s' "${CREDS_JSON}" \
-  | python3 "${SCRIPT_DIR}/credentials.py" manifest "${SECRET}" "${SOURCE_NS}" "${REGION}" "${LONG_LIVED}" \
+  | python3 "${SCRIPT_DIR}/credentials.py" manifest "${SECRET}" "${SOURCE_NS}" "${REGION}" \
   | kubectl --request-timeout=60s apply -f -
 
 # ── Retire the ClusterPolicy this slice used to install ────────────────────

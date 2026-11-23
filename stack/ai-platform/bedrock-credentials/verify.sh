@@ -10,10 +10,9 @@
 # Envoy AI Gateway resolves the AWS credential chain and SigV4-signs inside its
 # external processor, so `ai-gateway-extproc` is the container the reference has
 # to reach. It is declared as a native sidecar, which puts it under
-# initContainers. The envoy container carries the same reference and needs no
-# AWS identity for the Bedrock call, so it is checked second and separately:
-# a pod where envoy is patched and extproc is not still fails every model call,
-# and asserting only envoy would report that pod as healthy.
+# initContainers. The envoy container signs nothing, so it is asserted to carry
+# no reference: one there was admitted under an earlier policy, and puts the
+# credential in a container that never uses it.
 #
 # It reads the pod spec rather than the process environment because the Envoy
 # image is distroless — there is no shell and no `env` binary to exec. The spec
@@ -104,20 +103,20 @@ for entry in "${PODS[@]}"; do
     continue
   fi
 
-  # Then envoy, which needs no AWS identity today. A miss here is not a signing
-  # failure, so it is reported without failing the run.
+  # Then envoy, which signs nothing and is given no reference.
   if refs_on "${pod}" "${ns}" containers envoy | grep -qx "${SECRET}"; then
-    echo "ok    ${ns}/${pod}  (${SIGNER} + envoy)"
-  else
-    echo "ok    ${ns}/${pod}  (${SIGNER}; envoy carries no reference)"
+    echo "FAIL  ${ns}/${pod} — envoy carries ${SECRET}, which only ${SIGNER} needs" >&2
+    failed=1
+    continue
   fi
+  echo "ok    ${ns}/${pod}  (${SIGNER} only)"
 done
 
 if [ "${failed}" -ne 0 ]; then
   echo >&2
-  echo "The policy did not mutate every gateway. Pods admitted before the policy" >&2
-  echo "was installed keep their original spec — delete them and let Envoy" >&2
-  echo "Gateway recreate them:" >&2
+  echo "Not every gateway carries the reference where the policy puts it. Pods" >&2
+  echo "admitted before the policy, or under an earlier one, keep the spec they" >&2
+  echo "were admitted with — delete them and let Envoy Gateway recreate them:" >&2
   echo "  kubectl delete pod -A -l ${SELECTOR}" >&2
 fi
 if [ "${expired}" -ne 0 ]; then
