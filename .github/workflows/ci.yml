@@ -81,11 +81,20 @@ jobs:
           echo "linting ${#sh[@]} shell file(s)"
           shellcheck "${sh[@]}"
 
-      # The gate scripts are a third of this repo's code and nothing linted them.
+      # Every tracked Python file, not only the gates under scripts/. The helpers
+      # an installer runs are the Python nothing in CI executes, so the lint is
+      # the only reader they get before a workstation runs them. `git ls-files`
+      # for the reason the shellcheck step gives, and an empty set refused.
       - name: ruff
         run: |
           pip install --quiet --timeout 60 --retries 3 ruff==0.16.4
-          ruff check scripts/
+          mapfile -t py < <(git ls-files '*.py')
+          if [ "${#py[@]}" -eq 0 ]; then
+            echo "no Python files found — refusing to report a clean lint over nothing" >&2
+            exit 1
+          fi
+          echo "linting ${#py[@]} Python file(s)"
+          ruff check "${py[@]}"
 
       # Advisory, and exits 0 whatever it finds. Prose conformance is read
       # rather than matched — a pattern finds only the phrasings its author
@@ -293,13 +302,14 @@ jobs:
       # gate its input, so an extraction that quietly lifted the wrong command
       # would hand that gate a clean verdict over something the installer never
       # runs — a tested consumer over an unproven producer.
-      # Three invariants, each closing a class the sweep found once and fixed
-      # everywhere: an unbounded helm install, a manifest in an addon directory
-      # that nothing applies, and a gate that can no longer reject. It runs its
-      # own positive controls before reporting, so there is no separate step to
-      # forget.
+      # Invariants about the tree, each closing a class found once and fixed
+      # everywhere — among them an unbounded helm install, a manifest in an
+      # addon directory that nothing applies, a Python program hidden in a shell
+      # string, a Python file that does not compile, and a gate that can no
+      # longer reject. The script lists them all, and runs its own positive
+      # controls before reporting, so there is no separate step to forget.
       #
-      # In this job because the third invariant RUNS every gate in the suite and
+      # In this job because one invariant RUNS every gate in the suite and
       # observes what it does, rather than reading its source for the word
       # "control" — and the schema gate's controls need kubeconform, installed
       # above. A floor that cannot observe a gate refuses to certify it, so this
