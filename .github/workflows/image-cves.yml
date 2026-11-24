@@ -20,11 +20,28 @@ name: image cves
 # there. This is the other half: the images a pin resolves to, checked where the
 # pin can actually be changed.
 #
-# A red run means: read what upstream has published. Where the image publisher
-# has rebuilt on a patched base, move the chart pin — noting that moving ahead
-# of the catalog is a divergence mirror-check will report and that
-# stack/upstream.json is where it gets declared. Where they have not, the
-# finding stands until they do.
+# A run ends in one of three states, each with its own exit status, and the job
+# summary names it, so a red run says which one it is before anyone opens the
+# log:
+#
+#   clean          Every image scanned; every CRITICAL is covered by an
+#                  unexpired exception in stack/image-cve-exceptions.json.
+#   findings       A CRITICAL nothing covers, or an exception that expired or
+#                  matches nothing the scan reports. Read what upstream has
+#                  published. Where the image publisher has rebuilt on a
+#                  patched base, move the chart pin — noting that moving ahead
+#                  of the catalog is a divergence mirror-check will report and
+#                  that stack/upstream.json is where it gets declared. Where
+#                  they have not, record a time-boxed exception with the reason.
+#   could not run  The scanner or a registry could not answer for an image.
+#                  That is about this run, not about the image, and it is never
+#                  folded into the findings.
+#
+# A red run opens one tracking issue, or comments on it when it is already open,
+# with the state and the scan's own report. A scheduled run has no pull request
+# to go red on and nobody reviewing it, so without the issue a red week reaches
+# no one. A person closes the issue once the pin has moved or the finding is
+# excepted; the next red run opens a new one.
 
 on:
   schedule:
@@ -46,6 +63,9 @@ jobs:
     name: Are the pinned charts' images free of CRITICAL?
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write  # opens or comments on the tracking issue when the run is red
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,7 +110,50 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ./scripts/render-check.sh
 
+      # Kept as well as shown: when the run is red, the scan's own report is
+      # what the tracking issue carries. check-images.py names its state in the
+      # step's outputs itself.
       - name: Scan every image the pinned charts resolve to
+        id: scan
         env:
           RENDER_DIR: ${{ runner.temp }}/render
-        run: python3 scripts/check-images.py --cves "$RENDER_DIR"
+          REPORT: ${{ runner.temp }}/scan-report.txt
+        run: |
+          set -o pipefail
+          python3 scripts/check-images.py --cves "$RENDER_DIR" 2>&1 | tee "$REPORT"
+
+      # One open issue carries every red run. Found by its exact title among the
+      # open issues, so a closed one is left closed and the next red run starts
+      # a new one. A run that failed before the scan reported a state says so,
+      # rather than inventing one.
+      - name: Open or update the tracking issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.scan.outputs.state }}
+          REPORT: ${{ runner.temp }}/scan-report.txt
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="image-cves: the scheduled scan is red"
+          body="${RUNNER_TEMP}/issue-body.md"
+          {
+            if [ -n "${STATE}" ]; then
+              echo "The scan's state is **${STATE}**. Run: ${RUN_URL}"
+            else
+              echo "The run failed before the scan reported a state. Run: ${RUN_URL}"
+            fi
+            if [ -s "${REPORT}" ]; then
+              echo
+              echo '```'
+              tail -n 80 "${REPORT}"
+              echo '```'
+            fi
+          } >"${body}"
+          number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --search "\"${title}\" in:title" --json number,title \
+            --jq "map(select(.title == \"${title}\")) | first | .number // empty")"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body-file "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body-file "${body}"
+          fi
