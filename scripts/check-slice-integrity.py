@@ -122,12 +122,20 @@ def helm_verb(segment: str) -> str | None:
     Tokenised rather than matched as one pattern. Leading `NAME=value` prefixes
     and `exec` are dropped a token at a time, which is linear in the segment and
     cannot backtrack — the same shape written as a starred group inside a larger
-    pattern is exponential on a line alternating assignments and separators.
+    pattern is exponential on a line alternating assignments and separators. So is
+    `deadline N`, the sourced helper every chart-fetching helm call runs under. Its
+    program form, which a Taskfile uses, is not read here: an installer sources
+    the helper, and a line in another form is reported as one this cannot read.
     """
     tokens = segment.split()
     i = 0
-    while i < len(tokens) and (ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec"):
-        i += 1
+    while i < len(tokens):
+        if ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec":
+            i += 1
+        elif tokens[i] == "deadline" and i + 1 < len(tokens) and tokens[i + 1].isdigit():
+            i += 2
+        else:
+            break
     if i >= len(tokens) or tokens[i] != "helm":
         return None
     if i + 1 >= len(tokens) or not VERB.match(tokens[i + 1]):
@@ -1477,8 +1485,8 @@ def code_view(line: str) -> str:
 DEADLINE_PROGRAM = "/cluster/deadline.sh"
 
 
-def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bool, bool]:
-    """(is the next word a command, does it run under deadline) after a prefix.
+def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bool, int | None]:
+    """(is the next word a command, the deadline it runs under or None) after a prefix.
 
     `code_prefix` is a code view and `raw_prefix` the same text as written, which
     code_view keeps aligned with it. Separators and word boundaries come from the
@@ -1499,7 +1507,7 @@ def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bo
     # Word boundaries from the code view, where a quoted value is one unbroken
     # word, and each word's text from the raw prefix at the same span.
     words = [raw_prefix[start + w.start():start + w.end()] for w in re.finditer(r"\S+", segment)]
-    i, bounded = 0, False
+    i, limit = 0, None
     while i < len(words):
         word = words[i]
         if word in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(word):
@@ -1509,14 +1517,14 @@ def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bo
             while i < len(words) and words[i].startswith("-"):
                 i += 1
         elif word == "deadline" and i + 1 < len(words) and words[i + 1].isdigit():
-            bounded, i = True, i + 2
+            limit, i = int(words[i + 1]), i + 2
         elif (word == "bash" and i + 2 < len(words)
               and words[i + 1].strip("'\"").endswith(DEADLINE_PROGRAM)
               and words[i + 2].isdigit()):
-            bounded, i = True, i + 3
+            limit, i = int(words[i + 2]), i + 3
         else:
-            return False, bounded
-    return True, bounded
+            return False, limit
+    return True, limit
 
 
 def in_command_position(code_prefix: str, raw_prefix: str | None = None) -> bool:
@@ -1750,6 +1758,23 @@ OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl|pnpm
 # helm verbs that ask a cluster and take no timeout of their own.
 HELM_UNBOUNDED_READS = {"list", "status", "history", "get", "test"}
 
+# helm verbs that move a chart to or from a repository or registry, each with a
+# call that makes one, which is also its control: no verb joins the set without a
+# control proving the check reads it. None bounds the transfer. The --timeout
+# that install, upgrade and template take starts once the chart has arrived and
+# covers the cluster operations after it, so a stalled fetch waits with no limit
+# at all. repo add and repo update are not here, since each bounds its index
+# download with --timeout, at two minutes by default.
+HELM_TRANSFERS = {
+    "install": "helm install a x/a --version 1 --wait --timeout 10m",
+    "upgrade": "helm upgrade --install a x/a --version 1 --wait --timeout 10m",
+    "template": "helm template a oci://r/c --version 1",
+    "pull": "helm pull oci://r/c --version 1",
+    "show": "helm show chart oci://r/c --version 1",
+    "dependency": "helm dependency build ./chart",
+    "push": "helm push c-1.tgz oci://r/o",
+}
+
 # kubectl's flags that take the next word as their value, so that word is not
 # the verb.
 KUBECTL_VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "--cluster", "--user",
@@ -1758,6 +1783,18 @@ KUBECTL_VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "--clus
 # A duration as kubectl and curl spell one: Go's `1h30m`, `90s` or `500ms`, or
 # a bare number of seconds.
 DURATION = re.compile(r"(\d+(\.\d+)?(h|m|s|ms|us|µs|ns))+|\d+(\.\d+)?")
+
+DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)")
+DURATION_UNIT = {"h": 3600, "m": 60, "s": 1, "ms": 1e-3, "us": 1e-6, "µs": 1e-6, "ns": 1e-9}
+
+
+def duration_seconds(value: str) -> float | None:
+    """`value` in seconds, or None when it is not a duration DURATION reads."""
+    if not DURATION.fullmatch(value):
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", value):
+        return float(value)
+    return sum(float(n) * DURATION_UNIT[unit] for n, unit in DURATION_PART.findall(value))
 
 # The subprocess entry points that block until their child exits.
 SUBPROCESS_BLOCKING = {"run", "call", "check_call", "check_output"}
@@ -1812,6 +1849,9 @@ def _helm_unbounded(segment: str, rest: str) -> str | None:
     verb = next((w for w in rest.split() if not w.startswith("-")), "")
     if verb in HELM_UNBOUNDED_READS:
         return f"helm {verb} takes no timeout, and this call does not run under deadline"
+    if verb in HELM_TRANSFERS:
+        return (f"helm {verb} moves a chart with nothing to bound the transfer, and this call "
+                f"does not run under deadline")
     return None
 
 
@@ -1856,11 +1896,32 @@ def _subprocess_unbounded(call: ast.Call) -> str | None:
     return None
 
 
-def why_unbounded(tool: str, segment: str, bounded: bool) -> str | None:
-    """Why one command is unbounded, or None. `segment` is its text up to the next
-    separator, read from the folded line so a flag on a continuation counts."""
-    if bounded:
+def _outlasted(segment: str, limit: int) -> str | None:
+    """Why a deadline does not bound a command that names a --timeout of its own.
+
+    A deadline at or under that timeout stops the command partway through a wait
+    it was told to make: the --timeout no longer says how long it waits, and a
+    helm release stopped there is left pending. One the reader cannot evaluate,
+    such as a variable, is refused too, for the reason `_bound` refuses one.
+    """
+    values = re.findall(r"(?<![\w-])--timeout(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
+    if not values:
         return None
+    seconds = duration_seconds(values[-1])
+    if seconds is None:
+        return (f"runs under deadline {limit} with --timeout {values[-1] or '(empty)'}, which "
+                f"cannot be read, so whether the deadline outlasts it is unknown")
+    if seconds >= limit:
+        return f"deadline {limit} does not outlast its own --timeout {values[-1]}"
+    return None
+
+
+def why_unbounded(tool: str, segment: str, limit: int | None) -> str | None:
+    """Why one command is unbounded, or None. `segment` is its text up to the next
+    separator, read from the folded line so a flag on a continuation counts, and
+    `limit` is the deadline it runs under, or None."""
+    if limit is not None:
+        return _outlasted(segment, limit)
     rest = segment.split(None, 1)[1] if " " in segment else ""
     return UNBOUNDED_BY_TOOL[tool](segment, rest)
 
@@ -1871,13 +1932,13 @@ def unbounded_in(text: str) -> tuple[int, list[tuple[int, str]]]:
     for n, cmd in logical_lines(strip_comments(text)):
         code = code_view(cmd)
         for m in OUTBOUND_TOOL.finditer(code):
-            is_command, bounded = command_context(code[:m.start()], cmd[:m.start()])
+            is_command, limit = command_context(code[:m.start()], cmd[:m.start()])
             if not is_command:
                 continue
             found += 1
             tail = code[m.start():]
             end = next((s.start() for s in COMMAND_SEP.finditer(tail)), len(tail))
-            why = why_unbounded(m.group(1), cmd[m.start():m.start() + end], bounded)
+            why = why_unbounded(m.group(1), cmd[m.start():m.start() + end], limit)
             if why:
                 problems.append((n, why))
     return found, problems
@@ -2854,6 +2915,58 @@ CONTROLS["every call that leaves this machine is bounded"] = [
         "nothing outbound at all",
         {"README.md": "nothing here\n"},
         {"s.sh": "curl --max-time 5 https://example\n"},
+    ),
+]
+
+CONTROLS["every call that leaves this machine is bounded"] += [
+    *(
+        (f"helm {verb} outside deadline", {"s.sh": shape + "\n"},
+         {"s.sh": f"deadline 900 {shape}\n"}, f"helm {verb} moves a chart")
+        for verb, shape in HELM_TRANSFERS.items()
+    ),
+    (
+        "a deadline no longer than the install's own --timeout",
+        {"s.sh": "deadline 600 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        {"s.sh": "deadline 900 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        "deadline 600 does not outlast its own --timeout 10m",
+    ),
+    (
+        "a --timeout on a continuation line, held against the deadline before it",
+        {"s.sh": "deadline 300 helm upgrade --install a x/a \\\n  --version 1 --wait --timeout 10m\n"},
+        {"s.sh": "deadline 900 helm upgrade --install a x/a \\\n  --version 1 --wait --timeout 10m\n"},
+        "deadline 300 does not outlast its own --timeout 10m",
+    ),
+    (
+        "a --timeout the reader cannot evaluate, under a deadline",
+        {"s.sh": 'deadline 900 helm upgrade --install a x/a --version 1 --wait --timeout "${T}"\n'},
+        {"s.sh": "deadline 900 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        "cannot be read",
+    ),
+    (
+        "a kubectl wait cut short by the deadline around it",
+        {"s.sh": "deadline 60 kubectl --request-timeout=60s wait --for=condition=Ready pod/x"
+                 " --timeout=120s\n"},
+        {"s.sh": "deadline 180 kubectl --request-timeout=60s wait --for=condition=Ready pod/x"
+                 " --timeout=120s\n"},
+        "deadline 60 does not outlast its own --timeout 120s",
+    ),
+    (
+        "the deadline program's limit, read from a Taskfile",
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 60 " + HELM_TRANSFERS["upgrade"])},
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 900 " + HELM_TRANSFERS["upgrade"])},
+        "deadline 60 does not outlast its own --timeout 10m",
+    ),
+]
+
+CONTROLS["every helm install is found, and names a timeout"] += [
+    (
+        "an install under deadline, read as the install it runs",
+        {"stack/s/a/install.sh": "helm repo add x https://x\n"
+                                 "deadline 900 helm upgrade --install a x/a --version 1 --wait\n"},
+        {"stack/s/a/install.sh": "helm repo add x https://x\n"
+                                 "deadline 900 helm upgrade --install a x/a --version 1 --wait"
+                                 " --timeout 10m\n"},
+        "runs `helm upgrade` with no --timeout",
     ),
 ]
 

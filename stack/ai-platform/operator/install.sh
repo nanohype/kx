@@ -57,7 +57,7 @@ kubectl --request-timeout=60s create namespace eks-agent-platform --dry-run=clie
 echo "Applying CRDs (helm does not upgrade them) ..."
 kubectl --request-timeout=60s apply -f "${OPERATOR_REPO}/charts/operator/crds/"
 
-helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
+deadline 480 helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
   --namespace eks-agent-platform \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 180s
