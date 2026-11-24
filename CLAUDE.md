@@ -19,7 +19,7 @@ Local mappings:
 
 | eks-gitops | kx | Note |
 |---|---|---|
-| aws-load-balancer-controller | cilium (Ingress + Gateway API) | Different product, same role. The same Cilium chart as the CNI serves Ingress, published on NodePorts kind maps to `localhost:80`/`:443` |
+| aws-load-balancer-controller | cilium (Ingress + Gateway API) | Different product, same role. The same Cilium chart as the CNI serves Ingress, from one listener on the host network of the `ingress-ready` node, which kind maps to `localhost:80`/`:443` |
 | external-secrets (AWS SM) | external-secrets (kubernetes provider) | Same chart, swap provider |
 | external-dns (Route53) | (not installed by default; coredns RFC2136 if needed) | Add to data/ slice if a project requires it |
 | velero (S3) | velero + minio | Same Velero, S3-compatible backend |

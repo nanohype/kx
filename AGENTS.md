@@ -127,7 +127,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 
 - `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context, in `.kube/config` at the repository root. kx never reads, writes or switches the context of your own kubeconfig, and every kx task and script refuses to act on any cluster but that one
 - Default node count: 1 control-plane + 2 workers
-- Local ingress lands at `localhost:80` / `localhost:443`: kind maps those loopback ports to the NodePorts of Cilium's shared Ingress Service. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
+- Local ingress lands at `localhost:80` / `localhost:443`: kind maps both loopback ports to the one port Cilium's shared Ingress listener binds on the control-plane node's host network, which serves plain HTTP and TLS alike. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
 - `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
 
