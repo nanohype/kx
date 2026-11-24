@@ -71,6 +71,7 @@ stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
 scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage, kyverno policy tests)
+schemas/   what the schema gate holds resources to, vendored from the pinned Kubernetes and Cilium releases
 tests/     fixtures the gates prove themselves against, and the Kyverno policy suites
 Taskfile.yaml
 ```
@@ -82,7 +83,7 @@ from inside the cluster without a remote registry. `task down` removes it.
 Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned,
 with an explicit `--timeout`) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
 A few carry more or fewer: CRD-only installers take chart defaults whole and have no values, and `druid` and
-`bedrock-credentials` ship the extra manifests their install applies.
+`bedrock-credentials` ship the extra manifests their install applies and the Python helpers it runs.
 
 ## When something breaks
 
@@ -99,8 +100,8 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | `bedrock-credentials` refuses to install | Kyverno is absent, or older than the GeneratingPolicy and MutatingPolicy kinds the slice declares | `task stack:security:enable` first |
 | A Kyverno chart upgrade fails on the `kyverno-check-legacy-policies` hook | Kyverno 1.20 no longer runs `kyverno.io/v1` policies, and an earlier `bedrock-credentials` install left its ClusterPolicy behind | `task stack:ai-platform:credentials` once — it retires the old policy and its copies before installing the replacements — then retry the upgrade |
 | Credentials installed but gateways still fail | Envoy Gateway regenerates the data plane on its own schedule; running proxies predate the Secret | `kubectl delete pod -A -l app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy` |
-| A chart bump fails `Validate every rendered resource against a schema` | A rendered resource no longer matches its CRD — the API server would reject it too | Read the reported path (e.g. `/spec/endpoints/0/port`); for any kind whose CRD is in the render, this is a real incompatibility |
-| ...but the failing kind is a `Cilium*` resource | Cilium registers its CRDs at operator runtime, so that schema comes from the community catalog and is **not** version-matched to the pinned chart | Triage schema skew first — compare against the CRD the running operator registered before treating the manifest as wrong |
+| A chart bump fails `Validate every rendered resource against a schema` | A rendered resource no longer matches its schema — the API server would reject it too | Read the reported path (e.g. `/spec/endpoints/0/port`). The schema is the render's own CRD, Cilium's vendored at its pin, or Kubernetes' own at the node image's version, so this is a real incompatibility |
+| The schema gate refuses with `is vendored, but kx pins` | The node image in `cluster/kind-config.yaml` or Cilium's chart pin moved, and the schemas are vendored per release | `scripts/vendor-schemas.py kubernetes <version>` or `scripts/vendor-schemas.py cilium <version>`, then commit `schemas/` |
 | `mirror-check.py check` refuses to run | It reads `eks-gitops` at the exact ref in `stack/upstream.json`, and the checkout is elsewhere | Check that commit out, or ask `freshness` instead, which compares against upstream's default branch |
 | The weekly `image cves` run is red | Its job summary names the state. **findings**: a CRITICAL nothing covers, or an exception that expired or matches nothing. **could not run**: the scanner or a registry could not answer, which says nothing about the images | For findings, move the chart pin to a fixed image, or record a time-boxed exception in `stack/image-cve-exceptions.json` with the reason. For could not run, fix the scan's reach |
 

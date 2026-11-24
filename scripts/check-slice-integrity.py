@@ -34,7 +34,9 @@ import io
 import json
 import os
 import pathlib
+import py_compile
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -238,19 +240,25 @@ MINIMUM_EXAMINED = {
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
     "every gate refuses when its authority is unavailable": 5,
-    # Sized to the corpus, not to the finding: 41 tracked shell scripts today,
-    # and a floor that only a collapse can breach.
+    # Sized to the corpus, not to the finding: every tracked shell script, which
+    # the run prints as its denominator, under a floor only a collapse can breach.
     "no script hands a secret to a command on argv": 30,
     # Three files both fetch and consume. Two is a floor a rename cannot pass
     # through quietly while leaving the class unexamined.
     "every fetched artifact is verified before it is used": 2,
+    # Every tracked Python file, the gates and the helpers installers run, which
+    # the run prints as its denominator.
+    "every Python file compiles": 9,
+    # The shell scripts and Taskfiles together, which the run prints as its
+    # denominator.
+    "no shell script runs Python from a string or stdin": 40,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 11
+MINIMUM_CHECKS = 13
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -572,8 +580,13 @@ UNPROBEABLE: dict[str, str] = {
         "reads a manifest stream on stdin rather than a path, so a probe would drive a "
         "different interface than the one render-check.sh uses",
     "check-rendered-schemas.py":
-        "its verdict needs kubeconform and a reachable schema host, so a probe would make "
-        "this floor non-hermetic and fail on a network outage rather than on a defect",
+        "its verdict needs kubeconform and the schemas vendored under schemas/, and a "
+        "fixture tree could carry them only by copying megabytes of upstream documents "
+        "into every probe",
+    "vendor-schemas.py":
+        "it is the tool that writes schemas/ rather than a gate over the tree, and its one "
+        "verdict, --check, fetches each pinned release from proxy.golang.org and "
+        "sum.golang.org, so a probe would make this floor non-hermetic",
     "mirror-check.py":
         "compares against an eks-gitops checkout, which a fixture tree cannot stand in for "
         "without reimplementing the catalog's ApplicationSet shapes",
@@ -1155,10 +1168,15 @@ def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
     somebody else's installer, and failed this repository's build for it.
 
     A gate that grades a neighbour is wrong even when its finding is right: the
-    seat that can fix it is not the one being stopped. Falls back to a walk for
-    a fixture tree, which is not a git repository.
+    seat that can fix it is not the one being stopped. A fixture tree is a git
+    repository for the same reason, so this reads it the same way (see _tree).
     """
-    out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "*.sh"],
+    return tracked_files(root, "*.sh")
+
+
+def tracked_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
+    """The tracked files matching any of `patterns`, for the reason above."""
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", *patterns],
                          capture_output=True, text=True, check=False)
     return sorted(root / f for f in out.stdout.split("\0") if f)
 
@@ -1311,6 +1329,242 @@ def remote_artifacts_are_verified(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+def python_files_compile(root: pathlib.Path = ROOT) -> list[str]:
+    """Every tracked Python file compiles.
+
+    Compiled by the interpreter running this suite, with py_compile, rather than
+    only parsed by the linter: the interpreter is the authority on what it will
+    accept, and an installer's helper meets nothing else before a workstation
+    runs it. The bytecode is written to a scratch directory, so the tree is left
+    exactly as it was found.
+
+    The class this closes shipped once: an installer step whose program sat in a
+    shell string, out of reach of every parser, with a backslash inside an
+    f-string expression that no Python release accepts. The step failed on the
+    first workstation that ran it. The companion invariant below keeps programs
+    out of shell strings; this one is what reads them once they are files.
+    """
+    problems = []
+    files = tracked_files(root, "*.py")
+    if not files:
+        return ["found no tracked Python file — refusing to report every one compiling over "
+                "an empty set."]
+    version = sys.version.split()[0]
+    with tempfile.TemporaryDirectory(prefix="kx-pycompile-") as scratch:
+        for n, f in enumerate(files):
+            try:
+                py_compile.compile(str(f), cfile=os.path.join(scratch, f"{n}.pyc"),
+                                   doraise=True)
+            except py_compile.PyCompileError as e:
+                where = getattr(e.exc_value, "lineno", None)
+                at = f":{where}" if where else ""
+                problems.append(f"{f.relative_to(root)}{at} does not compile under python "
+                                f"{version}: {e.exc_type_name}: "
+                                f"{getattr(e.exc_value, 'msg', e.exc_value)}")
+    EXAMINED["every Python file compiles"] = len(files)
+    return problems
+
+
+# `python`, `python3` or `python3.N` as a command word.
+PYTHON_MENTION = re.compile(r"(?<![\w./-])python(?:3(?:\.\d+)?)?(?![\w.-])")
+
+# Words that may stand before a command without being it, each with a shape it
+# opens, CMD marking where the command goes: a reserved word that opens a
+# command list or a pipeline, and a precommand that runs its operand. A word
+# missing here hides the command behind it from every check that reads command
+# positions, so each shape is also a control, and a word is proven by the shape
+# added with it.
+COMMAND_OPENERS = {
+    "if": "if CMD; then :; fi",
+    "elif": "if false; then :; elif CMD; then :; fi",
+    "then": "if true; then CMD; fi",
+    "else": "if false; then :; else CMD; fi",
+    "while": "while CMD; do :; done",
+    "until": "until CMD; do :; done",
+    "do": "for x in a; do CMD; done",
+    "!": "! CMD",
+    "{": "f() { CMD; }",
+    "exec": "exec CMD",
+    "command": "command CMD",
+    "time": "time CMD",
+    "env": "env A=1 CMD",
+}
+
+# The openers, and the `- ` of a Taskfile's cmds list.
+COMMAND_PREFIX_WORDS = set(COMMAND_OPENERS) | {"-"}
+
+# Interpreter options that take the next word as their value, so that word is
+# not the program.
+PYTHON_VALUE_OPTIONS = {"--check-hash-based-pycs"}
+
+# Tokens that end the python command with no program named.
+COMMAND_ENDS = {"|", "||", "&", "&&", ";", ";;", ")", "("}
+
+# Redirections that make stdin the program when no script came first.
+STDIN_REDIRECTS = {"<", "<<", "<<-", "<<<"}
+
+# What code_view writes over a literal's text: a word character, so a quoted
+# word stays one word, and one that spells no command a check looks for.
+BLANK = "_"
+
+
+def code_view(line: str) -> str:
+    """The line with the text of every string literal blanked and all code kept.
+
+    Not strip_quoted: a command substitution inside double quotes is code, and
+    `KEY="$(printf %s "$J" | python3 -c ...)"` is the shape an installer writes
+    most often. Blanking every double-quoted body would hide exactly that
+    invocation. Blanked rather than removed, so an offset in this view is an
+    offset in the original line, and blanked with a character that is not
+    whitespace, so a quoted word stays one word: `FOO='a b' python3` is an
+    assignment and then a command, and blanking `a b` to spaces would split the
+    assignment and leave python3 reading as an argument.
+    """
+    out: list[str] = []
+    stack: list[list] = [["code", 0]]
+    i = 0
+    while i < len(line):
+        c = line[i]
+        kind = stack[-1][0]
+        if kind == "single":
+            out.append(c if c == "'" else BLANK)
+            if c == "'":
+                stack.pop()
+            i += 1
+        elif kind == "double":
+            if c == "\\" and i + 1 < len(line):
+                out.append(BLANK * 2)
+                i += 2
+            elif c == '"':
+                stack.pop()
+                out.append(c)
+                i += 1
+            elif line.startswith("$(", i):
+                stack.append(["code", 0])
+                out.append("$(")
+                i += 2
+            else:
+                out.append(BLANK)
+                i += 1
+        elif c == "\\" and i + 1 < len(line):
+            out.append(line[i:i + 2])
+            i += 2
+        else:
+            if c == "'":
+                stack.append(["single"])
+            elif c == '"':
+                stack.append(["double"])
+            elif c == "(":
+                stack[-1][1] += 1
+            elif c == ")":
+                if stack[-1][1] > 0:
+                    stack[-1][1] -= 1
+                elif len(stack) > 1:
+                    stack.pop()
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def in_command_position(code_prefix: str) -> bool:
+    """Whether a word following `code_prefix` (a code view) is the command word."""
+    tokens = COMMAND_SEP.split(code_prefix)[-1].split()
+    return all(t in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(t) for t in tokens)
+
+
+# What a single-letter interpreter option says about where the program comes
+# from. Any other letter is a flag that leaves the question open.
+PYTHON_LETTER_SOURCES = {"c": "string", "m": "module", "V": "info", "h": "info"}
+
+
+def python_option(word: str) -> tuple[str | None, int]:
+    """One interpreter option: where it says the program is, if it says, and the
+    number of words it occupies."""
+    if word.startswith("--"):
+        if word.startswith(("--version", "--help")):
+            return "info", 1
+        return None, 2 if word in PYTHON_VALUE_OPTIONS else 1
+    for j, letter in enumerate(word[1:]):
+        if letter in PYTHON_LETTER_SOURCES:
+            return PYTHON_LETTER_SOURCES[letter], 1
+        if letter in "WX":
+            # Takes a value: the rest of this word, or else the next word.
+            return None, 2 if j + 2 == len(word) else 1
+    return None, 1
+
+
+def python_program(rest: str) -> str:
+    """Where the python command whose arguments start at `rest` gets its program.
+
+    One of "file", "module" or "info" (a version or help query, which runs no
+    program), each of which is fine, or "string" or "stdin", which are the
+    finding. Read with shlex, which keeps a quoted script path whole. An unclosed
+    quote, which is what `-c '` leaves on the line that opens a multi-line
+    program, ends the reading, and the words before it still decide.
+    """
+    lex = shlex.shlex(rest, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    words: list[str] = []
+    with contextlib.suppress(ValueError):
+        words.extend(lex)
+    source, i = "stdin", 0
+    while i < len(words):
+        word = words[i]
+        if word in COMMAND_ENDS or word in STDIN_REDIRECTS or word == "-":
+            break
+        if word == "--":
+            if i + 1 < len(words) and words[i + 1] not in COMMAND_ENDS:
+                source = "file"
+            break
+        if not word.startswith("-"):
+            source = "file"
+            break
+        said, width = python_option(word)
+        if said:
+            source = said
+            break
+        i += width
+    return source
+
+
+def python_runs_from_files(root: pathlib.Path = ROOT) -> list[str]:
+    """No shell script or Taskfile runs Python from a string or from stdin.
+
+    A program handed to python3 with -c, or on stdin through a heredoc, lives in
+    a shell string: the linter does not read it, nothing compiles it, and it can
+    contain no single quote, so it bends around the quoting instead. Workstation
+    code is where that matters, because nothing in CI runs an installer — the
+    first parser such a program meets is the one on the machine of whoever enables
+    the slice. Moved into a .py file, it is linted by the lint job and compiled
+    by the invariant above.
+
+    Scoped to tracked shell scripts and Taskfiles, which are the workstation
+    side. The workflows are not in scope: every command in them runs on every
+    pull request, so a program there cannot rot unseen.
+    """
+    problems = []
+    files = tracked_files(root, "*.sh", "*Taskfile.yaml")
+    if not files:
+        return ["found no tracked shell script or Taskfile — refusing to report every python3 "
+                "invocation running a file over an empty set."]
+    for f in files:
+        for n, cmd in logical_lines(strip_comments(f.read_text())):
+            code = code_view(cmd)
+            for m in PYTHON_MENTION.finditer(code):
+                if not in_command_position(code[:m.start()]):
+                    continue
+                source = python_program(cmd[m.end():])
+                if source in ("string", "stdin"):
+                    how = "passed with -c" if source == "string" else "read from stdin"
+                    problems.append(
+                        f"{f.relative_to(root)}:{n} runs a Python program {how}, which no "
+                        f"linter reads and nothing compiles. Move it into a .py file beside "
+                        f"the script and run that file."
+                    )
+    EXAMINED["no shell script runs Python from a string or stdin"] = len(files)
+    return problems
+
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -1325,6 +1579,8 @@ CHECKS = [
      gates_refuse_without_their_authority),
     ("no script hands a secret to a command on argv", secrets_stay_off_argv),
     ("every fetched artifact is verified before it is used", remote_artifacts_are_verified),
+    ("every Python file compiles", python_files_compile),
+    ("no shell script runs Python from a string or stdin", python_runs_from_files),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -1746,7 +2002,109 @@ CONTROLS = {
             {"stack/s/a/install.sh": BOUNDED},
         ),
     ],
+    "every Python file compiles": [
+        (
+            "a Python file with a syntax error",
+            {"a.py": "x = (\n"},
+            {"a.py": "x = ()\n"},
+            "a.py:1",
+        ),
+        (
+            # The defect this invariant was written after, verbatim in shape: a
+            # backslash inside an f-string's expression, which no Python release
+            # compiles.
+            "a backslash inside an f-string expression",
+            {"m.py": 'import sys\nmissing = ["a"]\nsys.exit(f"has no {\\", \\".join(missing)}")\n'},
+            {"m.py": 'import sys\nmissing = ["a"]\nsys.exit(f"has no {\', \'.join(missing)}")\n'},
+            "m.py:3",
+        ),
+        (
+            "a syntax error in an untracked file is not this repository's",
+            {"a.py": "x = ()\n", "b.py": "x = (\n", UNTRACKED + "u.py": "x = (\n"},
+            {"a.py": "x = ()\n", UNTRACKED + "u.py": "x = (\n"},
+            "b.py",
+        ),
+        (
+            "no Python file at all",
+            {"README.md": "nothing here\n"},
+            {"a.py": "x = 1\n"},
+        ),
+    ],
+    "no shell script runs Python from a string or stdin": [
+        (
+            "a program passed to python3 with -c",
+            {"s.sh": "python3 -c 'print(1)'\n"},
+            {"s.sh": 'python3 "${SCRIPT_DIR}/p.py"\n'},
+            "s.sh:1 runs a Python program passed with -c",
+        ),
+        (
+            "a program read from a heredoc, the shape that built a Secret on stdin",
+            {"s.sh": "python3 - \"$N\" <<'PY' | kubectl apply -f -\nprint(1)\nPY\n"},
+            {"s.sh": 'python3 "${SCRIPT_DIR}/p.py" "$N" | kubectl apply -f -\n'},
+            "read from stdin",
+        ),
+        (
+            # The shape an installer writes most often, and the one a reading
+            # that blanks every double-quoted body would miss.
+            "a -c program inside a quoted command substitution",
+            {"s.sh": 'K="$(printf \'%s\' "$J" | python3 -c \'import json\')"\n'},
+            {"s.sh": 'K="$(printf \'%s\' "$J" | python3 "${SCRIPT_DIR}/k.py")"\n'},
+            "s.sh:1",
+        ),
+        (
+            # A quoted value blanked to spaces would split the assignment and
+            # leave python3 reading as one of its arguments.
+            "a program behind an assignment whose quoted value holds a space",
+            {"s.sh": "LC_ALL='C.UTF-8 x' python3 -c 'print(1)'\n"},
+            {"s.sh": "LC_ALL='C.UTF-8 x' python3 \"${SCRIPT_DIR}/p.py\"\n"},
+            "s.sh:1",
+        ),
+        (
+            "a multi-line program exec'd from a string, the shape a post-renderer used",
+            {"p.sh": "exec python3 -c '\nimport sys\nprint(sys.stdin.read())\n'\n"},
+            {"p.sh": 'exec python3 "${SCRIPT_DIR}/p.py"\n'},
+            "p.sh:1",
+        ),
+        (
+            "a program on stdin with no script named",
+            {"s.sh": "python3 <<'PY'\nprint(1)\nPY\n"},
+            {"s.sh": "python3 p.py <<'EOF'\ninput\nEOF\n"},
+        ),
+        (
+            "a program in a Taskfile command",
+            {"Taskfile.yaml": "tasks:\n  t:\n    cmds:\n      - python3 -c 'print(1)'\n"},
+            {"Taskfile.yaml": "tasks:\n  t:\n    cmds:\n      - python3 scripts/t.py\n"},
+            "Taskfile.yaml:4",
+        ),
+        (
+            "a module, an option with a value and prose naming python3 are not programs",
+            {"s.sh": 'python3 -m json.tool <f.json\npython3 -W ignore -u p.py\n'
+                     'echo "needs python3 -c to work" >&2\n',
+             "t.sh": "python3 -Ic 'x'\n"},
+            {"s.sh": 'python3 -m json.tool <f.json\npython3 -W ignore -u p.py\n'
+                     'echo "needs python3 -c to work" >&2\n'},
+            "t.sh:1",
+        ),
+        (
+            "no shell script or Taskfile at all",
+            {"README.md": "nothing here\n"},
+            {"s.sh": "echo hi\n"},
+        ),
+    ],
 }
+
+# A program behind each word that opens a command. The words are bash grammar
+# rather than commands, and a reading that stopped at one would accept every
+# program an installer runs as a condition, in a loop or in a function.
+CONTROLS["no shell script runs Python from a string or stdin"] += [
+    (
+        f"a program behind `{word}`",
+        {"s.sh": shape.replace("CMD", "python3 -c 'x'") + "\n"},
+        {"s.sh": shape.replace("CMD", 'python3 "${SCRIPT_DIR}/p.py"') + "\n"},
+        "s.sh:1",
+    )
+    for word, shape in COMMAND_OPENERS.items()
+]
 
 
 def _tree(files: dict[str, str]) -> pathlib.Path:

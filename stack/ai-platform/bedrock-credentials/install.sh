@@ -68,39 +68,25 @@ fi
 
 # Resolved through the CLI rather than read out of ~/.aws, so SSO sessions,
 # assumed roles and credential_process all work the same way. A profile whose
-# session has expired fails here, with the aws CLI's own message, rather than
-# producing a Secret full of empty strings that fails much later as a 403.
+# session has expired fails here, with the aws CLI's own message, and a profile
+# that resolves to no key fails in credentials.py, rather than either producing
+# a Secret of empty strings that fails much later as a 403.
+#
+# The JSON stays in this shell and reaches python3 through printf, a builtin, so
+# no credential is ever an argument to a command or a variable in the
+# environment every later command inherits.
 echo "Resolving credentials from AWS profile '${PROFILE}' ..."
 CREDS_JSON="$(aws configure export-credentials --profile "${PROFILE}" --format process)"
-AWS_ACCESS_KEY_ID="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["AccessKeyId"])')"
-AWS_SECRET_ACCESS_KEY="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["SecretAccessKey"])')"
-AWS_SESSION_TOKEN="$(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("SessionToken",""))')"
-AWS_REGION="${REGION}"
-# Exported rather than passed as arguments: the Secret below is built from the
-# environment so no credential reaches a command line.
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION
 
 kubectl create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl apply -f -
 
 # Built on stdin rather than with --from-literal: that flag puts the secret key
 # and the session token in this process's argv, where `ps` shows them to every
-# other process on the workstation. python3 does the base64 and the quoting; it
-# is already required above to read the credential JSON.
-python3 - "${SECRET}" "${SOURCE_NS}" <<'PY' | kubectl apply -f -
-import base64, json, os, sys
-
-name, namespace = sys.argv[1], sys.argv[2]
-data = {k: base64.b64encode(os.environ[k].encode()).decode() for k in (
-    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"
-)}
-print(json.dumps({
-    "apiVersion": "v1",
-    "kind": "Secret",
-    "metadata": {"name": name, "namespace": namespace},
-    "type": "Opaque",
-    "data": data,
-}))
-PY
+# other process on the workstation. credentials.py does the base64 and the
+# quoting.
+printf '%s' "${CREDS_JSON}" \
+  | python3 "${SCRIPT_DIR}/credentials.py" manifest "${SECRET}" "${SOURCE_NS}" "${REGION}" \
+  | kubectl apply -f -
 
 # ── Retire the ClusterPolicy this slice used to install ────────────────────
 #
@@ -154,7 +140,7 @@ echo
 echo "── local Bedrock credentials installed ──"
 echo "  profile:  ${PROFILE}"
 echo "  region:   ${REGION}"
-echo "  expires:  $(printf '%s' "${CREDS_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Expiration","no expiry (long-lived key)"))')"
+echo "  expires:  $(printf '%s' "${CREDS_JSON}" | python3 "${SCRIPT_DIR}/credentials.py" expiry)"
 echo
 echo "Gateways admitted from now on pick the credentials up. Existing ones are"
 echo "replaced by Envoy Gateway on its next reconcile; to take them now:"
