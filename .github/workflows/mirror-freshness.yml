@@ -48,5 +48,5 @@ jobs:
         env:
           EKS_GITOPS_DIR: ${{ github.workspace }}/.sibling/eks-gitops
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/mirror-check.py freshness

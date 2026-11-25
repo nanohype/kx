@@ -1,0 +1,105 @@
+{
+  "_README": "Written by scripts/vendor-schemas.py; do not edit by hand. Each source is a Go module at the release kx pins, checked against the hash sum.golang.org records for it before any file was taken; each file's sha256 is checked by check-rendered-schemas.py before it validates anything against it.",
+  "cilium": {
+    "files": {
+      "ciliumbgpadvertisements.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumbgpadvertisements.yaml",
+        "sha256": "7db305307814d057ebb06bb60a18d1907cdfc1a0cfa64037eb8b2c393a87aa0b"
+      },
+      "ciliumbgpclusterconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumbgpclusterconfigs.yaml",
+        "sha256": "ada6f0d16bfed6b570c97528694702797712e9769450b9c4a3224697dde7536e"
+      },
+      "ciliumbgpnodeconfigoverrides.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumbgpnodeconfigoverrides.yaml",
+        "sha256": "3ad9f6c87e395d0afc55e0de293e88e8ec12f498b7fed34045f4b03c35009fb7"
+      },
+      "ciliumbgpnodeconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumbgpnodeconfigs.yaml",
+        "sha256": "c6e40beef8fa66e0df5a233827b1151248dbff1006e288153166966e7dbc2919"
+      },
+      "ciliumbgppeerconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumbgppeerconfigs.yaml",
+        "sha256": "698f7babf54a9c9933f877463d2784d3940508a9fd9a0c064a5cc4469eca8ad6"
+      },
+      "ciliumcidrgroups.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumcidrgroups.yaml",
+        "sha256": "64c3e515decd0a1a91745e0544e9601dbddd1b5d46914834a8fd175f51499ee9"
+      },
+      "ciliumclusterwideenvoyconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumclusterwideenvoyconfigs.yaml",
+        "sha256": "9d5d17d02c2fce55be09e8c74533022a041ab63a05d79e63af1523e37bc4bdd4"
+      },
+      "ciliumclusterwidenetworkpolicies.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumclusterwidenetworkpolicies.yaml",
+        "sha256": "ae742b7ad66ddb4af752b6ae9787f2d3bc4597e3f29df80417967767f9bf2a79"
+      },
+      "ciliumegressgatewaypolicies.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumegressgatewaypolicies.yaml",
+        "sha256": "f16658599934be27523d02b90e2a2d2fb0dc5cff7c1c2fceafb5f6c812838540"
+      },
+      "ciliumendpoints.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumendpoints.yaml",
+        "sha256": "7f34d1d7b7d9c7b05a8ce6d92720ad358145047667fc5cdc14dcfa19dc7b9519"
+      },
+      "ciliumendpointslices.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2alpha1/ciliumendpointslices.yaml",
+        "sha256": "48b5f0982d331e70b310362b213da2a83f3def8de56807d7c1d1969e2996b39d"
+      },
+      "ciliumenvoyconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumenvoyconfigs.yaml",
+        "sha256": "9641a7b9034508798ac8ecf58cf29fd2ae21e320df7ad59c8596bf7f414c420b"
+      },
+      "ciliumgatewayclassconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2alpha1/ciliumgatewayclassconfigs.yaml",
+        "sha256": "892bb8499ece3e4d91628dd325d9ca046e96db195ca389a1818d82c1efdebd5b"
+      },
+      "ciliumidentities.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumidentities.yaml",
+        "sha256": "904c3426ece91ad5e0a0f033d4eb643d50f135ad7f9b65665bb8bb7668a1235a"
+      },
+      "ciliuml2announcementpolicies.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2alpha1/ciliuml2announcementpolicies.yaml",
+        "sha256": "c9a67b0d8a3a5ea43d80c3ac1a0e05f5d0c7ba19ed70cbe8ccd4e04ad5077e1b"
+      },
+      "ciliumloadbalancerippools.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumloadbalancerippools.yaml",
+        "sha256": "04a1e2415f62364c409913f85d2ed597ba41e4f8c31fd242fd79149348853142"
+      },
+      "ciliumlocalredirectpolicies.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumlocalredirectpolicies.yaml",
+        "sha256": "2c893201a7d2319ff02044d03db613125c5decb1f60e6ce106750d5be623f3e2"
+      },
+      "ciliumnetworkpolicies.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnetworkpolicies.yaml",
+        "sha256": "1b1738a904de1152c43078e6a873440aea100f30f10ce5ed4e8622524c13fa43"
+      },
+      "ciliumnodeconfigs.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnodeconfigs.yaml",
+        "sha256": "92a77d6f101e251708501a2b1322dfb1a4cd45f9a78f8bf733baa7dc91963263"
+      },
+      "ciliumnodes.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2/ciliumnodes.yaml",
+        "sha256": "b41b943438307e702e825ee1e7538d989dccd5456bf2efc5d9993594b0dd2c6d"
+      },
+      "ciliumpodippools.yaml": {
+        "from": "pkg/k8s/apis/cilium.io/client/crds/v2alpha1/ciliumpodippools.yaml",
+        "sha256": "1cc929e1ca7142a46314813ac9dc5ec3efa22d00a7825f52112214549cf5f48b"
+      }
+    },
+    "h1": "h1:2G0yzfral3u6v56dY3tx2pT4U1sbMXDSKTBlGBYgRGo=",
+    "module": "github.com/cilium/cilium",
+    "version": "v1.19.6"
+  },
+  "kubernetes": {
+    "files": {
+      "swagger.json": {
+        "from": "api/openapi-spec/swagger.json",
+        "sha256": "dcede2063da1d7ad62ecb5af8adb6d7fabd0b52385a7fa0048afb491dac90450"
+      }
+    },
+    "h1": "h1:Mt7NKigaZ2KmOmCLhX81lGlH9JU5wjXnYhXnxAun9XA=",
+    "module": "k8s.io/kubernetes",
+    "version": "v1.36.1"
+  }
+}
