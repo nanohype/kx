@@ -16,6 +16,8 @@
 # with KX_EKS_AGENT_PLATFORM_DIR if your repos are not side by side.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 PLATFORM="${PLATFORM:?set PLATFORM to the Platform whose gateway to probe}"
 ROUTE="${ROUTE:-primary}"

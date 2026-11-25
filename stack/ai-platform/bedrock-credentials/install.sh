@@ -30,6 +30,8 @@
 # profile whose permissions you would not hand to every namespace at once.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 PROFILE="${AWS_PROFILE:-default}"
 # The region the gateway signs the upstream Bedrock call for. It has to be one

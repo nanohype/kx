@@ -3,6 +3,8 @@
 # The modern_ebpf driver needs a kernel with CO-RE BPF support — the Docker Desktop and OrbStack VMs provide one.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 helm repo add falcosecurity https://falcosecurity.github.io/charts --force-update >/dev/null
 helm repo update falcosecurity >/dev/null

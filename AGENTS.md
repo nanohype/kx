@@ -27,10 +27,11 @@ task stack:observability:enable        # enable an opt-in slice
 task down                              # tear down
 ```
 
-Target the local cluster:
+Target the local cluster through kx's own kubeconfig, which `task up` writes and which holds the `kind-kx`
+context alone:
 
 ```sh
-kind export kubeconfig --name kx
+export KUBECONFIG=/path/to/kx/.kube/config
 kubectl create namespace my-project
 helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/values-development.yaml
 ```
@@ -124,7 +125,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 
 ## Conventions
 
-- `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context
+- `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context, in `.kube/config` at the repository root. kx never reads, writes or switches the context of your own kubeconfig, and every kx task and script refuses to act on any cluster but that one
 - Default node count: 1 control-plane + 2 workers
 - Local ingress lands at `localhost:80` / `localhost:443` via ingress-nginx host-port mapping
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it

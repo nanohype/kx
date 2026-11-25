@@ -21,6 +21,9 @@
 # injection is the kubelet's guarantee, and the GeneratingPolicy is what puts
 # the Secret there.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 SELECTOR="app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy"
 SECRET="kx-bedrock-credentials"

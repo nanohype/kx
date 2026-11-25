@@ -9,6 +9,9 @@
 #
 # Idempotent: kubectl apply + rollout restart can run repeatedly.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=kubeconfig.sh
+. "${SCRIPT_DIR}/kubeconfig.sh"
 
 kubectl -n kube-system apply -f - <<'EOF'
 apiVersion: v1

@@ -11,9 +11,9 @@ tasks:
   disable:
     desc: Uninstall security slice
     cmds:
-      - helm uninstall -n falco falco                   || true
-      - helm uninstall -n trivy-system trivy-operator   || true
-      - helm uninstall -n kyverno kyverno               || true
-      - kubectl delete ns falco --ignore-not-found
-      - kubectl delete ns trivy-system --ignore-not-found
-      - kubectl delete ns kyverno --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n falco falco                   || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n trivy-system trivy-operator   || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n kyverno kyverno               || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns falco --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns trivy-system --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns kyverno --ignore-not-found
