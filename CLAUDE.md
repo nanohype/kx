@@ -78,10 +78,12 @@ program in a shell string meets its first parser on a workstation; as a file,
 the lint job reads it and `check-slice-integrity.py` compiles it, and that
 script refuses Python run from a string or stdin in any shell script or
 Taskfile. Its tests go under `tests/installers/` and reach every line and every
-branch: `scripts/python-test.sh`, which the test job runs, reads coverage over
-`stack/` and refuses anything less, so a helper added without tests fails
-there. The same run measures the gates through their own self-tests, against a
-floor in that script which is raised with their coverage and never lowered.
+branch: `scripts/python-test.sh`, which the test job runs, holds the run to the
+floors `pyproject.toml` states, and every helper under `stack/` is held to all of
+its lines and branches on its own, so a helper added without tests fails there.
+The gates under `scripts/` are held together to 75% of lines and 60% of
+branches, read apart, through their own controls and the tests of their logic
+under `tests/gates/`.
 
 An addon whose chart cannot be stored as a helm release renders it with
 `helm template` into a server-side `kubectl apply` instead, and carries an
@@ -101,7 +103,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
 - Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
 - Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
-- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them. Every tool a workflow installs is pinned to a version and checked against a recorded digest: the Python tools from `.github/lint-requirements.txt` and `.github/gate-requirements.txt` with `--require-hashes`, helm through `.github/actions/helm`, and each binary from its release with a sha256
+- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs seven jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, the Kyverno policy tests, the Python tests under the coverage floors `pyproject.toml` states, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them. Every tool a workflow installs is pinned to a version and checked against a recorded digest: the Python tools from `.github/lint-requirements.txt` and `.github/gate-requirements.txt` with `--require-hashes`, helm through `.github/actions/helm`, and each binary from its release with a sha256
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
 - Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 
