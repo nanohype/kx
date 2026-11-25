@@ -18,12 +18,7 @@
     {
       "chart": "aws-load-balancer-controller",
       "kind": "gitops-only",
-      "reason": "Provisions AWS ALBs from Ingress objects. kind has no ELB to provision; ingress-nginx plus Cilium's Gateway API fill the same role locally."
-    },
-    {
-      "chart": "ingress-nginx",
-      "kind": "kx-only",
-      "reason": "The local stand-in for aws-load-balancer-controller. Different product, same role: something has to terminate Ingress on a cluster with no cloud load balancer."
+      "reason": "Provisions AWS ALBs from Ingress objects. kind has no ELB to provision; Cilium, already the CNI on both sides, serves Ingress and the Gateway API locally from the same chart pin, so the role needs no chart of its own here."
     },
     {
       "chart": "external-dns",

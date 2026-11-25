@@ -44,18 +44,17 @@ tasks:
     cmds:
       # Order matters:
       #   1. Gateway API CRDs first — cilium's gatewayAPI controller registers against them at startup
-      #   2. CNI (cilium) — nodes go from NotReady to Ready
+      #   2. CNI (cilium) — nodes go from NotReady to Ready; also the Ingress and Gateway API controller
       #   3. prometheus-operator-crds — any chart that creates ServiceMonitor/PodMonitor relies on these
       #   4. cert-manager + trust-manager — TLS issuance + CA bundle distribution
       #   5. metrics-server — kubectl top, HPA inputs
-      #   6. ingress-nginx + reloader + argocd
+      #   6. reloader + argocd
       - bash {{.TASKFILE_DIR}}/core/gateway-api-crds/install.sh
       - bash {{.TASKFILE_DIR}}/core/cilium/install.sh
       - bash {{.TASKFILE_DIR}}/core/prometheus-operator-crds/install.sh
       - bash {{.TASKFILE_DIR}}/core/cert-manager/install.sh
       - bash {{.TASKFILE_DIR}}/core/trust-manager/install.sh
       - bash {{.TASKFILE_DIR}}/core/metrics-server/install.sh
-      - bash {{.TASKFILE_DIR}}/core/ingress-nginx/install.sh
       - bash {{.TASKFILE_DIR}}/core/reloader/install.sh
       - bash {{.TASKFILE_DIR}}/core/argo-cd/install.sh
 

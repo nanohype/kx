@@ -257,13 +257,15 @@ MINIMUM_EXAMINED = {
     # Counts every script and Taskfile command that reaches the cluster, which
     # the run prints as its denominator; set well under it, like the others.
     "nothing kx runs can reach a cluster other than kind-kx": 70,
+    # Unconditional: both ports, or the check did not look.
+    "localhost:80 and :443 reach Cilium's Ingress": 2,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 14
+MINIMUM_CHECKS = 15
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -1696,6 +1698,71 @@ def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
     return problems
 
 
+KIND_CONFIG = "cluster/kind-config.yaml"
+CILIUM_VALUES = "stack/core/cilium/values.yaml"
+
+# The host ports the cluster's Ingress is reached on. Both land on the one
+# shared listener, which serves plain HTTP and TLS on a single port.
+INGRESS_HOST_PORTS = (80, 443)
+
+
+def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
+    """localhost:80 and :443 reach Cilium's Ingress.
+
+    Cilium serves every Ingress from one shared Envoy listener, on the host
+    network of the nodes its values select and on the port they name, and kind
+    publishes a host port to a container port of one node. Those facts live in
+    two files, and nothing fails when they part: the cluster comes up, every
+    Ingress is admitted, and localhost answers with a reset. So each host port's
+    mapping is held to the listener's port, on a node the listener binds on.
+    """
+    try:
+        kind = yaml.safe_load((root / KIND_CONFIG).read_text()) or {}
+        values = yaml.safe_load((root / CILIUM_VALUES).read_text()) or {}
+    except FileNotFoundError as e:
+        return [f"{pathlib.Path(e.filename).relative_to(root)} does not exist — refusing to report "
+                f"the Ingress ports reachable without it."]
+    except yaml.YAMLError as e:
+        return [f"{KIND_CONFIG} or {CILIUM_VALUES} does not parse ({e}), so the ports it names "
+                f"cannot be read."]
+    ingress = values.get("ingressController") or {}
+    if not ingress.get("enabled"):
+        return [f"{CILIUM_VALUES} does not enable ingressController, so nothing serves Ingress "
+                f"behind localhost:80 and :443."]
+    host_network = ingress.get("hostNetwork") or {}
+    if not host_network.get("enabled"):
+        return [f"{CILIUM_VALUES} does not put the Ingress listener on the host network "
+                f"(ingressController.hostNetwork.enabled), so no node port carries it for kind "
+                f"to map."]
+    problems = []
+    port = host_network.get("sharedListenerPort")
+    if not isinstance(port, int) or isinstance(port, bool):
+        problems.append(f"{CILIUM_VALUES} names no ingressController.hostNetwork."
+                        f"sharedListenerPort, so the port localhost has to reach is the chart's "
+                        f"default rather than one this repository states.")
+        port = None
+    selector = (host_network.get("nodes") or {}).get("matchLabels") or {}
+    for host in INGRESS_HOST_PORTS:
+        mapped = [(node, m) for node in kind.get("nodes") or []
+                  for m in node.get("extraPortMappings") or [] if m.get("hostPort") == host]
+        if not mapped:
+            problems.append(f"{KIND_CONFIG} publishes nothing on host port {host}, so localhost:"
+                            f"{host} does not reach Cilium's Ingress.")
+        for node, m in mapped:
+            if port is not None and m.get("containerPort") != port:
+                problems.append(f"{KIND_CONFIG} maps localhost:{host} to container port "
+                                f"{m.get('containerPort')}, but Cilium's Ingress listens on {port} "
+                                f"({CILIUM_VALUES} ingressController.hostNetwork."
+                                f"sharedListenerPort).")
+            labels = node.get("labels") or {}
+            unmatched = [f"{k}={v}" for k, v in selector.items() if str(labels.get(k)) != str(v)]
+            if unmatched:
+                problems.append(f"{KIND_CONFIG} maps localhost:{host} on a node without "
+                                f"{', '.join(unmatched)}, which ingressController.hostNetwork."
+                                f"nodes selects, so no listener binds where it lands.")
+    EXAMINED["localhost:80 and :443 reach Cilium's Ingress"] = len(INGRESS_HOST_PORTS)
+    return problems
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -1713,6 +1780,7 @@ CHECKS = [
     ("every Python file compiles", python_files_compile),
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
     ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
+    ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -2342,6 +2410,71 @@ CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
     ),
 ]
 
+
+def _ingress(port: int | None = 8080, enabled: bool = True, host_network: bool = True,
+             maps: dict[int, int] | None = None,
+             node_labels: dict[str, str] | None = None) -> dict[str, str]:
+    """kind-config.yaml and cilium's values.yaml: `maps` (host -> container) published on a
+    node labelled `node_labels`, and a shared listener on `port` bound on ingress-ready nodes."""
+    maps = {80: 8080, 443: 8080} if maps is None else maps
+    node_labels = {"ingress-ready": "true"} if node_labels is None else node_labels
+    labels = "".join(f'      {k}: "{v}"\n' for k, v in node_labels.items())
+    ports = "".join(f"      - {{containerPort: {c}, hostPort: {h}}}\n" for h, c in maps.items())
+    listener = f"    sharedListenerPort: {port}\n" if port is not None else ""
+    return {
+        KIND_CONFIG: ("nodes:\n  - role: control-plane\n"
+                      + (f"    labels:\n{labels}" if labels else "")
+                      + f"    extraPortMappings:\n{ports}"),
+        CILIUM_VALUES: (f"ingressController:\n  enabled: {str(enabled).lower()}\n"
+                        f"  hostNetwork:\n    enabled: {str(host_network).lower()}\n{listener}"
+                        f'    nodes:\n      matchLabels:\n        ingress-ready: "true"\n'),
+    }
+
+
+CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
+    (
+        "localhost:80 mapped to a container port other than the shared listener's",
+        _ingress(maps={80: 80, 443: 8080}),
+        _ingress(),
+        "maps localhost:80 to container port 80",
+    ),
+    (
+        "the shared listener moved without its mappings",
+        _ingress(port=8081),
+        _ingress(),
+        "listens on 8081",
+    ),
+    (
+        "no mapping on host port 443",
+        _ingress(maps={80: 8080}),
+        _ingress(),
+        "publishes nothing on host port 443",
+    ),
+    (
+        "the ports mapped on a node the listener does not bind on",
+        _ingress(node_labels={"workload": "system"}),
+        _ingress(),
+        "on a node without ingress-ready=true",
+    ),
+    (
+        "no listener port stated",
+        _ingress(port=None),
+        _ingress(),
+        "names no ingressController.hostNetwork.sharedListenerPort",
+    ),
+    (
+        "the listener taken off the host network",
+        _ingress(host_network=False),
+        _ingress(),
+        "does not put the Ingress listener on the host network",
+    ),
+    (
+        "the Ingress controller switched off",
+        _ingress(enabled=False),
+        _ingress(),
+        "does not enable ingressController",
+    ),
+]
 
 def _tree(files: dict[str, str]) -> pathlib.Path:
     """A fixture tree, as a real repository.
