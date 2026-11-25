@@ -1,6 +1,12 @@
 version: '3'
 
 # Cluster lifecycle. Invoked via top-level `task up | down | reset | status`.
+#
+# The cluster's kubeconfig lives in .kube/config at the repository root and
+# nowhere else: kind writes it there, every command below that reaches the
+# cluster names it, and nothing here reads, writes or switches the context of
+# the user's own kubeconfig. Each command carries KUBECONFIG itself because a
+# Taskfile's `env:` never overrides a KUBECONFIG the shell already exports.
 
 vars:
   CLUSTER_NAME: kx
@@ -10,21 +16,30 @@ tasks:
   up:
     desc: Create the kind cluster + attach local registry. Does NOT install stack.
     cmds:
+      # For a cluster that already exists, the export writes the same file. That
+      # adopts a cluster an earlier kx created with its context in the user's
+      # kubeconfig, and restores the file if it was removed.
       - |
-        if kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
+        set -e
+        export KUBECONFIG='{{.ROOT_DIR}}/.kube/config'
+        mkdir -p '{{.ROOT_DIR}}/.kube'
+        if bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
           echo "cluster {{.CLUSTER_NAME}} already exists"
+          bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 kind export kubeconfig --name {{.CLUSTER_NAME}}
         else
-          kind create cluster --name {{.CLUSTER_NAME}} --config {{.KIND_CONFIG}}
+          bash '{{.ROOT_DIR}}/cluster/deadline.sh' 900 kind create cluster --name {{.CLUSTER_NAME}} --config {{.KIND_CONFIG}}
         fi
-      - kubectl config use-context kind-{{.CLUSTER_NAME}}
       - bash {{.TASKFILE_DIR}}/registry.sh
       - bash {{.TASKFILE_DIR}}/coredns-patch.sh
 
   down:
-    desc: Delete the cluster and the local registry.
+    desc: Delete the cluster, its kubeconfig and the local registry.
     cmds:
-      - kind delete cluster --name {{.CLUSTER_NAME}}
-      - docker rm -f kx-registry 2>/dev/null || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' bash '{{.ROOT_DIR}}/cluster/deadline.sh' 300 kind delete cluster --name {{.CLUSTER_NAME}}
+      # Credentials for a cluster that no longer exists are only something to
+      # leak, and an absent file is what the scripts' binding refuses on.
+      - rm -f '{{.ROOT_DIR}}/.kube/config'
+      - bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 docker rm -f kx-registry 2>/dev/null || true
 
   reset:
     desc: Delete + recreate the cluster from scratch.
@@ -35,6 +50,6 @@ tasks:
   status:
     desc: Nodes + pods across all namespaces.
     cmds:
-      - kubectl --context kind-{{.CLUSTER_NAME}} get nodes -o wide
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --context kind-{{.CLUSTER_NAME}} get nodes -o wide
       - echo
-      - kubectl --context kind-{{.CLUSTER_NAME}} get pods -A
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --context kind-{{.CLUSTER_NAME}} get pods -A

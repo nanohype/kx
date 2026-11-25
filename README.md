@@ -23,13 +23,20 @@ task stack:observability:enable          # enable an opt-in slice
 task down                                # tear down the cluster
 ```
 
-Projects target the cluster by convention: pick a namespace and point kubeconfig at the `kind-kx` context.
+kx keeps its cluster's kubeconfig in `.kube/config` at the root of this repository and never reads, writes or
+switches the context of yours. Every task and every script is bound to that file, so no kx command can act on
+another cluster, whatever your shell's `KUBECONFIG` or current context names.
+
+Projects target the cluster by convention: pick a namespace and point kubectl at kx's kubeconfig.
 
 ```
-kind export kubeconfig --name kx
+export KUBECONFIG=/path/to/kx/.kube/config   # stays current across task reset
 kubectl create namespace my-project
 kubectl -n my-project apply -f ...
 ```
+
+`kind export kubeconfig --name kx` merges the `kind-kx` context into your own kubeconfig instead, and makes it
+the current context there. Run it again after `task reset`, which gives the API server a new address.
 
 ## What's installed
 
@@ -37,9 +44,8 @@ kubectl -n my-project apply -f ...
 
 | Addon | Role |
 |---|---|
-| cilium | CNI + eBPF networking, kube-proxy replacement, Hubble observability, Gateway API controller |
+| cilium | CNI + eBPF networking, kube-proxy replacement, Hubble observability, and the Ingress and Gateway API controller — Ingress at `localhost:80` / `localhost:443`, its `cilium` class the default |
 | gateway-api CRDs | `gateway.networking.k8s.io` CRDs (experimental channel) |
-| ingress-nginx | Cluster ingress at `localhost:80` / `localhost:443` |
 | cert-manager | TLS certificate issuance |
 | trust-manager | CA bundle distribution via the `Bundle` CR |
 | metrics-server | Source for `kubectl top` and HPA |
@@ -81,7 +87,7 @@ node's containerd at it, so `docker push localhost:5001/foo:tag` is pullable
 from inside the cluster without a remote registry. `task down` removes it.
 
 Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned,
-with an explicit `--timeout`) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
+with an explicit `--timeout` and a deadline past it that bounds the chart fetch, and a bound on every other call that leaves the machine) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
 A few carry more or fewer: CRD-only installers take chart defaults whole and have no values, and `druid` and
 `bedrock-credentials` ship the extra manifests their install applies and the Python helpers it runs.
 
@@ -93,6 +99,8 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 | Symptom | Cause | Remedy |
 |---|---|---|
 | `task up` fails immediately | Docker Desktop / OrbStack not running | Start it; kind needs a container runtime |
+| A task or script stops with `.kube/config holds no kind-kx context` | There is no cluster, `task down` removed its kubeconfig, or the cluster was created by a kx that kept its context in your own kubeconfig | `task up` — it creates the cluster, or writes `.kube/config` for one that already exists |
+| `localhost:80` / `:443` reset the connection on a cluster that once ran ingress-nginx | kind fixes port mappings when it creates a cluster, and that cluster's still point at the ports ingress-nginx held | `task reset` |
 | A slice enables but pods sit `Pending` | kind node is out of CPU/memory — the data slice and druid are the usual causes | Raise the VM's limits, or disable a slice you are not using |
 | `task stack:ai-platform:enable` fails on the operator | No sibling `eks-agent-platform` checkout — the operator image is built locally, not published | Clone it beside `kx`, or set `KX_EKS_AGENT_PLATFORM_DIR` |
 | `task stack:data:druid:enable` fails on a missing chart | Druid runs the unmodified `eks-gitops` chart from a sibling checkout | Clone `eks-gitops` beside `kx`, or set `KX_DRUID_CHART_DIR` |

@@ -6,19 +6,20 @@ Local Kubernetes (kind) that mirrors the chart catalog from [`eks-gitops`](https
 
 - **Workspace, not curriculum.** No `labs/`, no walkthroughs, no "break it on purpose" exercises. The user lives in this cluster across many projects; learning happens through use.
 - **Always-complete.** `task up` brings the cluster and the core stack online. No "now install cert-manager yourself."
-- **Core + opt-in slices.** Core (always on): gateway-api CRDs, cilium (with Gateway API enabled), prometheus-operator-crds, cert-manager, trust-manager, metrics-server, ingress-nginx, reloader, argo-cd (idle). Opt-in slices in `stack/<slice>/`: observability, security, autoscaling, argo-platform, secrets, data, ai-platform.
-- **Convention-based project attachment.** kx has no project registry. Projects live wherever they live and target the `kind-kx` context with their own namespace.
+- **Core + opt-in slices.** Core (always on): gateway-api CRDs, cilium (with Ingress and Gateway API enabled), prometheus-operator-crds, cert-manager, trust-manager, metrics-server, reloader, argo-cd (idle). Opt-in slices in `stack/<slice>/`: observability, security, autoscaling, argo-platform, secrets, data, ai-platform.
+- **Convention-based project attachment.** kx has no project registry. Projects live wherever they live and target the `kind-kx` context with their own namespace, through kx's kubeconfig at `.kube/config` (or a `kind export kubeconfig --name kx` of their own).
+- **kx acts on kind-kx and nothing else.** The cluster's kubeconfig lives in `.kube/config` at the repo root, which `task up` writes and `task down` removes. kx never reads, writes or switches the context of the user's own kubeconfig.
 - **ArgoCD installed but idle.** It's part of the stack to learn against, but it does not own the addon lifecycle. No App-of-Apps Application is created by `task up`.
 
 ## Substitutes are invisible
 
-When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (ingress-nginx is `stack/core/ingress-nginx`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
+When an eks-gitops addon is AWS-specific, the local equivalent goes in the most natural directory under its own name (cloudnative-pg, standing in for Aurora, is `stack/data/cloudnative-pg`, not `stack/substitutes/...`). The swap is documented inside the addon's `install.sh`, not on the README. The user-facing stack mirrors production names.
 
 Local mappings:
 
 | eks-gitops | kx | Note |
 |---|---|---|
-| aws-load-balancer-controller | ingress-nginx (+ Cilium Gateway API) | Different product, same role |
+| aws-load-balancer-controller | cilium (Ingress + Gateway API) | Different product, same role. The same Cilium chart as the CNI serves Ingress, from one listener on the host network of the `ingress-ready` node, which kind maps to `localhost:80`/`:443` |
 | external-secrets (AWS SM) | external-secrets (kubernetes provider) | Same chart, swap provider |
 | external-dns (Route53) | (not installed by default; coredns RFC2136 if needed) | Add to data/ slice if a project requires it |
 | velero (S3) | velero + minio | Same Velero, S3-compatible backend |
@@ -62,7 +63,7 @@ add to it.
 
 Every addon directory has an `install.sh`, and every addon that overrides chart
 defaults has a `values.yaml` beside it:
-- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running.
+- `install.sh` — explicit `helm repo add` + `helm upgrade --install` with version pinned and an explicit `--timeout`. Idempotent. Read top-to-bottom by the user before running. Every call that leaves the machine names its bound: kubectl carries `--request-timeout` (and `--timeout` on `wait`, `rollout status` and `delete`), curl carries `--max-time`, and docker, kind, helm's read verbs, the aws CLI and the JavaScript package runners (pnpm, npm, npx, yarn) run under `cluster/deadline.sh`. So does every `helm upgrade --install` and `helm template`, with a limit past its `--timeout` (that timeout starts once the chart has arrived, and the deadline bounds the fetch before it): `deadline 900` for the usual `--timeout 10m`. `check-slice-integrity.py` refuses an unbounded one, a deadline that does not outlast the command's own `--timeout`, and a gate's `subprocess` call without `timeout=`.
 - `values.yaml` — local-only deltas from chart defaults. **Do not copy values from eks-gitops** — those assume IRSA, ENI, NLB, etc.
 
 Two files is the shape to reach for, not a rule the tree satisfies everywhere.
@@ -87,6 +88,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 - Top-level: `task up | down | reset | status | stack:* | port-forward:*`
 - Per-slice: `stack/<slice>/Taskfile.yaml` provides `enable` and `disable` targets that loop over the slice's addons
 - Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon, or the addon's `uninstall.sh` where there is no release to uninstall (envoy-gateway-crds, bedrock-credentials)
+- Every script that reaches the cluster sources `cluster/kubeconfig.sh` right after it sets `SCRIPT_DIR`, and every Taskfile command that runs kubectl, helm or kind carries `KUBECONFIG='{{.ROOT_DIR}}/.kube/config'` itself. A Taskfile's `env:` cannot do this, because it never overrides a `KUBECONFIG` the shell already exports. `check-slice-integrity.py` refuses a command that reaches a cluster without its binding
 
 ## What NOT to do
 

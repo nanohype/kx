@@ -14,6 +14,9 @@
 # the source, then the grant. Every step is reached even if an earlier one finds
 # nothing.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 SECRET="kx-bedrock-credentials"
 SOURCE_NS="kyverno"
@@ -34,7 +37,7 @@ TENANTS=()
 while IFS= read -r ns; do
   [ -n "${ns}" ] && TENANTS+=("${ns}")
 done < <(
-  kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+  kubectl --request-timeout=60s get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
     | grep '^tenants-' || true
 )
 
@@ -47,8 +50,8 @@ done < <(
 # reporting a teardown it did not do.
 delete_if_served() { # crd kind-plural name
   local err
-  if err="$(kubectl get crd "$1" 2>&1 >/dev/null)"; then
-    kubectl delete "$2" "$3" --ignore-not-found
+  if err="$(kubectl --request-timeout=60s get crd "$1" 2>&1 >/dev/null)"; then
+    kubectl --request-timeout=60s --timeout=5m delete "$2" "$3" --ignore-not-found
   elif ! printf '%s' "${err}" | grep -qiE 'not found|NotFound'; then
     echo "Could not determine whether $1 is served — kubectl said:" >&2
     printf '%s\n' "${err}" | sort -u | sed 's/^/  /' >&2
@@ -66,12 +69,12 @@ delete_if_served clusterpolicies.kyverno.io clusterpolicies.kyverno.io "${MUTATO
 if [ "${#TENANTS[@]}" -gt 0 ]; then
   echo "Removing the credential clone from ${#TENANTS[@]} tenant namespace(s) ..."
   for ns in "${TENANTS[@]}"; do
-    kubectl delete secret "${SECRET}" -n "${ns}" --ignore-not-found
+    kubectl --request-timeout=60s --timeout=5m delete secret "${SECRET}" -n "${ns}" --ignore-not-found
   done
 fi
 
-kubectl delete secret "${SECRET}" -n "${SOURCE_NS}" --ignore-not-found
-kubectl delete clusterrole "${GRANT}" --ignore-not-found
+kubectl --request-timeout=60s --timeout=5m delete secret "${SECRET}" -n "${SOURCE_NS}" --ignore-not-found
+kubectl --request-timeout=60s --timeout=5m delete clusterrole "${GRANT}" --ignore-not-found
 
 # The policies are gone, so a namespace created after this carries no copy.
 # Anything left is a copy this script could not see — report it rather than
@@ -79,7 +82,7 @@ kubectl delete clusterrole "${GRANT}" --ignore-not-found
 # The listing failing and the listing being empty are different facts: one means
 # nothing is left, the other means nobody looked. Reporting a clean teardown for
 # the second is the vacuous pass this script exists to refuse.
-if ! left_raw="$(kubectl get secrets -A \
+if ! left_raw="$(kubectl --request-timeout=60s get secrets -A \
   -o jsonpath="{range .items[?(@.metadata.name=='${SECRET}')]}{.metadata.namespace}{\"\n\"}{end}" \
   2>&1)"; then
   echo "WARNING: could not list Secrets cluster-wide to confirm the teardown — kubectl said:" >&2

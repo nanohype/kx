@@ -21,6 +21,9 @@
 # injection is the kubelet's guarantee, and the GeneratingPolicy is what puts
 # the Secret there.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
 
 SELECTOR="app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy"
 SECRET="kx-bedrock-credentials"
@@ -32,7 +35,7 @@ PODS=()
 while IFS= read -r line; do
   [ -n "${line}" ] && PODS+=("${line}")
 done < <(
-  kubectl get pods -A -l "${SELECTOR}" \
+  kubectl --request-timeout=60s get pods -A -l "${SELECTOR}" \
     -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
 )
 
@@ -47,12 +50,12 @@ fi
 # container that does not exist are the same answer here, which is why the
 # caller checks the container is present before trusting a miss.
 refs_on() { # pod ns jsonpath-container-list container-name
-  kubectl get pod "$1" -n "$2" \
+  kubectl --request-timeout=60s get pod "$1" -n "$2" \
     -o jsonpath="{range .spec.$3[?(@.name=='$4')].envFrom[*]}{.secretRef.name}{\"\n\"}{end}"
 }
 
 names_in() { # pod ns jsonpath-container-list
-  kubectl get pod "$1" -n "$2" -o jsonpath="{range .spec.$3[*]}{.name}{\"\n\"}{end}"
+  kubectl --request-timeout=60s get pod "$1" -n "$2" -o jsonpath="{range .spec.$3[*]}{.name}{\"\n\"}{end}"
 }
 
 failed=0

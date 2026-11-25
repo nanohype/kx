@@ -385,6 +385,7 @@ def self_test() -> int:
          "m.compile_patterns({'customManagers': []})",
          str(pathlib.Path(__file__).resolve())],
         capture_output=True, text=True, check=False,
+        timeout=60,
     )
     if probe.returncode == 0:
         failures.append("a config with no customManagers is accepted")
@@ -428,6 +429,23 @@ def self_test() -> int:
     else:
         print("  matched   (positive) a version applied by release URL")
 
+    # The shape every installer uses: the install or render runs under the
+    # deadline that bounds its chart fetch. Asserted as a positive, so a manager
+    # anchored to a line that starts with helm fails here rather than leaving
+    # every pin it stopped reading unwatched.
+    root, scripts = tree({"s/a": WATCHED,
+                          "s/b": 'helm repo add y https://y.example\n'
+                                 'deadline 900 helm upgrade --install b y/b \\\n'
+                                 '  --version 4.5.6 \\\n'
+                                 '  --wait --timeout 10m\n',
+                          "s/c": 'deadline 300 helm template c oci://r.example/o/c \\\n'
+                                 '  --version 1.0.0 >"${MANIFEST}"\n'})
+    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+        failures.append("a pin under deadline is watched")
+        print("  ACCEPTED  (positive) a pin under deadline is reported unwatched")
+    else:
+        print("  matched   (positive) a pin installed or rendered under deadline")
+
     # SOURCE_ROOT, not ROOT. This control's subject is the tree this gate SHIPS
     # in; ROOT may be pointed at a fixture by the suite-wide floor, and asserting
     # "the shipped tree passes" about a fixture makes the gate exit non-zero for
@@ -449,7 +467,7 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {len(failures)} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + len(config_breaks) + 5} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + len(config_breaks) + 6} case(s) behave as specified.")
     return 0
 
 

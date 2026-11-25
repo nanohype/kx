@@ -2,13 +2,17 @@
 # opencost — Kubernetes cost monitoring (reads from in-cluster prometheus)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add opencost https://opencost.github.io/opencost-helm-chart --force-update >/dev/null
 helm repo update opencost >/dev/null
 
-kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
-helm upgrade --install opencost opencost/opencost \
+deadline 900 helm upgrade --install opencost opencost/opencost \
   --namespace monitoring \
   --version 2.5.34 \
   --values "${SCRIPT_DIR}/values.yaml" \
