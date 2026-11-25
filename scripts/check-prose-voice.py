@@ -38,6 +38,11 @@ CODE_ONLY = re.compile(r"^\+\s*[a-zA-Z_.\"'-]+\s*[:=]\s*\S+\s*$")
 
 SELF = "scripts/check-prose-voice.py"
 
+# Vendored by scripts/vendor-schemas.py: upstream's text as released, held to
+# the sha256 schemas/sources.json records, so none of it is this repository's
+# prose to reword.
+VENDORED = "schemas/"
+
 MARKERS = [
     (
         # Spelled-out numbers as well as digits: the standard's own example of a
@@ -140,7 +145,7 @@ def added_prose(base: str) -> list[tuple[str, str]]:
             path = line[6:]
             # This file quotes the markers it looks for, so it matches itself on
             # every run. Excluding it keeps the output about the change.
-            if path == SELF:
+            if path == SELF or path.startswith(VENDORED):
                 path = None
         elif path is None:
             continue

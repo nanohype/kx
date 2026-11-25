@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Helm
-        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        uses: ./.github/actions/helm
 
       # Fails on a `deprecated: true`, and on a chart whose description no longer
       # matches its record. The second is the one worth having: a chart can be
@@ -51,5 +51,5 @@ jobs:
       # keeps resolving while the thing behind it is no longer the same software.
       - name: Compare every pinned chart against its record
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/check-chart-deprecation.py --live
