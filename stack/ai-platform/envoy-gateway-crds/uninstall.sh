@@ -31,7 +31,7 @@ if [[ -n "${release}" ]]; then
 fi
 # helm uninstall returns before the Deployment it deleted is gone, so a
 # controller that is on its way out is waited for rather than refused.
-deploy="$(kubectl --request-timeout=60s get deploy envoy-gateway -n "${NS}" --ignore-not-found \
+deploy="$(kubectl get deploy envoy-gateway -n "${NS}" --ignore-not-found \
   -o name --request-timeout=60s)"
 if [[ -n "${deploy}" ]]; then
   if ! kubectl --request-timeout=60s wait --for=delete "${deploy}" -n "${NS}" --timeout=120s; then
