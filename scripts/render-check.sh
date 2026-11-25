@@ -155,8 +155,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   # What the render loop does with a lifted command, end to end: the render
   # reaches the mount check and its verdict is the slice's, a render that fails
   # fails the slice even when what it printed was clean, and the render lands in
-  # the file the schema gate reads. Each fixture differs from the clean one in
-  # the one way its case names.
+  # the file the schema gate reads. Each case differs from the clean one in the
+  # one way it names.
   pod() { # the second mount's path
     printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers:\n    - name: c\n      image: r/x:1\n      volumeMounts:\n        - {name: a, mountPath: /a}\n        - {name: b, mountPath: %s}\n  volumes:\n    - {name: a, emptyDir: {}}\n    - {name: b, emptyDir: {}}\n' "$1"
   }
