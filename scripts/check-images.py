@@ -4,6 +4,22 @@
     scripts/check-images.py --pins <render-dir>   # blocking
     scripts/check-images.py --cves <render-dir>   # scheduled, needs trivy
 
+The scheduled scan ends in exactly one of three states, each with its own exit
+status and its own section of the report, because each is somebody else's next
+move:
+
+  clean          0  Every image scanned, and every CRITICAL is covered by an
+                    unexpired exception in stack/image-cve-exceptions.json.
+  findings       1  A CRITICAL no exception covers, or an exception that needs
+                    attention: expired, or matching nothing the scan reports.
+                    The move is a chart pin, or a time-boxed exception.
+  could not run  3  The scanner, or a registry, could not answer for an image.
+                    That says nothing about the image, so it is never a
+                    finding and never folded into one. The move is the scan's.
+
+A run with both findings and images it could not scan is a findings run, and it
+still reports the second section in full.
+
 kx pins its own chart versions in its own `stack/*/*/install.sh` and records
 them in its own `stack/chart-provenance.json`. Those pins are not derived from
 the catalog and can diverge from it, so no other repository can vouch for what
@@ -37,14 +53,33 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import io
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 
 import yaml
+
+# The tree this gate reads its exceptions from. Overridable so the suite-wide
+# floor can point the gate at a fixture it wrote, as the other gates are.
+ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "")
+                    or pathlib.Path(__file__).resolve().parent.parent)
+
+# The findings this repository has decided to carry for a while, each with the
+# reason and the day it stops being carried. An absent file carries none.
+EXCEPTIONS = "stack/image-cve-exceptions.json"
+
+# The longest an exception may run, from the day it is recorded to the day it
+# expires. Long enough to wait out an upstream rebuild, short enough that an
+# exception is a decision someone revisits rather than a permanent mute.
+MAX_EXCEPTION_DAYS = 90
+
+EXIT_CLEAN, EXIT_FINDINGS, EXIT_COULD_NOT_RUN = 0, 1, 3
 
 # prometheus-operator-crds ships a CRD with a bare `=` in an enum, which
 # SafeLoader refuses outright. Reading it as the string it plainly means keeps
@@ -296,31 +331,164 @@ def vulns_in(trivy_json: str) -> list[dict]:
     return out
 
 
-def check_cves(images: dict[str, set[str]]) -> list[str]:
-    problems = []
+def load_exceptions(root: pathlib.Path = ROOT) -> tuple[list[dict], list[str]]:
+    """(exceptions, problems) read from EXCEPTIONS. An absent file holds none.
+
+    Everything asked here is a fact about the commit, so it is asked on the
+    blocking path as well: every field present, both dates real, and the box no
+    longer than MAX_EXCEPTION_DAYS from the day the exception was recorded.
+    Whether it has expired is a fact about today, and only the scan asks that.
+    """
+    path = root / EXCEPTIONS
+    if not path.is_file():
+        return [], []
+    try:
+        doc = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        return [], [f"{EXCEPTIONS} is not valid JSON ({e}), so no exception in it can be read."]
+    entries = doc.get("exceptions") if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        return [], [f"{EXCEPTIONS} has no `exceptions` list."]
+    out, problems = [], []
+    for i, entry in enumerate(entries):
+        where = f"{EXCEPTIONS} exceptions[{i}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not an object.")
+            continue
+        missing = [k for k in ("image", "id", "reason", "recorded", "expires")
+                   if not isinstance(entry.get(k), str) or not entry[k].strip()]
+        if missing:
+            problems.append(f"{where} has no {', '.join(missing)} — an exception is a decision "
+                            f"on the record, and every field is part of it.")
+            continue
+        try:
+            recorded = datetime.date.fromisoformat(entry["recorded"])
+            expires = datetime.date.fromisoformat(entry["expires"])
+        except ValueError:
+            problems.append(f"{where} has a date that is not YYYY-MM-DD.")
+            continue
+        days = (expires - recorded).days
+        if days < 0 or days > MAX_EXCEPTION_DAYS:
+            problems.append(f"{where} runs {days} day(s), from {recorded} to {expires}. An "
+                            f"exception runs between 0 and {MAX_EXCEPTION_DAYS} days.")
+            continue
+        out.append({**entry, "recorded": recorded, "expires": expires})
+    return out, problems
+
+
+def exceptions_name_rendered_images(exceptions: list[dict],
+                                    images: dict[str, set[str]]) -> list[str]:
+    """Every exception names an image the render produces.
+
+    The reference is matched whole, tag and digest included, so a chart bump
+    that moves an image drops the exception from it and the next scan reads
+    the new image fresh. An exception left naming the old reference is stale.
+    """
+    return [
+        f"{EXCEPTIONS} excepts {e['id']} in {e['image']}, which the render no longer "
+        f"produces — an exception that outlives its subject exempts nothing, and reads as "
+        f"if it still did."
+        for e in exceptions if e["image"] not in images
+    ]
+
+
+def check_cves(images: dict[str, set[str]], exceptions: list[dict] | None = None,
+               today: datetime.date | None = None, scanner=None) -> dict:
+    """The scheduled scan, as its state and the lines each section reports.
+
+    `scanner` is scan() unless a control hands in a recorded report, and
+    `today` is the date unless a control fixes one: what this gate owns is how a
+    report and an exception are read, so neither needs the network or the clock.
+    """
+    scanner = scan if scanner is None else scanner
+    exceptions = [] if exceptions is None else exceptions
+    today = datetime.date.today() if today is None else today
+    live = {(e["image"], e["id"]) for e in exceptions if e["expires"] >= today}
+    findings, covered, unscanned, attention = [], [], [], []
+    scanned, reported = set(), set()
     for image in sorted(images):
         if image in UNSCANNABLE:
             print(f"  skip  {image} — {UNSCANNABLE[image].split(',')[0]}", flush=True)
             continue
-        vulns, err = scan(image)
+        vulns, err = scanner(image)
         if err:
             # An image that could not be scanned is not an image with no
-            # findings, and reporting it as clean is the vacuous pass this whole
-            # suite exists to refuse.
-            problems.append(f"{image} could not be scanned — {err}")
+            # findings, and it is not an image with findings either.
+            unscanned.append(f"{image} — {err}")
+            print(f"  ????  {image}  (could not scan)", flush=True)
             continue
+        scanned.add(image)
         blocking = [v for v in vulns if v["severity"] in FAIL_ON]
-        other = len(vulns) - len(blocking)
-        if blocking:
-            listed = ", ".join(sorted({f"{v['id']} ({v['pkg']})" for v in blocking})[:6])
-            more = "" if len(blocking) <= 6 else f", and {len(blocking) - 6} more"
-            problems.append(f"{image}: {len(blocking)} {'/'.join(FAIL_ON)} — {listed}{more}")
+        reported.update((image, v["id"]) for v in blocking)
+        uncovered = sorted({f"{v['id']} ({v['pkg']})" for v in blocking
+                        if (image, v["id"]) not in live})
+        held = sorted({v["id"] for v in blocking if (image, v["id"]) in live})
+        if uncovered:
+            more = "" if len(uncovered) <= 6 else f", and {len(uncovered) - 6} more"
+            findings.append(f"{image}: {len(uncovered)} {'/'.join(FAIL_ON)} no exception covers — "
+                            f"{', '.join(uncovered[:6])}{more}")
+        covered.extend(f"{image}: {i}" for i in held)
         # The HIGH count rides on every line, passing or failing. Without it an
         # image with no CRITICAL prints a clean "ok" while carrying findings the
         # threshold merely declined to fail on.
-        tail = f"  ({len(blocking)} critical, {other} high)" if vulns else "  (none)"
-        print(f"  {'FAIL' if blocking else '  ok'}  {image}{tail}", flush=True)
-    return problems
+        high = len(vulns) - len(blocking)
+        tail = (f"  ({len(blocking)} critical, {len(held)} excepted, {high} high)"
+                if vulns else "  (none)")
+        print(f"  {'FAIL' if uncovered else '  ok'}  {image}{tail}", flush=True)
+    for e in exceptions:
+        if e["expires"] < today:
+            attention.append(f"{e['id']} in {e['image']} expired on {e['expires']} ({e['reason']}). "
+                             f"Move the pin, or record the exception again with a new box.")
+        elif e["image"] in scanned and (e["image"], e["id"]) not in reported:
+            attention.append(f"{e['id']} in {e['image']} is no longer reported by the scan, so "
+                             f"the exception covers nothing. Remove it.")
+    if findings or attention:
+        state = "findings"
+    elif unscanned:
+        state = "could not run"
+    else:
+        state = "clean"
+    return {"state": state, "findings": findings, "attention": attention,
+            "covered": covered, "unscanned": unscanned}
+
+
+STATE_EXIT = {"clean": EXIT_CLEAN, "findings": EXIT_FINDINGS, "could not run": EXIT_COULD_NOT_RUN}
+
+
+def report_scan(result: dict) -> int:
+    """Print the scan's state and each section, and return the state's exit status.
+
+    Also written to the job summary when GitHub provides one, so the run page
+    says which state a red run is in without anyone opening the log, and the
+    state to the step's outputs, so the step that opens the tracking issue
+    names it from here rather than from an exit status it would have to map.
+    """
+    sections = (
+        ("findings", "Findings — a CRITICAL no exception covers"),
+        ("attention", "Exceptions that need attention"),
+        ("unscanned", "Could not scan — says nothing about the image; the scan's to fix"),
+        ("covered", "Covered by an unexpired exception"),
+    )
+    lines = [f"check-images: the scan's state is {result['state'].upper()}."]
+    for key, title in sections:
+        if result[key]:
+            lines.append(f"\n{title} ({len(result[key])}):")
+            lines.extend(f"        {item}" for item in result[key])
+    print("\n" + "\n".join(lines))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(f"### Image CVE scan: {result['state']}\n\n")
+            for key, title in sections:
+                if result[key]:
+                    f.write(f"**{title}** ({len(result[key])})\n\n")
+                    f.writelines(f"- `{item}`\n" for item in result[key])
+                    f.write("\n")
+    outputs = os.environ.get("GITHUB_OUTPUT")
+    if outputs:
+        with open(outputs, "a") as f:
+            f.write(f"state={result['state']}\n")
+    return STATE_EXIT[result["state"]]
 
 
 # ── controls ──────────────────────────────────────────────────────────────────
@@ -457,6 +625,107 @@ def controls() -> int:
     finally:
         FLOATING_ALLOWED.pop("r/ghost:latest")
 
+    # The scheduled scan's states, read from recorded reports on a fixed day.
+    day = datetime.date(2026, 6, 1)
+    one = {"r/x:1.0": {"s"}}
+
+    def excepted(expires="2026-07-01", image="r/x:1.0"):
+        return {"image": image, "id": "CVE-0000-0001", "reason": "waiting on upstream",
+                "recorded": datetime.date(2026, 5, 1),
+                "expires": datetime.date.fromisoformat(expires)}
+
+    def dirty(_image):
+        return vulns_in(DIRTY_REPORT), None
+
+    def spotless(_image):
+        return vulns_in(CLEAN_REPORT), None
+
+    def refused(_image):
+        return [], "UNAUTHORIZED: access to the requested resource is not authorized"
+
+    def scanned(scanner, exceptions=(), images=None):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return check_cves(one if images is None else images, list(exceptions),
+                              today=day, scanner=scanner)
+
+    def open_items(exceptions):
+        r = scanned(dirty, exceptions)
+        return r["findings"] + r["attention"]
+
+    case("a CRITICAL no exception covers is a finding, and an unexpired one covers it",
+         open_items, [], [excepted()], "no exception covers")
+    case("an expired exception covers nothing, and says it expired", open_items,
+         [excepted(expires="2026-05-31")], [excepted()], "expired on 2026-05-31")
+    case("an exception matching nothing the scan reports is stale",
+         lambda exs: scanned(spotless, exs)["attention"], [excepted()], [],
+         "no longer reported")
+
+    r = scanned(refused)
+    if r["state"] == "could not run" and r["unscanned"] and not r["findings"]:
+        print("  control ok  an image the scan could not reach is reported apart, not as a finding")
+    else:
+        print(f"  WRONG       an unscannable image read as {r['state']!r} with findings "
+              f"{r['findings']}")
+        failures += 1
+
+    both = scanned(lambda image: dirty(image) if image == "r/x:1.0" else refused(image),
+                   images={"r/x:1.0": {"s"}, "r/y:1.0": {"s"}})
+    if both["state"] == "findings" and both["unscanned"] and both["findings"]:
+        print("  control ok  a run with findings and an unscannable image reports both")
+    else:
+        print(f"  WRONG       a mixed run read as {both['state']!r}, unscanned {both['unscanned']}")
+        failures += 1
+
+    if len(set(STATE_EXIT.values())) != len(STATE_EXIT) or STATE_EXIT["clean"] != 0:
+        print(f"  WRONG       the states do not exit distinctly, with clean at 0: {STATE_EXIT}")
+        failures += 1
+    else:
+        print("  control ok  each state exits with its own status, and only clean with 0")
+
+    # The tracking issue is written from the step output, so the state has to
+    # arrive there exactly as the scan names it.
+    with tempfile.TemporaryDirectory(prefix="kx-outputs-") as outdir:
+        outputs = pathlib.Path(outdir) / "outputs"
+        saved = {k: os.environ.pop(k, None) for k in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+        os.environ["GITHUB_OUTPUT"] = str(outputs)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                report_scan(scanned(refused))
+        finally:
+            os.environ.pop("GITHUB_OUTPUT", None)
+            os.environ.update({k: v for k, v in saved.items() if v is not None})
+        written = outputs.read_text() if outputs.exists() else ""
+    if written == "state=could not run\n":
+        print("  control ok  the scan's state reaches the step outputs as the scan names it")
+    else:
+        print(f"  WRONG       the step outputs read {written!r}, not the scan's state")
+        failures += 1
+
+    # The exceptions file, read from a tree like the real one.
+    def file_problems(entries):
+        d = pathlib.Path(tempfile.mkdtemp(prefix="kx-exceptions-"))
+        (d / "stack").mkdir()
+        (d / EXCEPTIONS).write_text(json.dumps({"exceptions": entries}))
+        return load_exceptions(d)[1]
+
+    good = {"image": "r/x:1.0", "id": "CVE-0000-0001", "reason": "waiting on upstream",
+            "recorded": "2026-05-01", "expires": "2026-07-01"}
+    case("an exception boxed longer than the limit", file_problems,
+         [{**good, "expires": "2026-09-29"}], [good], f"between 0 and {MAX_EXCEPTION_DAYS}")
+    case("an exception that gives no reason", file_problems,
+         [{**good, "reason": " "}], [good], "has no reason")
+    case("an exception with a date that is not a date", file_problems,
+         [{**good, "expires": "soon"}], [good], "not YYYY-MM-DD")
+    case("an exception naming an image the render does not produce",
+         lambda exs: exceptions_name_rendered_images(exs, one),
+         [excepted(image="r/gone:1.0")], [excepted()], "no longer produces")
+
+    if load_exceptions(pathlib.Path(tempfile.mkdtemp(prefix="kx-no-exceptions-"))) == ([], []):
+        print("  control ok  an absent exceptions file is accepted as holding none")
+    else:
+        print("  WRONG       an absent exceptions file was not read as holding none")
+        failures += 1
+
     return failures
 
 
@@ -475,11 +744,42 @@ def control_outcomes() -> dict:
     }
 
 
+def run_cves(images: dict[str, set[str]], exceptions: list[dict], malformed: list[str]) -> int:
+    """The scheduled mode: scan, classify, report the state."""
+    if shutil.which("trivy") is None:
+        return report_scan({"state": "could not run", "findings": [], "attention": [],
+                            "covered": [], "unscanned": ["trivy is not on PATH, so no image "
+                                                         "could be scanned"]})
+    result = check_cves(images, exceptions)
+    result["attention"] = (malformed + exemptions_still_apply(images)
+                           + exceptions_name_rendered_images(exceptions, images)
+                           + result["attention"])
+    if result["attention"]:
+        result["state"] = "findings"
+    return report_scan(result)
+
+
+def run_pins(images: dict[str, set[str]], exceptions: list[dict], malformed: list[str]) -> int:
+    """The blocking mode: every fact about the commit, and nothing about today."""
+    problems = (exemptions_still_apply(images) + malformed
+                + exceptions_name_rendered_images(exceptions, images)
+                + check_pins(images) + check_release_tags(images))
+    if problems:
+        print(f"\nFAIL  {len(problems)} problem(s):")
+        for p in problems:
+            print(f"        {p}")
+        return 1
+    print(f"\ncheck-images: {len(images)} image(s) pinned, every hand pin on its chart's "
+          f"release, every CVE exception well-formed and naming a rendered image.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--pins", action="store_true", help="every image is an immutable reference")
-    mode.add_argument("--cves", action="store_true", help="no CRITICAL in any pinned image")
+    mode.add_argument("--cves", action="store_true",
+                      help="scan for CRITICAL; ends clean (0), findings (1) or could not run (3)")
     ap.add_argument("render_dir")
     args = ap.parse_args()
 
@@ -499,21 +799,10 @@ def main() -> int:
               f"over an empty set. Either the render is empty or the extraction is wrong.")
         return 1
 
-    def pinned(imgs):
-        return check_pins(imgs) + check_release_tags(imgs)
-
-    check, label = (pinned, "pinned, every hand pin on its chart's release") if args.pins else (
-        check_cves, f"free of {'/'.join(FAIL_ON)} (high findings are reported, not failed on)")
+    exceptions, malformed = load_exceptions()
     print(f"check-images: {len(images)} image(s) across {len(set().union(*images.values()))} slice(s)")
-    problems = exemptions_still_apply(images) + check(images)
-    if problems:
-        print(f"\nFAIL  {len(problems)} problem(s):")
-        for p in problems:
-            print(f"        {p}")
-        return 1
-    print(f"\ncheck-images: {len(images)} image(s) {label}.")
-    return 0
-
+    run = run_cves if args.cves else run_pins
+    return run(images, exceptions, malformed)
 
 if __name__ == "__main__":
     sys.exit(main())

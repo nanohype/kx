@@ -3,8 +3,8 @@
 # 1 control plane + 2 workers — enough to feel scheduling, anti-affinity, PDBs.
 # Default CNI/kube-proxy disabled because cilium installs with kubeProxyReplacement.
 # Nodes stay NotReady until cilium is installed — `task up` does that in its stack:core step.
-# Host ports 80/443 reach Cilium's Ingress through the NodePorts stack/core/cilium/values.yaml
-# fixes, mapped below on the control-plane node.
+# Host ports 80/443 reach Cilium's Ingress listener, which binds on the host network of the
+# node labelled ingress-ready below, on the port stack/core/cilium/values.yaml names.
 
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -32,8 +32,12 @@ containerdConfigPatches:
 nodes:
   - role: control-plane
     image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+    # ingress-ready selects the node Cilium's Ingress listener binds on
+    # (ingressController.hostNetwork.nodes in stack/core/cilium/values.yaml): the
+    # node that carries localhost:80 and :443.
     labels:
       workload: system
+      ingress-ready: "true"
     # listenAddress is 0.0.0.0 by default, which publishes each of these on every
     # interface the workstation has — so on shared wifi the cluster's ingress,
     # Grafana and the ArgoCD UI would be reachable by anyone on the network.
@@ -43,17 +47,17 @@ nodes:
     # so the binding is what makes them safe rather than the other way round.
     # Bind explicitly; do not rely on the default.
     #
-    # localhost:80 and :443 map to the NodePorts of Cilium's shared Ingress
-    # Service, which kube-proxy replacement serves on every node, so this is the
-    # one node that needs the mapping. Those container ports are the
-    # ingressController.service node ports in stack/core/cilium/values.yaml, and
-    # check-slice-integrity.py holds the two files to each other.
+    # localhost:80 and :443 both map to the one port Cilium's shared Ingress
+    # listener binds on this node's host network, which serves plain HTTP and TLS
+    # alike. That container port is ingressController.hostNetwork.sharedListenerPort
+    # in stack/core/cilium/values.yaml, and check-slice-integrity.py holds the two
+    # files to each other.
     extraPortMappings:
-      - containerPort: 31080
+      - containerPort: 8080
         hostPort: 80
         listenAddress: "127.0.0.1"
         protocol: TCP
-      - containerPort: 31443
+      - containerPort: 8080
         hostPort: 443
         listenAddress: "127.0.0.1"
         protocol: TCP

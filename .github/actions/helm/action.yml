@@ -1,0 +1,33 @@
+name: helm
+description: >-
+  Install the helm release every kx workflow renders with, pinned to one
+  version and checked against its recorded digest before it reaches PATH.
+
+# One place for the version every render runs on. The render gate's verdict is
+# a function of the commit under test only if the renderer is part of the
+# commit: helm installed at "latest" makes a green check a fact about the day
+# the job ran, and a helm release that changes rendering would redden or
+# silently change every check at once with no diff here to point at.
+#
+# Downloaded to a file and checked before it is unpacked onto PATH, the way the
+# kubeconform and trivy steps are. The digest is the one get.helm.sh publishes
+# beside the archive, so it catches a truncated transfer and a replaced asset;
+# it does not attest the release itself. Renovate moves HELM_VERSION and cannot
+# move the digest with it, so a bump fails here until the digest is updated,
+# which is the direction a mismatch should fail in.
+runs:
+  using: composite
+  steps:
+    - name: Install helm
+      shell: bash
+      env:
+        HELM_VERSION: v4.3.2
+        HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
+      run: |
+        archive="$RUNNER_TEMP/helm.tar.gz"
+        curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+          -o "$archive" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+        echo "${HELM_SHA256}  $archive" | sha256sum -c -
+        tar -xz -C /usr/local/bin --strip-components=1 -f "$archive" linux-amd64/helm
+        rm "$archive"
+        helm version --short

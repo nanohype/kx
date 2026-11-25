@@ -117,7 +117,7 @@ jobs:
               "$ref..HEAD" -- charts/operator operators
           fi
 
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      - uses: ./.github/actions/helm
 
       # Against the sibling's default branch rather than the pin, which is the
       # whole point of this workflow and the reason it cannot live in ci.yml.
@@ -126,7 +126,7 @@ jobs:
           KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
           KX_RENDER_OUT: ${{ runner.temp }}/render
         run: |
-          pip install --quiet --timeout 60 --retries 3 pyyaml==6.0.3
+          pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ./scripts/render-check.sh
 
       # The half a render cannot reach. The chart takes this workspace's flags
