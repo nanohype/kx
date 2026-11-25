@@ -423,10 +423,11 @@ def check_cves(images: dict[str, set[str]], exceptions: list[dict] | None = None
         uncovered = sorted({f"{v['id']} ({v['pkg']})" for v in blocking
                         if (image, v["id"]) not in live})
         held = sorted({v["id"] for v in blocking if (image, v["id"]) in live})
+        # Every one, because an exception names an ID and this report is where
+        # the reader recording one learns which IDs there are.
         if uncovered:
-            more = "" if len(uncovered) <= 6 else f", and {len(uncovered) - 6} more"
             findings.append(f"{image}: {len(uncovered)} {'/'.join(FAIL_ON)} no exception covers — "
-                            f"{', '.join(uncovered[:6])}{more}")
+                            f"{', '.join(uncovered)}")
         covered.extend(f"{image}: {i}" for i in held)
         # The HIGH count rides on every line, passing or failing. Without it an
         # image with no CRITICAL prints a clean "ok" while carrying findings the
@@ -659,6 +660,13 @@ def controls() -> int:
     case("an exception matching nothing the scan reports is stale",
          lambda exs: scanned(spotless, exs)["attention"], [excepted()], [],
          "no longer reported")
+    nine = json.dumps({"Results": [{"Vulnerabilities": [
+        {"VulnerabilityID": f"CVE-0000-{n:04d}", "PkgName": "openssl", "Severity": "CRITICAL"}
+        for n in range(1, 10)
+    ]}]})
+    case("a finding names every CRITICAL it counts, the last included",
+         lambda report: scanned(lambda _image: (vulns_in(report), None))["findings"],
+         nine, CLEAN_REPORT, "CVE-0000-0009 (openssl)")
 
     r = scanned(refused)
     if r["state"] == "could not run" and r["unscanned"] and not r["findings"]:
