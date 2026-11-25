@@ -24,6 +24,10 @@
 # Tear down: task stack:data:druid:disable
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 # Path to the eks-gitops Druid chart. Resolves relative to kx's repo location
 # (kx/stack/data/druid → ../../../../eks-gitops). Override via env if your repos
@@ -42,7 +46,7 @@ CHART_BASE_VALUES="${KX_DRUID_CHART_VALUES:-${SCRIPT_DIR}/../../../../eks-gitops
 require() { # description remedy kubectl-args...
   local what="$1" remedy="$2"; shift 2
   local err
-  if err="$(kubectl "$@" 2>&1 >/dev/null)"; then
+  if err="$(kubectl --request-timeout=60s "$@" 2>&1 >/dev/null)"; then
     return 0
   fi
   if printf '%s' "$err" | grep -qiE 'not found|NotFound'; then
@@ -73,13 +77,13 @@ if ! render_err="$(python3 "${SCRIPT_DIR}/post-renderer.py" </dev/null 2>&1 >/de
   exit 1
 fi
 
-kubectl create namespace druid --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace druid --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # ---- 1. Postgres for metadata (CNPG) ----
 echo "==> creating Postgres metadata cluster (CNPG)"
-kubectl apply -f "${SCRIPT_DIR}/pre-install/postgres.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/postgres.yaml"
 echo "==> waiting for Postgres to be Ready (up to 5min)..."
-kubectl -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300s
+kubectl --request-timeout=60s -n druid wait cluster/druid-metadata --for=condition=Ready --timeout=300s
 
 # ---- 2. Translate CNPG-generated app credentials into the chart-expected secret name + keys ----
 echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
@@ -89,35 +93,35 @@ echo "==> translating CNPG creds → kx-ds-druid-metadata secret"
 # holds these values base64-encoded, so metadata-secret.py copies them across
 # without decoding them into an argument list at all. The name is the one the
 # chart helper derives from the release step 5 renders: hostedId kx, release ds.
-kubectl -n druid get secret druid-metadata-app -o json \
+kubectl --request-timeout=60s -n druid get secret druid-metadata-app -o json \
   | python3 "${SCRIPT_DIR}/metadata-secret.py" kx-ds-druid-metadata druid \
-  | kubectl apply -f -
+  | kubectl --request-timeout=60s apply -f -
 
 # ---- 3. Admin + system credential secrets ----
-kubectl apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/secrets.yaml"
 
 # ---- 4. MinIO buckets ----
 echo "==> ensuring MinIO buckets exist"
-kubectl delete job -n druid druid-minio-buckets --ignore-not-found
-kubectl apply -f "${SCRIPT_DIR}/pre-install/minio-buckets-job.yaml"
-kubectl -n druid wait --for=condition=Complete job/druid-minio-buckets --timeout=120s
+kubectl --request-timeout=60s --timeout=5m delete job -n druid druid-minio-buckets --ignore-not-found
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/pre-install/minio-buckets-job.yaml"
+kubectl --request-timeout=60s -n druid wait --for=condition=Complete job/druid-minio-buckets --timeout=120s
 
 # ---- 5. render chart, filter EKS-only resources, apply ----
 echo "==> rendering Druid chart through post-renderer + applying"
-helm template ds "${CHART_DIR}" \
+deadline 300 helm template ds "${CHART_DIR}" \
   --namespace druid \
   --values "${CHART_BASE_VALUES}" \
   --values "${SCRIPT_DIR}/values-local.yaml" \
   | python3 "${SCRIPT_DIR}/post-renderer.py" \
-  | kubectl apply --server-side --field-manager kx-druid -n druid -f -
+  | kubectl --request-timeout=60s apply --server-side --field-manager kx-druid -n druid -f -
 
 echo
 echo "==> waiting for Druid pods to be Ready (Druid startup probes are slow — up to 10min)"
-kubectl -n druid rollout status statefulset/kx-ds-druid-coordinator --timeout=10m
-kubectl -n druid rollout status statefulset/kx-ds-druid-overlord    --timeout=10m
-kubectl -n druid rollout status statefulset/kx-ds-druid-historical  --timeout=10m
-kubectl -n druid rollout status deployment/kx-ds-druid-broker       --timeout=10m
-kubectl -n druid rollout status deployment/kx-ds-druid-router       --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-coordinator --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-overlord    --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status statefulset/kx-ds-druid-historical  --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status deployment/kx-ds-druid-broker       --timeout=10m
+kubectl --request-timeout=60s -n druid rollout status deployment/kx-ds-druid-router       --timeout=10m
 
 echo
 echo "Druid is up."

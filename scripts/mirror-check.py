@@ -112,6 +112,7 @@ def upstream_dir(manifest, ref):
             capture_output=True,
             text=True,
             check=False,
+            timeout=60,
         ).stdout.strip()
         if head != ref:
             die(
@@ -235,8 +236,11 @@ def upstream_pins(gitops):
 # a release, so both verbs are read. envoy-gateway-crds is why: its chart is too
 # large to store as a helm release, so it runs `helm template` into a server-side
 # apply, and a parser reading only `upgrade --install` would report the
-# catalog's gateway-crds-helm as a chart kx never installs.
-HELM_INSTALL = re.compile(r"^[ \t]*helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M)
+# catalog's gateway-crds-helm as a chart kx never installs. Either verb runs under
+# the `deadline N` that bounds its chart fetch, which is read through.
+HELM_INSTALL = re.compile(
+    r"^[ \t]*(?:deadline[ \t]+\d+[ \t]+)?helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M
+)
 VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
 
 
@@ -552,6 +556,7 @@ def cmd_sync(manifest):
         capture_output=True,
         text=True,
         check=True,
+        timeout=60,
     ).stdout.strip()
 
     upstream = upstream_pins(gitops)
@@ -617,7 +622,7 @@ def self_test() -> int:
         ("kx pinned behind the catalog", cmp({}, up={**upstream, "cilium": "1.20.0"})),
         ("a catalog chart with no kx slice", cmp({}, up={**upstream, "velero": "12.1.0"})),
         ("a kx chart the catalog does not pin",
-         cmp({}, loc={**local, "ingress-nginx": ("4.15.1", Path("x"))})),
+         cmp({}, loc={**local, "only-in-kx": ("1.0.0", Path("x"))})),
         ("a divergence declared gitops-only that kx now has",
          cmp({"cilium": {"chart": "cilium", "kind": "gitops-only"}})),
         ("a divergence declared kx-only that the catalog now pins",
@@ -728,6 +733,32 @@ def self_test() -> int:
         else:
             print("  rejected  a rewrite of a helm template pin lands on it and keeps the apply")
 
+    # The shape every installer uses: the install runs under the deadline that
+    # bounds its chart fetch. The read has to see through it, and the rewrite has
+    # to keep it, or a sync would leave the fetch unbounded again.
+    deadlined = ("helm repo add x https://x.example\n"
+                 "deadline 900 helm upgrade --install a x/a \\\n"
+                 "  --version 2.3.4 \\\n"
+                 "  --wait --timeout 10m\n")
+    got = helm_block(deadlined)
+    pinned = VERSION_FLAG.search(got[1]).group(1) if got else None
+    if pinned != "2.3.4" or HELM_INSTALL.search(got[1]).group(2) != "x/a":
+        print(f"  ACCEPTED  an install under deadline was not read as a pin "
+              f"(read {pinned!r}, pinned 2.3.4)")
+        failures += 1
+    else:
+        print("  rejected  an install under deadline is read as a pin, not dropped")
+    if got:
+        (start, end), cmd = got
+        rewritten = (deadlined[:start] + VERSION_FLAG.sub("--version 3.0.0", cmd, count=1)
+                     + deadlined[end:])
+        if ("deadline 900 helm upgrade --install a x/a" not in rewritten
+                or "--version 3.0.0" not in rewritten):
+            print("  ACCEPTED  a rewrite of a pin under deadline dropped the deadline or the pin")
+            failures += 1
+        else:
+            print("  rejected  a rewrite of a pin under deadline keeps the deadline")
+
     control = cmp({})
     if any(control):
         print(f"  ACCEPTED  (control) two agreeing sides are reported as diverging: {control}")
@@ -738,7 +769,7 @@ def self_test() -> int:
     if failures:
         print(f"\nFAIL  {failures} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 5 + len(name_cases)} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + 7 + len(name_cases)} case(s) behave as specified.")
     return 0
 
 

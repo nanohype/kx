@@ -29,6 +29,7 @@ numbers and column offsets survive and a file:line citation stays true.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import json
@@ -41,6 +42,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+import yaml
 
 # Overridable so the suite-wide floor can point a gate at a fixture it wrote and
 # observe the real exit status instead of asking the gate about itself.
@@ -119,12 +122,20 @@ def helm_verb(segment: str) -> str | None:
     Tokenised rather than matched as one pattern. Leading `NAME=value` prefixes
     and `exec` are dropped a token at a time, which is linear in the segment and
     cannot backtrack — the same shape written as a starred group inside a larger
-    pattern is exponential on a line alternating assignments and separators.
+    pattern is exponential on a line alternating assignments and separators. So is
+    `deadline N`, the sourced helper every chart-fetching helm call runs under. Its
+    program form, which a Taskfile uses, is not read here: an installer sources
+    the helper, and a line in another form is reported as one this cannot read.
     """
     tokens = segment.split()
     i = 0
-    while i < len(tokens) and (ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec"):
-        i += 1
+    while i < len(tokens):
+        if ENV_ASSIGN.match(tokens[i]) or tokens[i] == "exec":
+            i += 1
+        elif tokens[i] == "deadline" and i + 1 < len(tokens) and tokens[i + 1].isdigit():
+            i += 2
+        else:
+            break
     if i >= len(tokens) or tokens[i] != "helm":
         return None
     if i + 1 >= len(tokens) or not VERB.match(tokens[i + 1]):
@@ -252,13 +263,21 @@ MINIMUM_EXAMINED = {
     # The shell scripts and Taskfiles together, which the run prints as its
     # denominator.
     "no shell script runs Python from a string or stdin": 40,
+    # Counts every script and Taskfile command that reaches the cluster, which
+    # the run prints as its denominator; set well under it, like the others.
+    "nothing kx runs can reach a cluster other than kind-kx": 70,
+    # Unconditional: both ports, or the check did not look.
+    "localhost:80 and :443 reach Cilium's Ingress": 2,
+    # Counts every outbound command and subprocess call, which the run prints;
+    # set well under it.
+    "every call that leaves this machine is bounded": 200,
 }
 
 # The suite itself is a corpus and can collapse the same way. With CHECKS and
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 13
+MINIMUM_CHECKS = 16
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -918,6 +937,7 @@ def tree_has_content_outside_the_gates(root: pathlib.Path = ROOT) -> list[str]:
         return [err]
     tracked = subprocess.run(
         ["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=False,
+        timeout=60,
     )
     paths = [pathlib.PurePosixPath(line) for line in tracked.stdout.splitlines() if line]
     outside = [str(f) for f in paths if f.parts and f.parts[0] != GATE_DIR]
@@ -1151,7 +1171,7 @@ def require_git(root: pathlib.Path) -> str | None:
                 "so without git it cannot determine its own population and any verdict it "
                 "gave would be over an unknown corpus.")
     inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
-                            capture_output=True, text=True, check=False)
+                            capture_output=True, text=True, check=False, timeout=60)
     if inside.returncode != 0 or inside.stdout.strip() != "true":
         return (f"{root} is not a git repository, so the tracked set does not exist and the "
                 f"population this suite examines is undefined.")
@@ -1177,7 +1197,7 @@ def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
 def tracked_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
     """The tracked files matching any of `patterns`, for the reason above."""
     out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", *patterns],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, timeout=60)
     return sorted(root / f for f in out.stdout.split("\0") if f)
 
 
@@ -1295,7 +1315,7 @@ def remote_artifacts_are_verified(root: pathlib.Path = ROOT) -> list[str]:
     if err:
         return [err]
     out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
-                         capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False, timeout=60)
     candidates = []
     for rel in (f for f in out.stdout.split("\0") if f):
         if not (rel.endswith(".sh") or rel.endswith(".yml") or rel.endswith(".yaml")):
@@ -1466,10 +1486,55 @@ def code_view(line: str) -> str:
     return "".join(out)
 
 
-def in_command_position(code_prefix: str) -> bool:
+# The program form of the deadline helper, as a Taskfile calls it.
+DEADLINE_PROGRAM = "/cluster/deadline.sh"
+
+
+def command_context(code_prefix: str, raw_prefix: str | None = None) -> tuple[bool, int | None]:
+    """(is the next word a command, the deadline it runs under or None) after a prefix.
+
+    `code_prefix` is a code view and `raw_prefix` the same text as written, which
+    code_view keeps aligned with it. Separators and word boundaries come from the
+    code view, so a `|` inside a string is not one and `NAME='a b'` is one word;
+    each word's text comes from the raw prefix, because a runner's own arguments
+    can be quoted — `bash '/repo/cluster/deadline.sh' 60`.
+
+    A word is a command when every word before it in its segment is a prefix —
+    an assignment, exec, command, time, a keyword, a Taskfile list's `-` — or a
+    runner: `xargs` with its flags, and the deadline helper with its limit,
+    called as the sourced function or as the program. Reading through a runner
+    is what keeps the command it runs in view; a check that stopped at `xargs`
+    would accept whatever followed it.
+    """
+    raw_prefix = code_prefix if raw_prefix is None else raw_prefix
+    segment = COMMAND_SEP.split(code_prefix)[-1]
+    start = len(code_prefix) - len(segment)
+    # Word boundaries from the code view, where a quoted value is one unbroken
+    # word, and each word's text from the raw prefix at the same span.
+    words = [raw_prefix[start + w.start():start + w.end()] for w in re.finditer(r"\S+", segment)]
+    i, limit = 0, None
+    while i < len(words):
+        word = words[i]
+        if word in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(word):
+            i += 1
+        elif word == "xargs":
+            i += 1
+            while i < len(words) and words[i].startswith("-"):
+                i += 1
+        elif word == "deadline" and i + 1 < len(words) and words[i + 1].isdigit():
+            limit, i = int(words[i + 1]), i + 2
+        elif (word == "bash" and i + 2 < len(words)
+              and words[i + 1].strip("'\"").endswith(DEADLINE_PROGRAM)
+              and words[i + 2].isdigit()):
+            limit, i = int(words[i + 2]), i + 3
+        else:
+            return False, limit
+    return True, limit
+
+
+def in_command_position(code_prefix: str, raw_prefix: str | None = None) -> bool:
     """Whether a word following `code_prefix` (a code view) is the command word."""
-    tokens = COMMAND_SEP.split(code_prefix)[-1].split()
-    return all(t in COMMAND_PREFIX_WORDS or ENV_ASSIGN.match(t) for t in tokens)
+    return command_context(code_prefix, raw_prefix)[0]
 
 
 # What a single-letter interpreter option says about where the program comes
@@ -1551,7 +1616,7 @@ def python_runs_from_files(root: pathlib.Path = ROOT) -> list[str]:
         for n, cmd in logical_lines(strip_comments(f.read_text())):
             code = code_view(cmd)
             for m in PYTHON_MENTION.finditer(code):
-                if not in_command_position(code[:m.start()]):
+                if not in_command_position(code[:m.start()], cmd[:m.start()]):
                     continue
                 source = python_program(cmd[m.end():])
                 if source in ("string", "stdin"):
@@ -1564,6 +1629,465 @@ def python_runs_from_files(root: pathlib.Path = ROOT) -> list[str]:
     EXAMINED["no shell script runs Python from a string or stdin"] = len(files)
     return problems
 
+
+# The binding every script that reaches the cluster sources, and the prefix every
+# Taskfile command that reaches it carries. Both name kx's own kubeconfig, which
+# holds the kind-kx context alone.
+KUBECONFIG_BINDING = "cluster/kubeconfig.sh"
+KUBECONFIG_PREFIX = "KUBECONFIG='{{.ROOT_DIR}}/.kube/config'"
+KUBECONFIG_EXPORT = "export " + KUBECONFIG_PREFIX
+SOURCES_BINDING = re.compile(r'^\s*(?:\.|source)\s+"\$\{SCRIPT_DIR\}/([^"]+)"\s*$')
+
+# kubectl, kind or helm as a command word. A colon after the word is YAML — a
+# heredoc's `kind: ConfigMap` — not a command.
+CLUSTER_TOOL = re.compile(r"(?<![\w./-])(kubectl|kind|helm)(?![\w.:-])")
+
+# helm verbs that work from the chart and the local cache alone. Every other
+# verb, including a read like `list` or `status`, asks a cluster.
+HELM_CLUSTERLESS = {
+    "repo", "template", "search", "show", "version", "lint", "dependency", "plugin", "env",
+    "completion", "package", "verify", "pull", "inspect",
+}
+
+
+def cluster_commands(text: str) -> list[tuple[int, int, str]]:
+    """Every command in shell `text` that reaches a cluster, as (line, offset, folded line).
+
+    The offset is where the tool's name starts in the folded line, so a caller can
+    read the command it belongs to.
+    """
+    found = []
+    for n, cmd in logical_lines(strip_comments(text)):
+        code = code_view(cmd)
+        for m in CLUSTER_TOOL.finditer(code):
+            if not in_command_position(code[:m.start()], cmd[:m.start()]):
+                continue
+            if m.group(1) == "helm":
+                after = code[m.end():].split()
+                if after and after[0] in HELM_CLUSTERLESS:
+                    continue
+            found.append((n, m.start(), cmd))
+    return found
+
+
+def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
+    """Nothing kx runs can reach a cluster other than kind-kx.
+
+    kx keeps its cluster's kubeconfig in .kube/config at the repository root, and
+    every command that reaches a cluster is pointed at that file rather than at
+    whatever the shell's KUBECONFIG or current context names. Without that, a
+    `task stack:data:disable` run in a shell pointed at a production cluster
+    runs its `helm uninstall` and `kubectl delete ns` there, and the
+    bedrock-credentials installer writes a profile's AWS keys into it.
+
+    Two shapes, because Task cannot bind its children: a Taskfile's `env:` never
+    overrides a variable the shell already exports.
+
+    - A shell script sources cluster/kubeconfig.sh before its first such command,
+      by a path that resolves to that file. The binding points KUBECONFIG at kx's
+      file and stops the script unless the context there is kind-kx, so it also
+      holds when the script is run without task.
+    - A Taskfile command carries KUBECONFIG='{{.ROOT_DIR}}/.kube/config' in the
+      command itself, or exports it on an earlier line of the same block.
+      ROOT_DIR is task's own path to the root Taskfile, which the environment
+      cannot override; run any other way it names a file that does not exist,
+      and kubectl refuses rather than falling back to the user's kubeconfig.
+
+    A command that reaches a cluster is kubectl, kind, or a helm verb other than
+    the ones that work from the chart and the local cache alone.
+    """
+    problems = []
+    binding = root / KUBECONFIG_BINDING
+    examined = 0
+    for script in tracked_files(root, "*.sh"):
+        if script == binding:
+            continue
+        lines = strip_comments(script.read_text()).splitlines()
+        reaches = cluster_commands(script.read_text())
+        if not reaches:
+            continue
+        examined += 1
+        first = reaches[0][0]
+        bound = None
+        for n, line in enumerate(lines, 1):
+            m = SOURCES_BINDING.match(line)
+            if m and (script.parent / m.group(1)).resolve() == binding.resolve():
+                bound = n
+                break
+        rel = script.relative_to(root)
+        if bound is None:
+            problems.append(f"{rel}:{first} reaches a cluster, and the script never sources "
+                            f"{KUBECONFIG_BINDING} by a path that resolves to it, so it acts on "
+                            f"whatever cluster the shell points at.")
+        elif bound > first:
+            problems.append(f"{rel}:{first} reaches a cluster before line {bound} sources "
+                            f"{KUBECONFIG_BINDING}, so that command acts on whatever cluster "
+                            f"the shell points at.")
+    if not binding.is_file() and examined:
+        problems.append(f"{KUBECONFIG_BINDING} does not exist, so no script can be bound by it.")
+    for taskfile in tracked_files(root, "*Taskfile.yaml"):
+        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
+        for name, task in tasks.items():
+            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
+                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+                if not isinstance(text, str):
+                    continue
+                reaches = cluster_commands(text)
+                if not reaches:
+                    continue
+                examined += 1
+                exported = next((n for n, line in enumerate(text.splitlines(), 1)
+                                 if line.strip() == KUBECONFIG_EXPORT), None)
+                for n, at, folded in reaches:
+                    if exported is not None and exported < n:
+                        continue
+                    segment = COMMAND_SEP.split(folded[:at])[-1].split()
+                    if KUBECONFIG_PREFIX not in segment:
+                        problems.append(
+                            f"{taskfile.relative_to(root)} task `{name}`: "
+                            f"`{folded.strip()[:70]}` reaches a cluster without "
+                            f"{KUBECONFIG_PREFIX}, so it acts on whatever cluster the shell "
+                            f"points at."
+                        )
+    EXAMINED["nothing kx runs can reach a cluster other than kind-kx"] = examined
+    if not examined:
+        return ["found no script or Taskfile command that reaches a cluster — refusing to report "
+                "every one bound over an empty set."]
+    return problems
+
+
+# The tools whose calls leave this machine, or wait on a daemon that can stop
+# answering, as command words.
+OUTBOUND_TOOL = re.compile(r"(?<![\w./-])(kubectl|helm|docker|kind|aws|curl|pnpm|npm|npx|yarn)(?![\w.:-])")
+
+# helm verbs that ask a cluster and take no timeout of their own.
+HELM_UNBOUNDED_READS = {"list", "status", "history", "get", "test"}
+
+# helm verbs that move a chart to or from a repository or registry, each with a
+# call that makes one, which is also its control: no verb joins the set without a
+# control proving the check reads it. None bounds the transfer. The --timeout
+# that install, upgrade and template take starts once the chart has arrived and
+# covers the cluster operations after it, so a stalled fetch waits with no limit
+# at all. repo add and repo update are not here, since each bounds its index
+# download with --timeout, at two minutes by default.
+HELM_TRANSFERS = {
+    "install": "helm install a x/a --version 1 --wait --timeout 10m",
+    "upgrade": "helm upgrade --install a x/a --version 1 --wait --timeout 10m",
+    "template": "helm template a oci://r/c --version 1",
+    "pull": "helm pull oci://r/c --version 1",
+    "show": "helm show chart oci://r/c --version 1",
+    "dependency": "helm dependency build ./chart",
+    "push": "helm push c-1.tgz oci://r/o",
+}
+
+# kubectl's flags that take the next word as their value, so that word is not
+# the verb.
+KUBECTL_VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "--cluster", "--user",
+                       "-l", "--selector", "-o", "--output", "--request-timeout", "--timeout"}
+
+# A duration as kubectl and curl spell one: Go's `1h30m`, `90s` or `500ms`, or
+# a bare number of seconds.
+DURATION = re.compile(r"(\d+(\.\d+)?(h|m|s|ms|us|µs|ns))+|\d+(\.\d+)?")
+
+DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)")
+DURATION_UNIT = {"h": 3600, "m": 60, "s": 1, "ms": 1e-3, "us": 1e-6, "µs": 1e-6, "ns": 1e-9}
+
+
+def duration_seconds(value: str) -> float | None:
+    """`value` in seconds, or None when it is not a duration DURATION reads."""
+    if not DURATION.fullmatch(value):
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", value):
+        return float(value)
+    return sum(float(n) * DURATION_UNIT[unit] for n, unit in DURATION_PART.findall(value))
+
+# The subprocess entry points that block until their child exits.
+SUBPROCESS_BLOCKING = {"run", "call", "check_call", "check_output"}
+
+
+def kubectl_words(rest: str) -> tuple[str, str]:
+    """(verb, the word after it) of a kubectl command whose arguments start at `rest`."""
+    words = rest.split()
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word in KUBECTL_VALUE_FLAGS:
+            i += 2
+        elif word.startswith("-") or word == "\\":
+            i += 1
+        else:
+            return word, words[i + 1] if i + 1 < len(words) else ""
+    return "", ""
+
+
+def _bound(segment: str, flag: str, *aliases: str) -> str | None:
+    """None when `segment` gives `flag` a positive duration, else why it does not.
+
+    The last value given is the one read, as the tools themselves read a
+    repeated flag. Zero is how kubectl's --request-timeout, rollout status's
+    --timeout and curl's --max-time each spell "no limit", so a zero is refused
+    rather than read as a bound, and so is a value this cannot read as a
+    duration: a bound that is named has to be one a reader can see.
+    """
+    names = "|".join(re.escape(f) for f in (flag, *aliases))
+    values = re.findall(rf"(?<![\w-])(?:{names})(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
+    if not values:
+        return f"without {flag}"
+    value = values[-1]
+    if not DURATION.fullmatch(value) or not re.search(r"[1-9]", value):
+        return f"with {flag} {value or '(empty)'}, which is no bound"
+    return None
+
+
+def _curl_unbounded(segment: str, rest: str) -> str | None:
+    problem = _bound(segment, "--max-time", "-m")
+    return f"curl {problem}" if problem else None
+
+
+def _runner_only(tool: str):
+    def check(segment: str, rest: str) -> str | None:
+        return f"{tool} has no bound of its own, and this call does not run under deadline"
+    return check
+
+
+def _helm_unbounded(segment: str, rest: str) -> str | None:
+    verb = next((w for w in rest.split() if not w.startswith("-")), "")
+    if verb in HELM_UNBOUNDED_READS:
+        return f"helm {verb} takes no timeout, and this call does not run under deadline"
+    if verb in HELM_TRANSFERS:
+        return (f"helm {verb} moves a chart with nothing to bound the transfer, and this call "
+                f"does not run under deadline")
+    return None
+
+
+def _kubectl_unbounded(segment: str, rest: str) -> str | None:
+    verb, after = kubectl_words(rest)
+    if verb in ("config", "port-forward") or (verb == "version" and "--client" in segment):
+        return None
+    name = f"rollout {after}" if verb == "rollout" else verb or "(no verb)"
+    waits = verb in ("wait", "delete") or name == "rollout status"
+    flags = ("--request-timeout", "--timeout") if waits else ("--request-timeout",)
+    problems = [p for p in (_bound(segment, flag) for flag in flags) if p]
+    return f"kubectl {name} {' and '.join(problems)}" if problems else None
+
+
+UNBOUNDED_BY_TOOL = {
+    "curl": _curl_unbounded,
+    "docker": _runner_only("docker"),
+    "kind": _runner_only("kind"),
+    "aws": _runner_only("aws"),
+    # The JavaScript package runners: a script one runs reaches whatever it
+    # reaches, a registry or a gateway, and none takes a bound of its own.
+    **{tool: _runner_only(tool) for tool in ("pnpm", "npm", "npx", "yarn")},
+    "helm": _helm_unbounded,
+    "kubectl": _kubectl_unbounded,
+}
+
+
+def _subprocess_unbounded(call: ast.Call) -> str | None:
+    """Why a blocking subprocess call is unbounded, or None.
+
+    `timeout=None` is the default spelled out, and a timeout that is not a
+    positive number expires before the child can run; a name or an expression
+    is read as the bound it names.
+    """
+    timeout = next((k.value for k in call.keywords if k.arg == "timeout"), None)
+    if timeout is None:
+        return "without timeout="
+    if isinstance(timeout, ast.Constant):
+        value = timeout.value
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            return f"with timeout={value!r}, which is no bound"
+    return None
+
+
+def _outlasted(segment: str, limit: int) -> str | None:
+    """Why a deadline does not bound a command that names a --timeout of its own.
+
+    A deadline at or under that timeout stops the command partway through a wait
+    it was told to make: the --timeout no longer says how long it waits, and a
+    helm release stopped there is left pending. One the reader cannot evaluate,
+    such as a variable, is refused too, for the reason `_bound` refuses one.
+    """
+    values = re.findall(r"(?<![\w-])--timeout(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
+    if not values:
+        return None
+    seconds = duration_seconds(values[-1])
+    if seconds is None:
+        return (f"runs under deadline {limit} with --timeout {values[-1] or '(empty)'}, which "
+                f"cannot be read, so whether the deadline outlasts it is unknown")
+    if seconds >= limit:
+        return f"deadline {limit} does not outlast its own --timeout {values[-1]}"
+    return None
+
+
+def why_unbounded(tool: str, segment: str, limit: int | None) -> str | None:
+    """Why one command is unbounded, or None. `segment` is its text up to the next
+    separator, read from the folded line so a flag on a continuation counts, and
+    `limit` is the deadline it runs under, or None."""
+    if limit is not None:
+        return _outlasted(segment, limit)
+    rest = segment.split(None, 1)[1] if " " in segment else ""
+    return UNBOUNDED_BY_TOOL[tool](segment, rest)
+
+
+def unbounded_in(text: str) -> tuple[int, list[tuple[int, str]]]:
+    """(outbound commands found, [(line, why)] for the unbounded ones) in shell `text`."""
+    found, problems = 0, []
+    for n, cmd in logical_lines(strip_comments(text)):
+        code = code_view(cmd)
+        for m in OUTBOUND_TOOL.finditer(code):
+            is_command, limit = command_context(code[:m.start()], cmd[:m.start()])
+            if not is_command:
+                continue
+            found += 1
+            tail = code[m.start():]
+            end = next((s.start() for s in COMMAND_SEP.finditer(tail)), len(tail))
+            why = why_unbounded(m.group(1), cmd[m.start():m.start() + end], limit)
+            if why:
+                problems.append((n, why))
+    return found, problems
+
+
+def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
+    """Every call that leaves this machine names how long it may take.
+
+    A call with no bound waits on an unresponsive API server or a stuck daemon
+    until somebody notices, and the step it hangs reads exactly like a slow one.
+    Each tool is held to the bound it has:
+
+    - kubectl carries --request-timeout, which bounds each request it makes.
+      `wait`, `rollout status` and `delete` carry --timeout as well, since each
+      of those goes on waiting on the cluster after its request returns. Each
+      bounds what the other cannot: --timeout bounds the wait, but not the
+      request that fetches the object before it, which kubectl sends with no
+      deadline of its own; and when --request-timeout closes the wait's watch,
+      kubectl opens another, so the wait still runs to its --timeout. `config`
+      is local and `port-forward` runs until it is stopped, by design.
+    - A bound is a positive duration. Zero is how kubectl's --request-timeout,
+      `rollout status` and curl each say "no limit", and `timeout=None` is
+      subprocess's default spelled out.
+    - helm's release verbs carry --timeout, which the invariant above holds.
+      `helm repo` verbs default to a two-minute timeout of their own. helm's
+      read verbs take none, so they run under deadline.
+    - docker, kind, the aws CLI's credential resolution and the JavaScript
+      package runners (pnpm, npm, npx, yarn) have no bound of their own, so they
+      run under cluster/deadline.sh, sourced or as a program.
+    - curl carries --max-time.
+    - A Python gate's subprocess call carries timeout=.
+
+    The bound this cannot see: helm fetches a chart over HTTP before any of
+    its timeouts start, with Go's dial and handshake limits and no read limit,
+    so a stalled chart server is the one wait left unbounded. It is stated
+    here rather than wrapped around every install.
+    """
+    problems = []
+    examined = 0
+    for path in tracked_files(root, "*.sh"):
+        if path == root / "cluster" / "deadline.sh":
+            continue
+        found, unbounded = unbounded_in(path.read_text())
+        examined += found
+        problems.extend(f"{path.relative_to(root)}:{n}: {why}." for n, why in unbounded)
+    for taskfile in tracked_files(root, "*Taskfile.yaml"):
+        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
+        for name, task in tasks.items():
+            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
+                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+                if isinstance(text, str):
+                    found, unbounded = unbounded_in(text)
+                    examined += found
+                    problems.extend(f"{taskfile.relative_to(root)} task `{name}`: {why}."
+                                    for _, why in unbounded)
+    for path in tracked_files(root, "*.py"):
+        try:
+            tree = ast.parse(path.read_text(), str(path))
+        except SyntaxError:
+            continue  # the compile invariant reports this file
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "subprocess"):
+                examined += 1
+                if node.func.attr == "Popen":
+                    problems.append(f"{path.relative_to(root)}:{node.lineno}: subprocess.Popen "
+                                    f"takes no timeout; use subprocess.run with timeout=.")
+                elif node.func.attr in SUBPROCESS_BLOCKING:
+                    why = _subprocess_unbounded(node)
+                    if why:
+                        problems.append(f"{path.relative_to(root)}:{node.lineno}: "
+                                        f"subprocess.{node.func.attr} {why}.")
+    EXAMINED["every call that leaves this machine is bounded"] = examined
+    if not examined:
+        return ["found no outbound call in any script, Taskfile or gate — refusing to report "
+                "every one bounded over an empty set."]
+    return problems
+
+
+KIND_CONFIG = "cluster/kind-config.yaml"
+CILIUM_VALUES = "stack/core/cilium/values.yaml"
+
+# The host ports the cluster's Ingress is reached on. Both land on the one
+# shared listener, which serves plain HTTP and TLS on a single port.
+INGRESS_HOST_PORTS = (80, 443)
+
+
+def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
+    """localhost:80 and :443 reach Cilium's Ingress.
+
+    Cilium serves every Ingress from one shared Envoy listener, on the host
+    network of the nodes its values select and on the port they name, and kind
+    publishes a host port to a container port of one node. Those facts live in
+    two files, and nothing fails when they part: the cluster comes up, every
+    Ingress is admitted, and localhost answers with a reset. So each host port's
+    mapping is held to the listener's port, on a node the listener binds on.
+    """
+    try:
+        kind = yaml.safe_load((root / KIND_CONFIG).read_text()) or {}
+        values = yaml.safe_load((root / CILIUM_VALUES).read_text()) or {}
+    except FileNotFoundError as e:
+        return [f"{pathlib.Path(e.filename).relative_to(root)} does not exist — refusing to report "
+                f"the Ingress ports reachable without it."]
+    except yaml.YAMLError as e:
+        return [f"{KIND_CONFIG} or {CILIUM_VALUES} does not parse ({e}), so the ports it names "
+                f"cannot be read."]
+    ingress = values.get("ingressController") or {}
+    if not ingress.get("enabled"):
+        return [f"{CILIUM_VALUES} does not enable ingressController, so nothing serves Ingress "
+                f"behind localhost:80 and :443."]
+    host_network = ingress.get("hostNetwork") or {}
+    if not host_network.get("enabled"):
+        return [f"{CILIUM_VALUES} does not put the Ingress listener on the host network "
+                f"(ingressController.hostNetwork.enabled), so no node port carries it for kind "
+                f"to map."]
+    problems = []
+    port = host_network.get("sharedListenerPort")
+    if not isinstance(port, int) or isinstance(port, bool):
+        problems.append(f"{CILIUM_VALUES} names no ingressController.hostNetwork."
+                        f"sharedListenerPort, so the port localhost has to reach is the chart's "
+                        f"default rather than one this repository states.")
+        port = None
+    selector = (host_network.get("nodes") or {}).get("matchLabels") or {}
+    for host in INGRESS_HOST_PORTS:
+        mapped = [(node, m) for node in kind.get("nodes") or []
+                  for m in node.get("extraPortMappings") or [] if m.get("hostPort") == host]
+        if not mapped:
+            problems.append(f"{KIND_CONFIG} publishes nothing on host port {host}, so localhost:"
+                            f"{host} does not reach Cilium's Ingress.")
+        for node, m in mapped:
+            if port is not None and m.get("containerPort") != port:
+                problems.append(f"{KIND_CONFIG} maps localhost:{host} to container port "
+                                f"{m.get('containerPort')}, but Cilium's Ingress listens on {port} "
+                                f"({CILIUM_VALUES} ingressController.hostNetwork."
+                                f"sharedListenerPort).")
+            labels = node.get("labels") or {}
+            unmatched = [f"{k}={v}" for k, v in selector.items() if str(labels.get(k)) != str(v)]
+            if unmatched:
+                problems.append(f"{KIND_CONFIG} maps localhost:{host} on a node without "
+                                f"{', '.join(unmatched)}, which ingressController.hostNetwork."
+                                f"nodes selects, so no listener binds where it lands.")
+    EXAMINED["localhost:80 and :443 reach Cilium's Ingress"] = len(INGRESS_HOST_PORTS)
+    return problems
 
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
@@ -1581,6 +2105,9 @@ CHECKS = [
     ("every fetched artifact is verified before it is used", remote_artifacts_are_verified),
     ("every Python file compiles", python_files_compile),
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
+    ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
+    ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
+    ("every call that leaves this machine is bounded", external_calls_are_bounded),
 ]
 
 # One control per check, introducing the exact violation that check exists to
@@ -2107,6 +2634,377 @@ CONTROLS["no shell script runs Python from a string or stdin"] += [
 ]
 
 
+_BINDING = {KUBECONFIG_BINDING: "# the binding\n"}
+_SCRIPT_DIR = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+_SOURCES = '. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"\n'
+_BOUND_SCRIPT = _SCRIPT_DIR + _SOURCES + "kubectl apply -f x.yaml\n"
+_PREFIX = KUBECONFIG_PREFIX + " "
+
+
+def _taskfile(*cmds: str) -> str:
+    """A Taskfile with one task, `d`, running `cmds`."""
+    body = "".join(f"      - {c}\n" for c in cmds)
+    return f"version: '3'\ntasks:\n  d:\n    cmds:\n{body}"
+
+
+CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
+    (
+        "a script that runs kubectl without the binding",
+        {**_BINDING, "stack/s/a/install.sh": "kubectl apply -f x.yaml\n"},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "stack/s/a/install.sh:1",
+    ),
+    (
+        "a script that binds only after its first cluster command",
+        {**_BINDING, "stack/s/a/install.sh":
+            "helm upgrade --install a x/a --version 1 --timeout 1m\n" + _SCRIPT_DIR + _SOURCES},
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + _SOURCES + "helm upgrade --install a x/a --version 1 --timeout 1m\n"},
+        "before line 3",
+    ),
+    (
+        "a binding sourced by a path that resolves somewhere else",
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + '. "${SCRIPT_DIR}/../../cluster/kubeconfig.sh"\nkubectl get ns\n'},
+        {**_BINDING, "stack/s/a/install.sh": _SCRIPT_DIR + _SOURCES + "kubectl get ns\n"},
+        "never sources",
+    ),
+    (
+        "the binding file itself is missing",
+        {"stack/s/a/install.sh": _BOUND_SCRIPT},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "does not exist",
+    ),
+    (
+        "a script that only renders charts needs no binding",
+        {**_BINDING, "scripts/r.sh": "helm repo update\nhelm template a x/a\n",
+         "stack/s/a/install.sh": "kubectl get ns\n"},
+        {**_BINDING, "scripts/r.sh": "helm repo update\nhelm template a x/a\n",
+         "stack/s/a/install.sh": _BOUND_SCRIPT},
+        "stack/s/a/install.sh:1",
+    ),
+    (
+        # If `kind:` counted as a command, the report would cite line 3.
+        "a heredoc's `kind:` is YAML, not a command",
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + "cat >m.yaml <<EOF\nkind: ConfigMap\nEOF\nkubectl apply -f m.yaml\n"},
+        {**_BINDING, "stack/s/a/install.sh":
+            _SCRIPT_DIR + "cat >m.yaml <<EOF\nkind: ConfigMap\nEOF\n" + _SOURCES
+            + "kubectl apply -f m.yaml\n"},
+        "install.sh:5 reaches a cluster",
+    ),
+    (
+        "a Taskfile command that uninstalls without the binding",
+        {**_BINDING, "Taskfile.yaml": _taskfile("helm uninstall -n a a || true")},
+        {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "helm uninstall -n a a || true")},
+        "task `d`",
+    ),
+    (
+        # Each word that opens a command is proven under the Python invariant;
+        # this proves the binding reads through one as well.
+        "a Taskfile command that asks the cluster as an if condition, without the binding",
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if kubectl get ns x; then echo up; fi")},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("if " + _PREFIX + "kubectl get ns x; then echo up; fi")},
+        "task `d`",
+    ),
+    (
+        "the binding on one side of a pipe does not reach the other",
+        {**_BINDING, "Taskfile.yaml": _taskfile(_PREFIX + "kubectl get ns | kubectl apply -f -")},
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile(_PREFIX + "kubectl get ns | " + _PREFIX + "kubectl apply -f -")},
+    ),
+    (
+        "a Taskfile block that exports the binding after its first command",
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile("|\n        kubectl get crd\n        " + KUBECONFIG_EXPORT)},
+        {**_BINDING, "Taskfile.yaml":
+            _taskfile("|\n        " + KUBECONFIG_EXPORT + "\n        kubectl get crd")},
+    ),
+    (
+        "a Taskfile command that runs a bound script needs no binding of its own",
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("bash stack/s/a/install.sh", "kubectl get ns")},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT,
+         "Taskfile.yaml": _taskfile("bash stack/s/a/install.sh")},
+        "kubectl get ns",
+    ),
+    (
+        "nothing that reaches a cluster at all",
+        {"README.md": "nothing here\n"},
+        {**_BINDING, "stack/s/a/install.sh": _BOUND_SCRIPT},
+    ),
+]
+
+
+def _ingress(port: int | None = 8080, enabled: bool = True, host_network: bool = True,
+             maps: dict[int, int] | None = None,
+             node_labels: dict[str, str] | None = None) -> dict[str, str]:
+    """kind-config.yaml and cilium's values.yaml: `maps` (host -> container) published on a
+    node labelled `node_labels`, and a shared listener on `port` bound on ingress-ready nodes."""
+    maps = {80: 8080, 443: 8080} if maps is None else maps
+    node_labels = {"ingress-ready": "true"} if node_labels is None else node_labels
+    labels = "".join(f'      {k}: "{v}"\n' for k, v in node_labels.items())
+    ports = "".join(f"      - {{containerPort: {c}, hostPort: {h}}}\n" for h, c in maps.items())
+    listener = f"    sharedListenerPort: {port}\n" if port is not None else ""
+    return {
+        KIND_CONFIG: ("nodes:\n  - role: control-plane\n"
+                      + (f"    labels:\n{labels}" if labels else "")
+                      + f"    extraPortMappings:\n{ports}"),
+        CILIUM_VALUES: (f"ingressController:\n  enabled: {str(enabled).lower()}\n"
+                        f"  hostNetwork:\n    enabled: {str(host_network).lower()}\n{listener}"
+                        f'    nodes:\n      matchLabels:\n        ingress-ready: "true"\n'),
+    }
+
+
+CONTROLS["localhost:80 and :443 reach Cilium's Ingress"] = [
+    (
+        "localhost:80 mapped to a container port other than the shared listener's",
+        _ingress(maps={80: 80, 443: 8080}),
+        _ingress(),
+        "maps localhost:80 to container port 80",
+    ),
+    (
+        "the shared listener moved without its mappings",
+        _ingress(port=8081),
+        _ingress(),
+        "listens on 8081",
+    ),
+    (
+        "no mapping on host port 443",
+        _ingress(maps={80: 8080}),
+        _ingress(),
+        "publishes nothing on host port 443",
+    ),
+    (
+        "the ports mapped on a node the listener does not bind on",
+        _ingress(node_labels={"workload": "system"}),
+        _ingress(),
+        "on a node without ingress-ready=true",
+    ),
+    (
+        "no listener port stated",
+        _ingress(port=None),
+        _ingress(),
+        "names no ingressController.hostNetwork.sharedListenerPort",
+    ),
+    (
+        "the listener taken off the host network",
+        _ingress(host_network=False),
+        _ingress(),
+        "does not put the Ingress listener on the host network",
+    ),
+    (
+        "the Ingress controller switched off",
+        _ingress(enabled=False),
+        _ingress(),
+        "does not enable ingressController",
+    ),
+]
+
+
+_DEADLINE = "bash '{{.ROOT_DIR}}/cluster/deadline.sh'"
+_BOUNDED_CURL = "curl --max-time 5 https://example\n"
+
+CONTROLS["every call that leaves this machine is bounded"] = [
+    (
+        "kubectl with no request timeout",
+        {"s.sh": "kubectl get ns\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"},
+        "kubectl get without --request-timeout",
+    ),
+    (
+        "a delete that can wait on a finalizer forever",
+        {"s.sh": "kubectl --request-timeout=60s delete ns x\n"},
+        {"s.sh": "kubectl --request-timeout=60s --timeout=5m delete ns x\n"},
+        "kubectl delete without --timeout",
+    ),
+    (
+        "a wait is read across its continuation lines",
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x \\\n  -n y\n"},
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x \\\n"
+                 "  --timeout=60s\n"},
+        "kubectl wait without --timeout",
+    ),
+    (
+        "a wait bounded by --timeout alone, whose first request has no deadline",
+        {"s.sh": "kubectl wait --for=condition=Ready pod/x --timeout=60s\n"},
+        {"s.sh": "kubectl --request-timeout=60s wait --for=condition=Ready pod/x --timeout=60s\n"},
+        "kubectl wait without --request-timeout",
+    ),
+    (
+        "a rollout status, which waits forever unless told otherwise",
+        {"s.sh": "kubectl --request-timeout=60s -n y rollout status deployment/x\n"},
+        {"s.sh": "kubectl --request-timeout=60s -n y rollout status deployment/x --timeout=5m\n"},
+        "kubectl rollout status without --timeout",
+    ),
+    (
+        "a zero request timeout, which is kubectl's spelling of none",
+        {"s.sh": "kubectl --request-timeout=0s get ns\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"},
+        "kubectl get with --request-timeout 0s, which is no bound",
+    ),
+    (
+        "a request timeout given as its own word, which is not the verb",
+        {"s.sh": "kubectl --request-timeout 0 get ns\n"},
+        {"s.sh": "kubectl --request-timeout 60s get ns\n"},
+        "kubectl get with --request-timeout 0",
+    ),
+    (
+        # Each word that opens a command is proven under the Python invariant;
+        # this proves the bound check reads through one as well.
+        "a kubectl asked as an if condition",
+        {"s.sh": "kubectl --request-timeout=60s get ns\nif kubectl get ns x; then :; fi\n"},
+        {"s.sh": "kubectl --request-timeout=60s get ns\n"
+                 "if kubectl --request-timeout=60s get ns x; then :; fi\n"},
+        "s.sh:2",
+    ),
+    (
+        "config is local and port-forward runs until stopped, so neither needs a bound",
+        {"s.sh": "kubectl config current-context\nkubectl port-forward svc/x 8080:80\n",
+         "t.sh": "kubectl get ns\n"},
+        {"s.sh": "kubectl config current-context\nkubectl port-forward svc/x 8080:80\n"},
+        "t.sh:1",
+    ),
+    (
+        "a kubectl that xargs runs",
+        {"s.sh": "kubectl --request-timeout=60s get crd -o name | xargs -r kubectl delete\n"},
+        {"s.sh": "kubectl --request-timeout=60s get crd -o name"
+                 " | xargs -r kubectl --request-timeout=60s --timeout=5m delete\n"},
+        "kubectl delete",
+    ),
+    (
+        "a docker build outside deadline",
+        {"s.sh": "docker build -t x .\n"},
+        {"s.sh": "deadline 1200 docker build -t x .\n"},
+        "docker has no bound",
+    ),
+    (
+        "a kind call in a Taskfile outside the deadline program",
+        {"Taskfile.yaml": _taskfile("kind get clusters")},
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 60 kind get clusters")},
+        "kind has no bound",
+    ),
+    (
+        "a helm read inside a command substitution, outside deadline",
+        {"s.sh": 'x="$(helm status r --namespace n 2>&1)"\n'},
+        {"s.sh": 'x="$(deadline 60 helm status r --namespace n 2>&1)"\n'},
+        "helm status takes no timeout",
+    ),
+    (
+        "the aws CLI resolving credentials outside deadline",
+        {"s.sh": 'J="$(aws configure export-credentials --profile p)"\n'},
+        {"s.sh": 'J="$(deadline 120 aws configure export-credentials --profile p)"\n'},
+        "aws has no bound",
+    ),
+    # Each beside a bounded call, so a reader that does not know the runner
+    # still has a call to examine and fails open rather than on an empty set.
+    (
+        "a pnpm script outside deadline, which waits as long as what it calls",
+        {"s.sh": _BOUNDED_CURL + "pnpm --filter x --silent conformance\n"},
+        {"s.sh": _BOUNDED_CURL + "deadline 600 pnpm --filter x --silent conformance\n"},
+        "pnpm has no bound",
+    ),
+    *(
+        (f"{tool} outside deadline", {"s.sh": _BOUNDED_CURL + f"{tool} run probe\n"},
+         {"s.sh": _BOUNDED_CURL + f"deadline 600 {tool} run probe\n"}, f"{tool} has no bound")
+        for tool in ("npm", "npx", "yarn")
+    ),
+    (
+        "curl with no --max-time",
+        {"s.sh": 'curl -sSfL -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL --max-time 60 -o x "https://example/x"\n'},
+        "curl without --max-time",
+    ),
+    (
+        "curl with a zero -m, which is curl's spelling of none",
+        {"s.sh": 'curl -sSfL -m 0 -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL -m 2 -o x "https://example/x"\n'},
+        "curl with --max-time 0",
+    ),
+    (
+        "a gate's subprocess call with no timeout",
+        {"scripts/g.py": "import subprocess\nsubprocess.run(['git', 'status'], check=False)\n"},
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=60)\n"},
+        "subprocess.run without timeout=",
+    ),
+    (
+        "a gate's subprocess call that spells out no timeout",
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=None)\n"},
+        {"scripts/g.py": "import subprocess\nT = 60\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=T)\n"},
+        "timeout=None, which is no bound",
+    ),
+    (
+        "a gate that starts a process it cannot bound",
+        {"scripts/g.py": "import subprocess\nsubprocess.Popen(['git', 'status'])\n"},
+        {"scripts/g.py": "import subprocess\n"
+                         "subprocess.run(['git', 'status'], check=False, timeout=60)\n"},
+        "Popen",
+    ),
+    (
+        "nothing outbound at all",
+        {"README.md": "nothing here\n"},
+        {"s.sh": "curl --max-time 5 https://example\n"},
+    ),
+]
+
+CONTROLS["every call that leaves this machine is bounded"] += [
+    *(
+        (f"helm {verb} outside deadline", {"s.sh": shape + "\n"},
+         {"s.sh": f"deadline 900 {shape}\n"}, f"helm {verb} moves a chart")
+        for verb, shape in HELM_TRANSFERS.items()
+    ),
+    (
+        "a deadline no longer than the install's own --timeout",
+        {"s.sh": "deadline 600 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        {"s.sh": "deadline 900 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        "deadline 600 does not outlast its own --timeout 10m",
+    ),
+    (
+        "a --timeout on a continuation line, held against the deadline before it",
+        {"s.sh": "deadline 300 helm upgrade --install a x/a \\\n  --version 1 --wait --timeout 10m\n"},
+        {"s.sh": "deadline 900 helm upgrade --install a x/a \\\n  --version 1 --wait --timeout 10m\n"},
+        "deadline 300 does not outlast its own --timeout 10m",
+    ),
+    (
+        "a --timeout the reader cannot evaluate, under a deadline",
+        {"s.sh": 'deadline 900 helm upgrade --install a x/a --version 1 --wait --timeout "${T}"\n'},
+        {"s.sh": "deadline 900 " + HELM_TRANSFERS["upgrade"] + "\n"},
+        "cannot be read",
+    ),
+    (
+        "a kubectl wait cut short by the deadline around it",
+        {"s.sh": "deadline 60 kubectl --request-timeout=60s wait --for=condition=Ready pod/x"
+                 " --timeout=120s\n"},
+        {"s.sh": "deadline 180 kubectl --request-timeout=60s wait --for=condition=Ready pod/x"
+                 " --timeout=120s\n"},
+        "deadline 60 does not outlast its own --timeout 120s",
+    ),
+    (
+        "the deadline program's limit, read from a Taskfile",
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 60 " + HELM_TRANSFERS["upgrade"])},
+        {"Taskfile.yaml": _taskfile(_DEADLINE + " 900 " + HELM_TRANSFERS["upgrade"])},
+        "deadline 60 does not outlast its own --timeout 10m",
+    ),
+]
+
+CONTROLS["every helm install is found, and names a timeout"] += [
+    (
+        "an install under deadline, read as the install it runs",
+        {"stack/s/a/install.sh": "helm repo add x https://x\n"
+                                 "deadline 900 helm upgrade --install a x/a --version 1 --wait\n"},
+        {"stack/s/a/install.sh": "helm repo add x https://x\n"
+                                 "deadline 900 helm upgrade --install a x/a --version 1 --wait"
+                                 " --timeout 10m\n"},
+        "runs `helm upgrade` with no --timeout",
+    ),
+]
+
+
 def _tree(files: dict[str, str]) -> pathlib.Path:
     """A fixture tree, as a real repository.
 
@@ -2130,10 +3028,10 @@ def _tree(files: dict[str, str]) -> pathlib.Path:
         f.write_text(body)
         if not untracked:
             staged.append(rel)
-    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True)
+    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True, timeout=60)
     if staged:
         subprocess.run(["git", "-C", str(d), "add", "--", *staged], check=False,
-                       capture_output=True)
+                       capture_output=True, timeout=60)
     return d
 
 

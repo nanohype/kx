@@ -13,14 +13,14 @@ tasks:
     desc: Uninstall data slice (also uninstalls druid if present)
     cmds:
       - task: druid:disable
-      - helm uninstall -n nats nats                       || true
-      - helm uninstall -n cnpg-system cloudnative-pg      || true
-      - helm uninstall -n velero velero                   || true
-      - helm uninstall -n minio minio                     || true
-      - kubectl delete ns nats --ignore-not-found
-      - kubectl delete ns cnpg-system --ignore-not-found
-      - kubectl delete ns velero --ignore-not-found
-      - kubectl delete ns minio --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n nats nats                       || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n cnpg-system cloudnative-pg      || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n velero velero                   || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n minio minio                     || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns nats --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns cnpg-system --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns velero --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns minio --ignore-not-found
 
   "druid:enable":
     desc: Install Apache Druid (uses eks-gitops chart + kx-local overrides; ~4.5GB resident)
@@ -30,4 +30,4 @@ tasks:
   "druid:disable":
     desc: Uninstall Druid + its CNPG metadata cluster (just nukes the namespace — Druid is applied via kubectl, not a helm release)
     cmds:
-      - kubectl delete ns druid --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns druid --ignore-not-found
