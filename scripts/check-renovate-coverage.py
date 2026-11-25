@@ -19,6 +19,7 @@ them would pass this check and silently match nothing in production.
 from __future__ import annotations
 
 import contextlib
+import copy
 import os
 import glob
 import io
@@ -28,6 +29,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import textwrap
 
 # Valid in Python's re, absent from RE2. A pattern using one of these would pass
 # locally and match nothing when Renovate runs it.
@@ -338,6 +340,39 @@ def self_test() -> int:
         else:
             print(f"  rejected  {label}")
 
+    # The two checks verdict() runs ahead of coverage, each planted once in a
+    # copy of the shipped config and driven through verdict() itself, so a check
+    # that stops rejecting or leaves the chain is caught here. Asked of the
+    # shipped tree, because no_dead_managers means nothing over a synthetic one,
+    # and paired with the control at the end, which runs the same verdict over
+    # the same tree with the config as it ships.
+    #
+    # Each plant is invisible to every check but its own: the unknown key sits
+    # beside the real one, and the dead manager's pattern matches no text
+    # anywhere, so coverage reads the same pins through the same rules.
+    shipped = json.loads((SOURCE_ROOT / "renovate.json").read_text())
+    unknown_key = copy.deepcopy(shipped)
+    unknown_key["customManagers"][0]["datasourceTemplat"] = "helm"
+    dead_manager = copy.deepcopy(shipped)
+    dead_manager["customManagers"].append({
+        "customType": "regex",
+        "managerFilePatterns": [r"/^no-such-directory/.+\.sh$/"],
+        "matchStrings": [r"KX_NO_SUCH_PIN (?<depName>\S+) (?<currentValue>\S+)"],
+        "datasourceTemplate": "helm",
+    })
+    config_breaks = [
+        ("a manager carrying a key Renovate does not know", unknown_key),
+        ("a manager that applies to no file in the tree", dead_manager),
+    ]
+    for label, cfg in config_breaks:
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = verdict(cfg, SOURCE_ROOT)
+        if rc == 0:
+            failures.append(label)
+            print(f"  ACCEPTED  {label}   <-- not caught")
+        else:
+            print(f"  rejected  {label}")
+
     # Deleting the config must fail the gate, not empty it. compile_patterns
     # refuses a config with no customManagers — without that, an empty pattern
     # list matches nothing, every file reports zero pins found against zero
@@ -398,17 +433,23 @@ def self_test() -> int:
     # "the shipped tree passes" about a fixture makes the gate exit non-zero for
     # a reason that has nothing to do with the corpus under test — which the
     # floor would then score as the gate catching what it planted.
-    scripts = sorted(glob.glob(str(SOURCE_ROOT / "stack/*/*/install.sh")))
-    if coverage(patterns, scripts, root=SOURCE_ROOT, quiet=True) != 0:
+    #
+    # The whole verdict, so the config breaks above have a clean pair. Its report
+    # is printed when it fails: main() never reaches its own over a failed
+    # self-test, and this is then the only place the reason appears.
+    with contextlib.redirect_stdout(io.StringIO()) as said:
+        rc = verdict(shipped, SOURCE_ROOT)
+    if rc != 0:
         failures.append("the shipped tree does not pass")
-        print("  ACCEPTED  (control) the shipped tree is rejected")
+        print("  ACCEPTED  (control) the shipped tree is rejected:")
+        print(textwrap.indent(said.getvalue().strip(), "        "))
     else:
         print("  passed    (control) the shipped tree")
 
     if failures:
         print(f"\nFAIL  {len(failures)} case(s) wrong.")
         return 1
-    print(f"\nOK    {len(breaks) + 5} case(s) behave as specified.")
+    print(f"\nOK    {len(breaks) + len(config_breaks) + 5} case(s) behave as specified.")
     return 0
 
 
@@ -505,6 +546,18 @@ def no_dead_managers(cfg, root: pathlib.Path = ROOT) -> int:
     return 0
 
 
+def verdict(cfg, root: pathlib.Path) -> int:
+    """The tree's verdict: the config well formed, every manager alive, every pin watched.
+
+    In that order. A malformed manager makes the other two answer about rules
+    Renovate would never run. main() reports this, and the self-test drives the
+    same function, so a check that leaves the chain is one the self-test sees go.
+    """
+    corpus = sorted(glob.glob(str(root / "stack/*/*/install.sh")))
+    return (config_is_well_formed(cfg) or no_dead_managers(cfg, root)
+            or coverage(compile_patterns(cfg), corpus, root=root))
+
+
 def control_outcomes() -> dict:
     """What the controls actually exercised, for the suite-wide floor.
 
@@ -539,10 +592,7 @@ def main() -> int:
         print("\nRefusing to report coverage with a gate that has not proven it rejects.")
         return 1
     print()
-    patterns = compile_patterns(json.loads((ROOT / "renovate.json").read_text()))
-    cfg = json.loads((ROOT / "renovate.json").read_text())
-    corpus = sorted(glob.glob(str(ROOT / "stack/*/*/install.sh")))
-    return config_is_well_formed(cfg) or no_dead_managers(cfg) or coverage(patterns, corpus)
+    return verdict(json.loads((ROOT / "renovate.json").read_text()), ROOT)
 
 
 if __name__ == "__main__":
