@@ -26,8 +26,10 @@
 # no business making. So local tenants are NOT isolated from each other on the
 # AWS side, and a local Bedrock call is not a test of the production authz path.
 # Acceptable because the blast radius is one kind cluster on one workstation and
-# the credential is normally a short-lived SSO session. Do not point this at a
-# profile whose permissions you would not hand to every namespace at once.
+# the credential is a session that stops working by itself: credentials with no
+# expiry are refused. The residual risk, Kyverno's cluster-wide Secret access
+# while this slice is installed, is in docs/threat-model.md. Do not point this
+# at a profile whose permissions you would not hand to every namespace at once.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
@@ -82,12 +84,20 @@ fi
 echo "Resolving credentials from AWS profile '${PROFILE}' ..."
 CREDS_JSON="$(deadline 120 aws configure export-credentials --profile "${PROFILE}" --format process)"
 
+# Credentials with no expiry are refused. This Secret is cloned into every
+# tenants-* namespace, and only a session stops working there by itself: a
+# long-lived access key reports no expiry, and neither does a session the aws
+# CLI gave none for. Checked here, before anything is written to the cluster,
+# and again by the manifest step. What the check prints is when the session
+# stops working, which the Secret records.
+EXPIRES="$(printf '%s' "${CREDS_JSON}" | python3 "${SCRIPT_DIR}/credentials.py" check)"
+
 kubectl --request-timeout=60s create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # Built on stdin rather than with --from-literal: that flag puts the secret key
 # and the session token in this process's argv, where `ps` shows them to every
 # other process on the workstation. credentials.py does the base64 and the
-# quoting.
+# quoting, and records the expiry as an annotation for the verify task.
 printf '%s' "${CREDS_JSON}" \
   | python3 "${SCRIPT_DIR}/credentials.py" manifest "${SECRET}" "${SOURCE_NS}" "${REGION}" \
   | kubectl --request-timeout=60s apply -f -
@@ -144,7 +154,7 @@ echo
 echo "── local Bedrock credentials installed ──"
 echo "  profile:  ${PROFILE}"
 echo "  region:   ${REGION}"
-echo "  expires:  $(printf '%s' "${CREDS_JSON}" | python3 "${SCRIPT_DIR}/credentials.py" expiry)"
+echo "  expires:  ${EXPIRES}"
 echo
 echo "Gateways admitted from now on pick the credentials up. Existing ones are"
 echo "replaced by Envoy Gateway on its next reconcile; to take them now:"

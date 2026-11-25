@@ -1,4 +1,5 @@
-# envoy already carried the reference; only the sidecar gains one.
+# envoy carried a reference from before; the sidecar gains one and envoy's is
+# left as it was. The policy only ever adds.
 apiVersion: v1
 kind: Pod
 metadata:
