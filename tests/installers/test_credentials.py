@@ -3,7 +3,9 @@
 The helper is the only thing between a workstation's AWS profile and a Secret
 Kyverno clones into every tenant namespace, so these tests hold it to the rules
 its docstring states: only a session that expires by itself is admitted, one
-already expired is refused, and the Secret records when it stops working.
+already expired is refused, and the Secret records when it stops working. It
+also decides, for install.sh and uninstall.sh, whether kubectl's answer about a
+Kyverno kind means served, absent, or a cluster that could not be read.
 """
 
 import base64
@@ -164,6 +166,34 @@ class TestRemaining:
         assert "when it expires is unknown" in line
 
 
+NOT_FOUND = ('Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io '
+             '"clusterpolicies.kyverno.io" not found')
+REFUSED = ("The connection to the server 127.0.0.1:6443 was refused - did you specify the "
+           "right host or port?")
+
+
+class TestServed:
+    def test_a_crd_kubectl_returned(self, credentials):
+        assert credentials.served(0, "") == "served"
+
+    def test_a_warning_beside_a_found_crd_is_still_found(self, credentials):
+        assert credentials.served(0, "Warning: something deprecated") == "served"
+
+    @pytest.mark.parametrize("said", [NOT_FOUND, "error: NOTFOUND", "x notfound"],
+                             ids=["server-not-found", "upper-case", "one-word"])
+    def test_a_crd_that_does_not_exist(self, credentials, said):
+        assert credentials.served(1, said) == "absent"
+
+    @pytest.mark.parametrize("said", [
+        REFUSED,
+        "Unable to connect to the server: dial tcp: lookup kx-control-plane: no such host",
+        "error: You must be logged in to the server (Unauthorized)",
+        "",
+    ], ids=["refused", "no-such-host", "unauthorized", "nothing-said"])
+    def test_a_cluster_that_gave_no_answer_about_the_kind(self, credentials, said):
+        assert credentials.served(1, said) == "unknown"
+
+
 class TestCommandLine:
     def test_check_prints_when_the_session_expires(self, run_script):
         run = run_script(HELPER, "check", stdin=json.dumps(session(Expiration=FUTURE)))
@@ -198,13 +228,26 @@ class TestCommandLine:
         run = run_script(HELPER, "remaining", PAST)
         assert (run.status, run.out) == (1, f"expired at {PAST}\n")
 
+    @pytest.mark.parametrize("status,said,answer", [
+        ("0", "", "served"),
+        ("1", NOT_FOUND, "absent"),
+        ("1", REFUSED, "unknown"),
+    ], ids=["served", "absent", "unknown"])
+    def test_served_prints_its_answer_and_exits_zero(self, run_script, status, said, answer):
+        run = run_script(HELPER, "served", status, stdin=said)
+        assert (run.status, run.out, run.err) == (0, f"{answer}\n", "")
+
     @pytest.mark.parametrize("args", [
         (),
         ("check", "extra"),
         ("manifest", "n", "ns"),
         ("remaining",),
+        ("served",),
+        ("served", "one"),
+        ("served", "-1"),
         ("rotate", "a", "b", "c"),
     ], ids=["nothing", "check-with-an-argument", "manifest-short", "remaining-short",
+            "served-without-a-status", "served-with-a-word", "served-with-a-sign",
             "unknown-mode"])
     def test_anything_else_prints_the_usage(self, run_script, args):
         run = run_script(HELPER, *args)
