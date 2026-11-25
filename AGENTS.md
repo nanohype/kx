@@ -73,7 +73,7 @@ distance count only gestures at.
 
 ## Add an addon to the local stack
 
-1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
+1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](https://github.com/nanohype/eks-gitops/tree/HEAD/addons) — that's the production reference.
 2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`, run under `cluster/deadline.sh` with a limit past that timeout; every kubectl call with `--request-timeout`, every `wait`, `rollout status` and `delete` with `--timeout` as well, and docker or kind under `cluster/deadline.sh`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
 3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
 4. Record the pin in `stack/chart-provenance.json` — repo URL and a description. `scripts/check-chart-deprecation.py` fails a pin with no record, and a record naming no pin.
@@ -138,8 +138,11 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 - [`README.md`](README.md) — full repo overview, quickstart, addon list
 - [`Taskfile.yaml`](Taskfile.yaml) — every supported workflow as a task
 - [`CLAUDE.md`](CLAUDE.md) — Claude Code session instructions
+- [`docs/architecture.md`](docs/architecture.md) — the cluster, the stack, who owns what, and the gates
+- [`docs/threat-model.md`](docs/threat-model.md) — what kx holds, what bounds it, and the risk it accepts
+- [`docs/adr/`](docs/adr/README.md) — the decisions behind the design, one record each
 - [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md) — the stack-wide view
-- [`eks-gitops/AGENTS.md`](../eks-gitops/AGENTS.md) — the production catalog this mirrors
+- [`eks-gitops/AGENTS.md`](https://github.com/nanohype/eks-gitops/blob/HEAD/AGENTS.md) — the production catalog this mirrors
 
 ## Supporting this project
 
