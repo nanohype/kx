@@ -94,6 +94,7 @@ Every `install.sh` is idempotent, so the first move for a slice that failed part
 |---|---|---|
 | `task up` fails immediately | Docker Desktop / OrbStack not running | Start it; kind needs a container runtime |
 | A slice enables but pods sit `Pending` | kind node is out of CPU/memory — the data slice and druid are the usual causes | Raise the VM's limits, or disable a slice you are not using |
+| A Gateway reports `Programmed=False`, reason `AddressNotAssigned` | Cilium gives each Gateway a LoadBalancer Service, and nothing on kind assigns one an address. The Gateway is still Accepted | Expected on kind, where Gateways are reached in-cluster through their Service, `cilium-gateway-<name>`. From the host, use an Ingress on `localhost:80` / `:443` |
 | `task stack:ai-platform:enable` fails on the operator | No sibling `eks-agent-platform` checkout — the operator image is built locally, not published | Clone it beside `kx`, or set `KX_EKS_AGENT_PLATFORM_DIR` |
 | `task stack:data:druid:enable` fails on a missing chart | Druid runs the unmodified `eks-gitops` chart from a sibling checkout | Clone `eks-gitops` beside `kx`, or set `KX_DRUID_CHART_DIR` |
 | Bedrock calls return `AccessDeniedException` | The `bedrock-credentials` slice is not installed, the profile's SSO session expired, or the account does not allow Bedrock in the signing region | `aws sso login`, then `task stack:ai-platform:credentials`; `AWS_REGION` picks the signing region (default us-east-1) |

@@ -129,6 +129,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 - Local ingress lands at `localhost:80` / `localhost:443` via ingress-nginx host-port mapping
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
 - `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
+- Gateways are reached in-cluster. On kind a Gateway is Accepted but never Programmed, because nothing assigns its LoadBalancer Service an address; its routes answer on that Service, `cilium-gateway-<name>`, from inside the cluster. From the host, use an Ingress on `localhost:80` / `localhost:443`
 
 ## Pointers
 
