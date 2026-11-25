@@ -28,15 +28,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Collapse the `helm upgrade --install ...` (or `helm template ...`) continuation
-# block to one line. On the block's last line, a redirect of stdout to a shell
-# variable is dropped: that is where a rendering installer sends its output, and
-# here the output belongs to the pipe below. Bracket expressions rather than
-# escapes, so BSD awk on a workstation reads the pattern the way the runner does.
+# block to one line. The `deadline N` an installer runs it under is dropped, since
+# the render below runs the command itself. On the block's last line, a redirect
+# of stdout to a shell variable is dropped: that is where a rendering installer
+# sends its output, and here the output belongs to the pipe below. Bracket
+# expressions rather than escapes, so BSD awk on a workstation reads the pattern
+# the way the runner does.
 extract_helm_block() {
   awk '
-    /^helm (upgrade --install|template) / { collecting = 1 }
+    /^(deadline [0-9]+ )?helm (upgrade --install|template) / { collecting = 1 }
     collecting {
       line = $0
+      sub(/^deadline [0-9]+ /, "", line)
       cont = (line ~ /\\$/)
       sub(/[[:space:]]*\\$/, "", line)
       if (!cont) sub(/[[:space:]]+>[[:space:]]*"?[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?"?[[:space:]]*$/, "", line)
@@ -49,7 +52,7 @@ extract_helm_block() {
 # The pattern a helm block starts with, for the SKIP guard below. Wider than the
 # extractor's anchor (leading whitespace allowed), so the guard sees every block
 # extraction could lift and some it could not.
-HELM_BLOCK_RE='^[[:space:]]*helm (upgrade --install|template) '
+HELM_BLOCK_RE='^[[:space:]]*(deadline[[:space:]]+[0-9]+[[:space:]]+)?helm (upgrade --install|template) '
 
 # Succeeds when an installer applies one of its own manifests: a `kubectl apply
 # -f` naming the file beside it, with kubectl's flags allowed on either side of
@@ -115,8 +118,26 @@ if [[ "${1:-}" == "--self-test" ]]; then
   # shellcheck disable=SC2016  # the expected lift, verbatim, unexpanded
   check "a rendering block, minus its redirect" 'helm template a oci://r/c   --version 1.0.0   --values "${SCRIPT_DIR}/v.yaml" ' "$t/rendered.sh"
 
+  printf 'helm repo add x https://x\ndeadline 900 helm upgrade --install a x/a \\\n  --namespace n \\\n  --wait --timeout 10m\n' >"$t/deadline.sh"
+  check "a block under deadline, lifted without it" "helm upgrade --install a x/a   --namespace n   --wait --timeout 10m " "$t/deadline.sh"
+
+  # shellcheck disable=SC2016  # the fixture is shell source; nothing here expands
+  printf 'M="$(mktemp)"\ndeadline 300 helm template a oci://r/c \\\n  --version 1.0.0 >"${M}"\nkubectl apply -f "${M}"\n' >"$t/deadline-rendered.sh"
+  check "a rendering block under deadline, minus its redirect" "helm template a oci://r/c   --version 1.0.0 " "$t/deadline-rendered.sh"
+
   printf '#!/usr/bin/env bash\nkubectl apply -f x.yaml\n' >"$t/none.sh"
   check "no helm block yields nothing" "" "$t/none.sh"
+
+  # The SKIP guard reads the same blocks: one under deadline is a helm block.
+  checks=$((checks + 1))
+  rc=0
+  grep -qE "$HELM_BLOCK_RE" "$t/deadline.sh" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "FAIL  the SKIP guard does not see a helm block under deadline (grep exited $rc)"
+    fails=$((fails + 1))
+  else
+    echo "  ok  the SKIP guard sees a helm block under deadline"
+  fi
 
   # The sibling-chart classifier the druid exemption rests on: the druid shape
   # passes, and each way a chart could be one this gate can render does not.
@@ -133,6 +154,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
   # shellcheck disable=SC2016  # fixtures are shell source; nothing here expands
   printf 'C="${X:-${SCRIPT_DIR}/../../eks-gitops/catalog/c/chart}"\nhelm template ds "${C}" \\\n  --values v.yaml \\\n  | kubectl apply -f -\n' >"$t/sibling.sh"
   sibling "a sibling eks-gitops chart is classified as one" 0 "$t/sibling.sh"
+  # shellcheck disable=SC2016
+  printf 'C="${X:-${SCRIPT_DIR}/../../eks-gitops/catalog/c/chart}"\ndeadline 300 helm template ds "${C}" \\\n  --values v.yaml \\\n  | kubectl apply -f -\n' >"$t/sibling-deadline.sh"
+  sibling "a sibling chart rendered under deadline is classified as one" 0 "$t/sibling-deadline.sh"
   # shellcheck disable=SC2016
   printf 'C="${X:-${SCRIPT_DIR}/../../eks-gitops/catalog/c/chart}"\nhelm template ds "${C}" \\\n  --version 1.0.0\n' >"$t/sibling-pinned.sh"
   sibling "a pinned chart is not a sibling chart" 1 "$t/sibling-pinned.sh"

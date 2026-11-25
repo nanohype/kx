@@ -4,13 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add cnpg https://cloudnative-pg.github.io/charts --force-update >/dev/null
 helm repo update cnpg >/dev/null
 
 kubectl --request-timeout=60s create namespace cnpg-system --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
-helm upgrade --install cloudnative-pg cnpg/cloudnative-pg \
+deadline 900 helm upgrade --install cloudnative-pg cnpg/cloudnative-pg \
   --namespace cnpg-system \
   --version 0.29.1 \
   --values "${SCRIPT_DIR}/values.yaml" \

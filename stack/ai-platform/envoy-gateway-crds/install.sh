@@ -33,13 +33,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 # Rendered to a file before anything reaches the API server, so a render that
 # fails partway applies nothing rather than whatever it had written.
 MANIFEST="$(mktemp)"
 trap 'rm -f "${MANIFEST}"' EXIT
 
-helm template envoy-gateway-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+deadline 300 helm template envoy-gateway-crds oci://docker.io/envoyproxy/gateway-crds-helm \
   --version 1.10.0 \
   --values "${SCRIPT_DIR}/values.yaml" >"${MANIFEST}"
 

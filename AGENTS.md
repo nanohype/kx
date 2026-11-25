@@ -74,7 +74,7 @@ distance count only gestures at.
 ## Add an addon to the local stack
 
 1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
-2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`; every kubectl call with `--request-timeout`, every `wait`, `rollout status` and `delete` with `--timeout` as well, and docker or kind under `cluster/deadline.sh`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
+2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`, run under `cluster/deadline.sh` with a limit past that timeout; every kubectl call with `--request-timeout`, every `wait`, `rollout status` and `delete` with `--timeout` as well, and docker or kind under `cluster/deadline.sh`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
 3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
 4. Record the pin in `stack/chart-provenance.json` — repo URL and a description. `scripts/check-chart-deprecation.py` fails a pin with no record, and a record naming no pin.
 5. If the catalog does not pin this chart, declare the divergence in `stack/upstream.json` with a reason and a `kind` of `kx-only`. `scripts/mirror-check.py` fails on any difference from the catalog that is not declared.
@@ -129,7 +129,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 
 - `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context, in `.kube/config` at the repository root. kx never reads, writes or switches the context of your own kubeconfig, and every kx task and script refuses to act on any cluster but that one
 - Default node count: 1 control-plane + 2 workers
-- Local ingress lands at `localhost:80` / `localhost:443`: kind maps those loopback ports to the NodePorts of Cilium's shared Ingress Service. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
+- Local ingress lands at `localhost:80` / `localhost:443`: kind maps both loopback ports to the one port Cilium's shared Ingress listener binds on the control-plane node's host network, which serves plain HTTP and TLS alike. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
 - `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
 

@@ -1,0 +1,13 @@
+# endpointSelector must be a label selector, not a string. Rejected by the
+# vendored Cilium CRD, which is the only schema this kind has. Valid in every
+# other respect, so the type is the only thing it can be rejected for.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: wrong-type
+spec:
+  endpointSelector: everything
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: client

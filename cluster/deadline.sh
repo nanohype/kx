@@ -4,10 +4,14 @@
 # Runs COMMAND with a bound on how long it may take, for the tools that have no
 # bound of their own: docker, kind, helm's read verbs, and the aws CLI resolving
 # credentials, which can wait on an SSO or STS endpoint its own timeouts do not
-# cover. kubectl takes --request-timeout, helm's release verbs take --timeout and
-# curl takes --max-time, so those carry their own flag instead. A command with no
-# bound waits on a stuck daemon or an unresponsive API server until somebody
-# notices, and the step it hangs reads exactly like a slow one.
+# cover. kubectl takes --request-timeout and curl takes --max-time, so those
+# carry their own flag instead. helm's installs and renders run under a deadline
+# as well: their --timeout starts once the chart has arrived, so it bounds the
+# wait on the cluster and leaves the chart fetch before it unbounded. Their limit
+# outlasts that --timeout, by the five minutes kx allows the transfer, so the
+# deadline never stops a wait helm was told to make. A command with no bound
+# waits on a stuck daemon or an unresponsive API server until somebody notices,
+# and the step it hangs reads exactly like a slow one.
 #
 # Sourced by a script that needs it, after the kubeconfig binding:
 #

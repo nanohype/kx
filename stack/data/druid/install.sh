@@ -26,6 +26,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 # Path to the eks-gitops Druid chart. Resolves relative to kx's repo location
 # (kx/stack/data/druid → ../../../../eks-gitops). Override via env if your repos
@@ -106,7 +108,7 @@ kubectl --request-timeout=60s -n druid wait --for=condition=Complete job/druid-m
 
 # ---- 5. render chart, filter EKS-only resources, apply ----
 echo "==> rendering Druid chart through post-renderer + applying"
-helm template ds "${CHART_DIR}" \
+deadline 300 helm template ds "${CHART_DIR}" \
   --namespace druid \
   --values "${CHART_BASE_VALUES}" \
   --values "${SCRIPT_DIR}/values-local.yaml" \

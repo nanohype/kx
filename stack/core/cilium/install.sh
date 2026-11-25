@@ -34,7 +34,7 @@ elif ! printf '%s' "${nginx_status}" | grep -q 'release: not found'; then
 fi
 kubectl --request-timeout=60s delete namespace ingress-nginx --ignore-not-found --timeout=5m
 
-helm upgrade --install cilium cilium/cilium \
+deadline 900 helm upgrade --install cilium cilium/cilium \
   --namespace kube-system \
   --version 1.19.6 \
   --values "${SCRIPT_DIR}/values.yaml" \

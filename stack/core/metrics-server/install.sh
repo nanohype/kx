@@ -4,11 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update >/dev/null
 helm repo update metrics-server >/dev/null
 
-helm upgrade --install metrics-server metrics-server/metrics-server \
+deadline 900 helm upgrade --install metrics-server metrics-server/metrics-server \
   --namespace kube-system \
   --version 3.14.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
