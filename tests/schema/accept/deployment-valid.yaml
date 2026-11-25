@@ -1,0 +1,30 @@
+# The shapes Kubernetes accepts that its OpenAPI document spells narrowly: a
+# quantity as a number, an int-or-string either way, and an optional field set
+# to null. Held to the vendored built-in schema for the version the nodes run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: good
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: good
+  template:
+    metadata:
+      labels:
+        app: good
+    spec:
+      nodeSelector: null
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources:
+            limits:
+              cpu: 1
+              memory: 64Mi

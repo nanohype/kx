@@ -1,5 +1,11 @@
 extends: default
 
+# Vendored verbatim from upstream releases by scripts/vendor-schemas.py. The
+# schema gate checks each file's sha256 against schemas/sources.json, so
+# reformatting one to this style would break the record it is held to.
+ignore: |
+  schemas/
+
 rules:
   line-length:
     max: 200
