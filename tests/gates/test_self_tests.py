@@ -32,12 +32,25 @@ SELF_TESTS = {
 }
 
 
+# Scripts with no self-test of their own, each with the module here that tests
+# it. vendor-schemas.py writes schemas/ rather than judging the tree, so it has
+# no verdict to prove before reporting one; its tests serve it a release.
+TESTED_HERE = {
+    "vendor-schemas.py": "test_vendor_schemas.py",
+}
+
+
 def test_every_gate_is_run_here():
     gates = {path.name for path in (ROOT / "scripts").glob("*.py")}
-    assert gates - set(SELF_TESTS) == set(), (
-        "a gate under scripts/ has no self-test run here, so nothing measures it; add it to "
-        "SELF_TESTS with the function that proves it")
-    assert set(SELF_TESTS) - gates == set(), "SELF_TESTS names a gate that is not under scripts/"
+    reached = set(SELF_TESTS) | set(TESTED_HERE)
+    assert gates - reached == set(), (
+        "a script under scripts/ is neither self-tested nor tested here, so nothing measures "
+        "it; add it to SELF_TESTS with the function that proves it, or to TESTED_HERE with "
+        "its tests")
+    assert reached - gates == set(), "a table here names a script that is not under scripts/"
+    assert set(SELF_TESTS) & set(TESTED_HERE) == set(), "a script is listed in both tables"
+    here = pathlib.Path(__file__).parent
+    assert [m for m in TESTED_HERE.values() if not (here / m).is_file()] == []
 
 
 @pytest.mark.parametrize("gate", sorted(SELF_TESTS))
