@@ -23,7 +23,7 @@ IDENTITY = {"GIT_AUTHOR_NAME": "kx-test", "GIT_AUTHOR_EMAIL": "kx-test@example.i
 
 def git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
-                   env={**os.environ, **IDENTITY})
+                   env={**os.environ, **IDENTITY}, timeout=60)
 
 
 def change(tmp_path, files: dict[str, str]):
