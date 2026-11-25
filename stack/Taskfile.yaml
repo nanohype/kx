@@ -44,30 +44,30 @@ tasks:
     cmds:
       # Order matters:
       #   1. Gateway API CRDs first — cilium's gatewayAPI controller registers against them at startup
-      #   2. CNI (cilium) — nodes go from NotReady to Ready
+      #   2. CNI (cilium) — nodes go from NotReady to Ready; also the Ingress and Gateway API controller
       #   3. prometheus-operator-crds — any chart that creates ServiceMonitor/PodMonitor relies on these
       #   4. cert-manager + trust-manager — TLS issuance + CA bundle distribution
       #   5. metrics-server — kubectl top, HPA inputs
-      #   6. ingress-nginx + reloader + argocd
+      #   6. reloader + argocd
       - bash {{.TASKFILE_DIR}}/core/gateway-api-crds/install.sh
       - bash {{.TASKFILE_DIR}}/core/cilium/install.sh
       - bash {{.TASKFILE_DIR}}/core/prometheus-operator-crds/install.sh
       - bash {{.TASKFILE_DIR}}/core/cert-manager/install.sh
       - bash {{.TASKFILE_DIR}}/core/trust-manager/install.sh
       - bash {{.TASKFILE_DIR}}/core/metrics-server/install.sh
-      - bash {{.TASKFILE_DIR}}/core/ingress-nginx/install.sh
       - bash {{.TASKFILE_DIR}}/core/reloader/install.sh
       - bash {{.TASKFILE_DIR}}/core/argo-cd/install.sh
 
   status:
     desc: Show helm releases across all namespaces, plus the CRD addon helm cannot list
     cmds:
-      - helm list -A
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 helm list -A
       # envoy-gateway-crds is applied without a helm release (its chart is too
       # large to store as one), so `helm list` never shows it. Counted here
       # instead; a failed CRD listing fails the task rather than reading as 0.
       - |
         set -eo pipefail
+        export KUBECONFIG='{{.ROOT_DIR}}/.kube/config'
         crds="$(kubectl get crd -o name --request-timeout=30s)"
         n="$(printf '%s\n' "$crds" | grep -c '\.gateway\.envoyproxy\.io$' || [ $? -eq 1 ])"
         echo

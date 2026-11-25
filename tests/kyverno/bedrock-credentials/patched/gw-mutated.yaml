@@ -20,9 +20,5 @@ spec:
   containers:
     - name: envoy
       image: docker.io/envoyproxy/envoy:distroless-v1.36.0
-      envFrom:
-        - secretRef:
-            name: kx-bedrock-credentials
-            optional: true
     - name: shutdown-manager
       image: docker.io/envoyproxy/gateway:v1.6.0

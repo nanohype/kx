@@ -9,3 +9,7 @@
 # directory is not harmless here: several checks in this org read
 # `git status --porcelain` to decide whether a tree is clean before acting.
 __pycache__/
+
+# The cluster's kubeconfig. `task up` writes it and `task down` removes it;
+# it holds a client key for the local cluster, which is never something to commit.
+/.kube/

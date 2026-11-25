@@ -12,6 +12,11 @@
 # registry. Nothing else in kx installs gateway.envoyproxy.io; the AI layer's
 # kinds are aigateway.envoyproxy.io, which the anchored pattern does not match.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 NS=envoy-gateway-system
 
@@ -19,17 +24,17 @@ NS=envoy-gateway-system
 # before it is tested: a substitution inside `[[ -n ... ]]` that fails is
 # ignored by set -e and reads as empty, which here would mean "already gone"
 # for a cluster that could not answer. Assigned, a failed read stops the script.
-release="$(helm list -n "${NS}" -q --filter '^envoy-gateway$')"
+release="$(deadline 60 helm list -n "${NS}" -q --filter '^envoy-gateway$')"
 if [[ -n "${release}" ]]; then
   echo "envoy-gateway is still installed — uninstall it first; its CRDs outlive it." >&2
   exit 1
 fi
 # helm uninstall returns before the Deployment it deleted is gone, so a
 # controller that is on its way out is waited for rather than refused.
-deploy="$(kubectl get deploy envoy-gateway -n "${NS}" --ignore-not-found \
+deploy="$(kubectl --request-timeout=60s get deploy envoy-gateway -n "${NS}" --ignore-not-found \
   -o name --request-timeout=60s)"
 if [[ -n "${deploy}" ]]; then
-  if ! kubectl wait --for=delete "${deploy}" -n "${NS}" --timeout=120s; then
+  if ! kubectl --request-timeout=60s wait --for=delete "${deploy}" -n "${NS}" --timeout=120s; then
     echo "the envoy-gateway Deployment is still running — not deleting the CRDs it watches." >&2
     exit 1
   fi
@@ -46,5 +51,5 @@ if [[ "${rc}" -gt 1 ]]; then
   exit "${rc}"
 fi
 if [[ -n "${owned}" ]]; then
-  xargs kubectl delete --ignore-not-found --timeout=120s <<<"${owned}"
+  xargs kubectl --request-timeout=60s delete --ignore-not-found --timeout=120s <<<"${owned}"
 fi

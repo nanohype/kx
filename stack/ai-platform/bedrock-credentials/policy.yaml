@@ -202,20 +202,19 @@ spec:
     # retrieve AWS credentials ... no EC2 IMDS role found" from a container
     # nobody was looking at.
     #
-    # Each container is found by name, as the ClusterPolicy's `(name):` anchor
-    # found it: a pod without one gets nothing added for it, never a new
-    # container. -1 is the absent case.
+    # Only the sidecar. Envoy and shutdown-manager sign nothing and need no AWS
+    # identity, and a credential in a container that never uses it is exposure
+    # with no use. Should a release move signing back into the proxy, the
+    # reference moves with it.
+    #
+    # The sidecar is found by name, as the ClusterPolicy's `(name):` anchor
+    # found it: a pod without one gets nothing added, never a new container.
+    # -1 is the absent case.
     - name: initContainers
       expression: object.spec.?initContainers.orValue([])
     - name: extproc
       expression: variables.initContainers.map(c, c.name).indexOf('ai-gateway-extproc')
-    # Envoy keeps them too. It needs no AWS identity for the Bedrock call, but
-    # the reference costs nothing and covers a future aigw release moving
-    # signing back into the proxy. shutdown-manager sits beside it and needs
-    # nothing.
-    - name: envoy
-      expression: object.spec.containers.map(c, c.name).indexOf('envoy')
-    # Whether a container already carries the reference, so a pod mutated once
+    # Whether the sidecar already carries the reference, so a pod mutated once
     # is not given it twice — by a reinvocation, or by a template that already
     # names it.
     - name: extprocHasRef
@@ -223,17 +222,12 @@ spec:
         variables.extproc >= 0 &&
         variables.initContainers[variables.extproc].?envFrom.orValue([]).exists(e,
           e.?secretRef.?name.orValue('') == variables.secret)
-    - name: envoyHasRef
-      expression: >-
-        variables.envoy >= 0 &&
-        object.spec.containers[variables.envoy].?envFrom.orValue([]).exists(e,
-          e.?secretRef.?name.orValue('') == variables.secret)
   # Appended, never replacing. The ClusterPolicy's strategic-merge patch
   # replaced the container's whole envFrom list, because envFrom has no merge
   # key — a container that arrived with an envFrom entry of its own lost it.
-  # Envoy Gateway renders neither container with one, so on every pod this
-  # policy has actually met the result is the same list; where one does carry
-  # an entry, it is kept and the reference added after it.
+  # Envoy Gateway renders the sidecar without one, so on every pod this policy
+  # has actually met the result is the same list; where it does carry an entry,
+  # it is kept and the reference added after it.
   mutations:
     - patchType: JSONPatch
       jsonPatch:
@@ -248,19 +242,6 @@ spec:
               : JSONPatch{
                   op: "add",
                   path: "/spec/initContainers/" + string(variables.extproc) + "/envFrom",
-                  value: [variables.ref]
-                }
-          ]) +
-          (variables.envoy < 0 || variables.envoyHasRef ? [] : [
-            has(object.spec.containers[variables.envoy].envFrom)
-              ? JSONPatch{
-                  op: "add",
-                  path: "/spec/containers/" + string(variables.envoy) + "/envFrom/-",
-                  value: variables.ref
-                }
-              : JSONPatch{
-                  op: "add",
-                  path: "/spec/containers/" + string(variables.envoy) + "/envFrom",
                   value: [variables.ref]
                 }
           ])

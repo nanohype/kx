@@ -23,8 +23,12 @@
 # because helm reuses the previous release's method when none is given.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
-helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+deadline 900 helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
   --namespace envoy-gateway-system \
   --create-namespace \
   --version 1.10.0 \
