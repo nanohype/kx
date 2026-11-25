@@ -81,11 +81,6 @@
       "description": "Helm chart for the Grafana Operator",
       "deprecated": false
     },
-    "ingress-nginx": {
-      "repo": "https://kubernetes.github.io/ingress-nginx",
-      "description": "Ingress controller for Kubernetes using NGINX as a reverse proxy and load balancer",
-      "deprecated": false
-    },
     "keda": {
       "repo": "https://kedacore.github.io/charts",
       "description": "Event-based autoscaler for workloads on Kubernetes",

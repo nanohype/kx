@@ -11,7 +11,7 @@ tasks:
   disable:
     desc: Uninstall argo-platform slice
     cmds:
-      - helm uninstall -n argo argo-workflows || true
-      - helm uninstall -n argo argo-rollouts  || true
-      - helm uninstall -n argo argo-events    || true
-      - kubectl delete ns argo --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n argo argo-workflows || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n argo argo-rollouts  || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n argo argo-events    || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns argo --ignore-not-found

@@ -19,10 +19,10 @@ tasks:
   disable:
     desc: Uninstall observability slice
     cmds:
-      - helm uninstall -n monitoring opencost            || true
-      - helm uninstall -n monitoring grafana-operator    || true
-      - helm uninstall -n monitoring otel-collector      || true
-      - helm uninstall -n monitoring tempo               || true
-      - helm uninstall -n monitoring loki                || true
-      - helm uninstall -n monitoring kube-prometheus-stack || true
-      - kubectl delete ns monitoring --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring opencost            || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring grafana-operator    || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring otel-collector      || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring tempo               || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring loki                || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring kube-prometheus-stack || true
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns monitoring --ignore-not-found

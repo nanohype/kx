@@ -89,6 +89,36 @@ gatewayAPI:
   enableAlpn: true
   enableAppProtocol: true
 
+# Ingress controller — the local role aws-load-balancer-controller plays on a
+# real cluster, served by the same Envoy as the Gateway API above. Default
+# class, so an Ingress that names none is served too.
+#
+# One shared Envoy listener for every Ingress, on the host network of the node
+# labelled ingress-ready: the control-plane node, where cluster/kind-config.yaml
+# maps localhost:80 and localhost:443 on loopback. Both host ports land on this
+# one listener port, which serves plain HTTP and TLS alike and tells the two
+# apart by the TLS handshake. Being unprivileged, the port needs no bind-service
+# capability on Envoy. It is the chart's default, stated here because
+# kind-config.yaml maps to it and check-slice-integrity.py holds the two files to
+# each other.
+#
+# The shared Service the chart still renders is a ClusterIP in this mode, and an
+# Ingress carries no address in its status, since nothing allocates a
+# load-balancer IP on kind. A tool that waits for one waits forever.
+#
+# TLS passthrough is per Ingress, with the ingress.cilium.io/tls-passthrough
+# annotation, rather than a controller flag.
+ingressController:
+  enabled: true
+  default: true
+  loadbalancerMode: shared
+  hostNetwork:
+    enabled: true
+    sharedListenerPort: 8080
+    nodes:
+      matchLabels:
+        ingress-ready: "true"
+
 # ─── Resource bounds ────────────────────────────────────────────────────────
 # Follows eks-gitops' cilium bounds in SHAPE, not in numbers. The chart ships
 # `resources: {}` for every component, so unset, the agent and the Envoy proxy

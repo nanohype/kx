@@ -35,9 +35,11 @@ nodeCollector:
       operator: Exists
       effect: NoSchedule
 
-# On by default, for the reason the ingress-nginx values file states: the CRD is
-# core, so this applies on every cluster and is inert until a Prometheus reads
-# it. trivy-operator's findings are the one signal in this slice that is worth
-# nothing if nobody is looking.
+# On by default. prometheus-operator-crds is a core addon, so the ServiceMonitor
+# CRD exists on every kx cluster and this applies whether or not the
+# observability slice is enabled — inert without a Prometheus to read it, and
+# picked up the moment one arrives, because kube-prometheus-stack sets
+# serviceMonitorSelectorNilUsesHelmValues: false. trivy-operator's findings are
+# the one signal in this slice that is worth nothing if nobody is looking.
 serviceMonitor:
   enabled: true

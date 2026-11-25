@@ -69,8 +69,11 @@ REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
 # Both verbs, because a chart a slice renders and applies is pinned exactly as
 # one it installs as a release: envoy-gateway-crds runs `helm template` into a
 # server-side apply, since its chart is too large to store as a release, and its
-# pin needs a provenance record like any other.
-HELM_INSTALL = re.compile(r"^[ \t]*helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M)
+# pin needs a provenance record like any other. Either runs under the
+# `deadline N` that bounds its chart fetch, which is read through.
+HELM_INSTALL = re.compile(
+    r"^[ \t]*(?:deadline[ \t]+\d+[ \t]+)?helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M
+)
 VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
 
 
@@ -318,10 +321,26 @@ def self_test() -> int:
         rendered = pins(pathlib.Path(tmp))
     p_rendered = {**real_pins, **rendered}
 
+    # A pin under the deadline every installer runs its install under, read the
+    # same way, for the same reason.
+    with tempfile.TemporaryDirectory(prefix="provenance-") as tmp:
+        script = pathlib.Path(tmp) / "stack" / "s" / "deadlined" / "install.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text(
+            "helm repo add x https://x.example --force-update >/dev/null\n"
+            "deadline 900 helm upgrade --install d x/deadlined-chart \\\n"
+            "  --version 1.0.0 \\\n"
+            "  --wait --timeout 10m\n"
+        )
+        deadlined = pins(pathlib.Path(tmp))
+    p_deadlined = {**real_pins, **deadlined}
+
     breaks = [
         ("a pinned chart with no provenance record", p_extra, real_records),
         ("a chart pinned by helm template with no provenance record",
          p_rendered, real_records),
+        ("a chart pinned under deadline with no provenance record",
+         p_deadlined, real_records),
         ("a record for a chart no longer pinned", real_pins, r_stale),
         ("the recorded repository differs from the pin", real_pins, r_repo),
         ("a chart recorded deprecated but still pinned", real_pins, r_dep),
