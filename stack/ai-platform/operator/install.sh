@@ -12,6 +12,10 @@
 # so nothing here needs a serving certificate.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../../cluster/kubeconfig.sh
+. "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 # Sibling eks-agent-platform checkout. Resolves relative to kx's repo location
 # (kx/stack/ai-platform/operator → ../../../../eks-agent-platform), mirroring
@@ -34,12 +38,12 @@ echo "Building operator image ${IMAGE} from ${OPERATOR_REPO}/operators ..."
 # head succeeded — aborting the script before it builds anything. An absent
 # image is the normal first-run state, and it leaves BEFORE empty, which differs
 # from any real id and so rolls the Deployment.
-BEFORE="$(docker image inspect --format '{{.Id}}' "${IMAGE}" 2>/dev/null | head -1 || true)"
-docker build -t "${IMAGE}" --build-arg VERSION=dev "${OPERATOR_REPO}/operators"
-AFTER="$(docker image inspect --format '{{.Id}}' "${IMAGE}")"
-kind load docker-image "${IMAGE}" --name "${CLUSTER}"
+BEFORE="$(deadline 60 docker image inspect --format '{{.Id}}' "${IMAGE}" 2>/dev/null | head -1 || true)"
+deadline 1200 docker build -t "${IMAGE}" --build-arg VERSION=dev "${OPERATOR_REPO}/operators"
+AFTER="$(deadline 60 docker image inspect --format '{{.Id}}' "${IMAGE}")"
+deadline 600 kind load docker-image "${IMAGE}" --name "${CLUSTER}"
 
-kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace eks-agent-platform --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # Helm installs a chart's crds/ on first install and never touches them again
 # on upgrade. So a CRD added after this cluster's first install never arrives,
@@ -51,9 +55,9 @@ kubectl create namespace eks-agent-platform --dry-run=client -o yaml | kubectl a
 # Applying them before the upgrade is what makes `task stack:ai-platform:enable`
 # idempotent across a chart that grows.
 echo "Applying CRDs (helm does not upgrade them) ..."
-kubectl apply -f "${OPERATOR_REPO}/charts/operator/crds/"
+kubectl --request-timeout=60s apply -f "${OPERATOR_REPO}/charts/operator/crds/"
 
-helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
+deadline 480 helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/operator" \
   --namespace eks-agent-platform \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 180s
@@ -68,8 +72,8 @@ helm upgrade --install eks-agent-platform-operator "${OPERATOR_REPO}/charts/oper
 # safe to re-run.
 if [ "${BEFORE}" != "${AFTER}" ]; then  # empty BEFORE means there was no image
   echo "Operator image changed — rolling the Deployment onto it ..."
-  kubectl -n eks-agent-platform rollout restart deployment/eks-agent-platform-operator
-  kubectl -n eks-agent-platform rollout status deployment/eks-agent-platform-operator --timeout=180s
+  kubectl --request-timeout=60s -n eks-agent-platform rollout restart deployment/eks-agent-platform-operator
+  kubectl --request-timeout=60s -n eks-agent-platform rollout status deployment/eks-agent-platform-operator --timeout=180s
 else
   echo "Operator image unchanged (${AFTER#sha256:}) — nothing to roll."
 fi

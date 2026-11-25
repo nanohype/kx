@@ -1,0 +1,7 @@
+# Every script that reaches the cluster sources cluster/kubeconfig.sh, and
+# names it for shellcheck with a `# shellcheck source=` directive relative to
+# the script itself. These two settings let shellcheck follow that directive
+# however it is invoked: one file or the whole tree, from any directory. A
+# directive naming the wrong path fails as SC1091 rather than passing unread.
+external-sources=true
+source-path=SCRIPTDIR

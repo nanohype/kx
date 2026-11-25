@@ -11,13 +11,15 @@
 #   inject-local-bedrock-credentials (MutatingPolicy), every row asserting the
 #   patched pod rather than only a verdict, since a MutatingPolicy reports pass
 #   whether or not it changed anything
-#     gw-plain            → the reference on the sidecar and on envoy
+#     gw-plain            → the reference on the sidecar, and on nothing else
 #     gw-other-envfrom    → appended after the sidecar's own entry, which stays
-#     gw-no-extproc       → envoy only; no sidecar is invented
-#     gw-envoy-only       → the sidecar only; envoy already had it
+#     gw-no-extproc       → unchanged: no sidecar to sign, none invented, and
+#                           envoy given nothing in its place
+#     gw-envoy-only       → the sidecar's reference added; envoy's, from before,
+#                           left as it was
 #     gw-mutated          → unchanged: gw-plain's output admitted again
-#     gw-reordered        → the reference at the index each name was found at,
-#                           with another container ahead of each
+#     gw-reordered        → the reference at the index the sidecar was found at,
+#                           with another init container ahead of it
 #     gw-outside          → skipped: a gateway outside the tenants-* namespaces
 #     gw-kx-tenants       → skipped: the prefix is anchored, not a substring
 #     app-with-envoy      → skipped: containers named like the gateway's, in a

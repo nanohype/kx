@@ -27,10 +27,11 @@ task stack:observability:enable        # enable an opt-in slice
 task down                              # tear down
 ```
 
-Target the local cluster:
+Target the local cluster through kx's own kubeconfig, which `task up` writes and which holds the `kind-kx`
+context alone:
 
 ```sh
-kind export kubeconfig --name kx
+export KUBECONFIG=/path/to/kx/.kube/config
 kubectl create namespace my-project
 helm install my-app /path/to/<app>/chart -n my-project -f /path/to/<app>/chart/values-development.yaml
 ```
@@ -48,6 +49,8 @@ a workload you bring here behaves:
   profile into each `tenants-*` namespace. That slice states its own fidelity gap: one
   credential is shared by every local tenant, so local tenants are not isolated from each
   other on the AWS side and a local Bedrock call is not a test of the production authz path.
+  It takes only a session that stops working by itself, refusing credentials with no
+  expiry, and `docs/threat-model.md` states what it leaves as residual risk.
 - **Druid post-renderer**: `stack/data/druid/` runs the production chart (`eks-gitops/catalog/druid/chart/`) unmodified through a post-renderer that strips EKS-only resources (Karpenter `NodePool`/`EC2NodeClass`, `ExternalSecret`) and EKS node-selector labels.
 
 A chart that runs under kx is one that renders and schedules against the same
@@ -71,7 +74,7 @@ distance count only gestures at.
 ## Add an addon to the local stack
 
 1. Check the same addon's shape in [`eks-gitops/addons/<category>/<name>/`](../eks-gitops/addons/) — that's the production reference.
-2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
+2. Add `kx/stack/<slice>/<name>/` with an `install.sh` (explicit `helm repo add` + `helm upgrade --install`, version pinned at add time, explicit `--timeout`, run under `cluster/deadline.sh` with a limit past that timeout; every kubectl call with `--request-timeout`, every `wait`, `rollout status` and `delete` with `--timeout` as well, and docker or kind under `cluster/deadline.sh`) and, unless the chart's defaults are taken whole, a `values.yaml` of local-only deltas — don't copy eks-gitops values; those assume IRSA, ENI, NLB. Extra files are for manifests that `install.sh` applies itself and helper programs it runs; nothing else belongs in the directory. A helper in Python is a `.py` file, never a `python3 -c` string — the integrity gate refuses the string form.
 3. Wire the addon into `kx/stack/<slice>/Taskfile.yaml`'s `enable` (install) and `disable` (uninstall) commands.
 4. Record the pin in `stack/chart-provenance.json` — repo URL and a description. `scripts/check-chart-deprecation.py` fails a pin with no record, and a record naming no pin.
 5. If the catalog does not pin this chart, declare the divergence in `stack/upstream.json` with a reason and a `kind` of `kx-only`. `scripts/mirror-check.py` fails on any difference from the catalog that is not declared.
@@ -112,7 +115,7 @@ gateway holds a credential. To take it end to end:
 ```sh
 task stack:security:enable                  # bedrock-credentials needs Kyverno
 task stack:ai-platform:credentials          # clone a local AWS profile into each tenant namespace
-task stack:ai-platform:credentials:verify   # assert every gateway data plane carries it
+task stack:ai-platform:credentials:verify   # assert every gateway data plane carries it, and when it expires
 task stack:ai-platform:conformance PLATFORM=<name>   # send real traffic through the gateway
 ```
 
@@ -124,9 +127,9 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 
 ## Conventions
 
-- `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context
+- `task up` always produces a cluster named `kx` with the `kind-kx` kubeconfig context, in `.kube/config` at the repository root. kx never reads, writes or switches the context of your own kubeconfig, and every kx task and script refuses to act on any cluster but that one
 - Default node count: 1 control-plane + 2 workers
-- Local ingress lands at `localhost:80` / `localhost:443` via ingress-nginx host-port mapping
+- Local ingress lands at `localhost:80` / `localhost:443`: kind maps both loopback ports to the one port Cilium's shared Ingress listener binds on the control-plane node's host network, which serves plain HTTP and TLS alike. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
 - `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
 
