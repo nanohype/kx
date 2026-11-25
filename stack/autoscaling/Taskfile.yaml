@@ -16,5 +16,5 @@ tasks:
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n keda keda                || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n vpa goldilocks           || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n vpa vpa                  || true
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns keda --ignore-not-found
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns vpa --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns keda --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns vpa --ignore-not-found

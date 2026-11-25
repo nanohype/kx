@@ -5,13 +5,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts --force-update >/dev/null
 helm repo update vmware-tanzu >/dev/null
 
-kubectl create namespace velero --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace velero --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
-helm upgrade --install velero vmware-tanzu/velero \
+deadline 900 helm upgrade --install velero vmware-tanzu/velero \
   --namespace velero \
   --version 12.2.5 \
   --values "${SCRIPT_DIR}/values.yaml" \

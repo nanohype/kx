@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 PLATFORM="${PLATFORM:?set PLATFORM to the Platform whose gateway to probe}"
 ROUTE="${ROUTE:-primary}"
@@ -39,7 +41,7 @@ fi
 # failure three layers down.
 # Every match, not the first. Taking one of several and saying nothing about
 # the rest reports a pass for gateways this run never sent a byte through.
-read -r -a GATEWAYS <<<"$(kubectl get modelgateway -n "${NAMESPACE}" \
+read -r -a GATEWAYS <<<"$(kubectl --request-timeout=60s get modelgateway -n "${NAMESPACE}" \
   -o jsonpath="{.items[?(@.spec.platformRef.name=='${PLATFORM}')].metadata.name}")"
 if [ "${#GATEWAYS[@]}" -eq 0 ]; then
   echo "no ModelGateway in ${NAMESPACE} references Platform '${PLATFORM}'" >&2
@@ -52,10 +54,10 @@ if [ "${#GATEWAYS[@]}" -gt 1 ]; then
 fi
 GATEWAY="${GATEWAYS[0]}"
 
-PHASE="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}')"
+PHASE="$(kubectl --request-timeout=60s get modelgateway "${GATEWAY}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}')"
 echo "ModelGateway ${GATEWAY} (Platform ${PLATFORM}) reports phase=${PHASE:-<none>}"
 echo "Routes it publishes:"
-ROUTES="$(kubectl get modelgateway "${GATEWAY}" -n "${NAMESPACE}" \
+ROUTES="$(kubectl --request-timeout=60s get modelgateway "${GATEWAY}" -n "${NAMESPACE}" \
   -o jsonpath='{.status.routes}')"
 if [ -z "${ROUTES}" ]; then
   echo "  (none — the operator has not published a route for this gateway)" >&2
@@ -107,6 +109,10 @@ if [ "${ready}" -ne 1 ]; then
   exit 1
 fi
 
+# The suite sends real model calls through the gateway, so a gateway that
+# accepts and never answers would hold it open. Ten minutes is far past a
+# passing run and bounds a stuck one. Exported rather than set on the command,
+# so the suite deadline starts in the background reads them for certain.
 cd "${REPO}"
-GATEWAY_ENDPOINT="http://localhost:${LOCAL_PORT}" GATEWAY_ROUTE="${ROUTE}" \
-  pnpm --filter @eks-agent/gateway-conformance --silent conformance
+export GATEWAY_ENDPOINT="http://localhost:${LOCAL_PORT}" GATEWAY_ROUTE="${ROUTE}"
+deadline 600 pnpm --filter @eks-agent/gateway-conformance --silent conformance

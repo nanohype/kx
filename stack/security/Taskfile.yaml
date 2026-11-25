@@ -14,6 +14,6 @@ tasks:
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n falco falco                   || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n trivy-system trivy-operator   || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n kyverno kyverno               || true
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns falco --ignore-not-found
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns trivy-system --ignore-not-found
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns kyverno --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns falco --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns trivy-system --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns kyverno --ignore-not-found

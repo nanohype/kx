@@ -23,11 +23,11 @@ tasks:
         set -e
         export KUBECONFIG='{{.ROOT_DIR}}/.kube/config'
         mkdir -p '{{.ROOT_DIR}}/.kube'
-        if kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
+        if bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 kind get clusters 2>/dev/null | grep -qx "{{.CLUSTER_NAME}}"; then
           echo "cluster {{.CLUSTER_NAME}} already exists"
-          kind export kubeconfig --name {{.CLUSTER_NAME}}
+          bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 kind export kubeconfig --name {{.CLUSTER_NAME}}
         else
-          kind create cluster --name {{.CLUSTER_NAME}} --config {{.KIND_CONFIG}}
+          bash '{{.ROOT_DIR}}/cluster/deadline.sh' 900 kind create cluster --name {{.CLUSTER_NAME}} --config {{.KIND_CONFIG}}
         fi
       - bash {{.TASKFILE_DIR}}/registry.sh
       - bash {{.TASKFILE_DIR}}/coredns-patch.sh
@@ -35,11 +35,11 @@ tasks:
   down:
     desc: Delete the cluster, its kubeconfig and the local registry.
     cmds:
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kind delete cluster --name {{.CLUSTER_NAME}}
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' bash '{{.ROOT_DIR}}/cluster/deadline.sh' 300 kind delete cluster --name {{.CLUSTER_NAME}}
       # Credentials for a cluster that no longer exists are only something to
       # leak, and an absent file is what the scripts' binding refuses on.
       - rm -f '{{.ROOT_DIR}}/.kube/config'
-      - docker rm -f kx-registry 2>/dev/null || true
+      - bash '{{.ROOT_DIR}}/cluster/deadline.sh' 60 docker rm -f kx-registry 2>/dev/null || true
 
   reset:
     desc: Delete + recreate the cluster from scratch.
@@ -50,6 +50,6 @@ tasks:
   status:
     desc: Nodes + pods across all namespaces.
     cmds:
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --context kind-{{.CLUSTER_NAME}} get nodes -o wide
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --context kind-{{.CLUSTER_NAME}} get nodes -o wide
       - echo
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --context kind-{{.CLUSTER_NAME}} get pods -A
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --context kind-{{.CLUSTER_NAME}} get pods -A

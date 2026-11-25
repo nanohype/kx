@@ -25,13 +25,13 @@ GATEWAY_API_SHA256="e6d2d3407717f54b579b22ad4d164b6863895b3524f21250b0da0c1ff9a0
 # already present, drop them (along with the policy) so the experimental install lands clean.
 # Safe on first install (no-op deletes). On re-runs of experimental, this is a no-op too —
 # the policy permits experimental→experimental updates.
-if kubectl get crd gatewayclasses.gateway.networking.k8s.io \
+if kubectl --request-timeout=60s get crd gatewayclasses.gateway.networking.k8s.io \
    -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/channel}' 2>/dev/null \
    | grep -qx standard; then
   echo "==> existing gateway-api CRDs are standard-channel; removing before experimental install"
-  kubectl delete validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io --ignore-not-found
-  kubectl delete validatingadmissionpolicy        safe-upgrades.gateway.networking.k8s.io --ignore-not-found
-  kubectl get crd -o name | grep '\.gateway\.networking\.k8s\.io$' | xargs -r kubectl delete
+  kubectl --request-timeout=60s --timeout=5m delete validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io --ignore-not-found
+  kubectl --request-timeout=60s --timeout=5m delete validatingadmissionpolicy        safe-upgrades.gateway.networking.k8s.io --ignore-not-found
+  kubectl --request-timeout=60s get crd -o name | grep '\.gateway\.networking\.k8s\.io$' | xargs -r kubectl --request-timeout=60s --timeout=5m delete
 fi
 
 # Fetched to a file and verified before it reaches the API server, rather than

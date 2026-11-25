@@ -11,13 +11,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add grafana-community https://grafana-community.github.io/helm-charts --force-update >/dev/null
 helm repo update grafana-community >/dev/null
 
-kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
-helm upgrade --install loki grafana-community/loki \
+deadline 900 helm upgrade --install loki grafana-community/loki \
   --namespace monitoring \
   --version 21.2.3 \
   --values "${SCRIPT_DIR}/values.yaml" \

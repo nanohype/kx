@@ -87,5 +87,5 @@ tasks:
   argocd:initial-password:
     desc: Print the ArgoCD admin password
     cmds:
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
       - echo

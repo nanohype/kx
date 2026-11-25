@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 helm repo add cilium https://helm.cilium.io --force-update >/dev/null
 helm repo update cilium >/dev/null
@@ -21,7 +23,7 @@ helm repo update cilium >/dev/null
 # unreachable cluster as well, and reading that as "not installed" would install
 # Cilium's controller beside a release that is still serving.
 retired_nginx=false
-if nginx_status="$(helm status ingress-nginx --namespace ingress-nginx 2>&1)"; then
+if nginx_status="$(deadline 60 helm status ingress-nginx --namespace ingress-nginx 2>&1)"; then
   echo "Retiring the ingress-nginx release that Cilium's Ingress controller replaces ..."
   helm uninstall ingress-nginx --namespace ingress-nginx --wait --timeout 5m
   retired_nginx=true
@@ -30,9 +32,9 @@ elif ! printf '%s' "${nginx_status}" | grep -q 'release: not found'; then
   printf '%s\n' "${nginx_status}" | sed 's/^/  /' >&2
   exit 1
 fi
-kubectl delete namespace ingress-nginx --ignore-not-found --timeout=5m
+kubectl --request-timeout=60s delete namespace ingress-nginx --ignore-not-found --timeout=5m
 
-helm upgrade --install cilium cilium/cilium \
+deadline 900 helm upgrade --install cilium cilium/cilium \
   --namespace kube-system \
   --version 1.19.6 \
   --values "${SCRIPT_DIR}/values.yaml" \

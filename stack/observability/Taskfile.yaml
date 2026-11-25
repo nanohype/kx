@@ -25,4 +25,4 @@ tasks:
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring tempo               || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring loki                || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n monitoring kube-prometheus-stack || true
-      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl delete ns monitoring --ignore-not-found
+      - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns monitoring --ignore-not-found

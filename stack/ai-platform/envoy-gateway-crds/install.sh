@@ -33,20 +33,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 # Rendered to a file before anything reaches the API server, so a render that
 # fails partway applies nothing rather than whatever it had written.
 MANIFEST="$(mktemp)"
 trap 'rm -f "${MANIFEST}"' EXIT
 
-helm template envoy-gateway-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+deadline 300 helm template envoy-gateway-crds oci://docker.io/envoyproxy/gateway-crds-helm \
   --version 1.10.0 \
   --values "${SCRIPT_DIR}/values.yaml" >"${MANIFEST}"
 
-kubectl apply --server-side --force-conflicts --field-manager envoy-gateway-crds \
+kubectl --request-timeout=60s apply --server-side --force-conflicts --field-manager envoy-gateway-crds \
   --request-timeout=120s -f "${MANIFEST}"
 
 # Established before the controller installs. Without the wait, envoy-gateway's
 # install can start its controller while a kind it watches is still being
 # registered, and the ordering this slice relies on becomes a race.
-kubectl wait --for condition=Established --timeout=120s -f "${MANIFEST}"
+kubectl --request-timeout=60s wait --for condition=Established --timeout=120s -f "${MANIFEST}"

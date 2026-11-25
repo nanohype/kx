@@ -32,6 +32,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
 . "${SCRIPT_DIR}/../../../cluster/kubeconfig.sh"
+# shellcheck source=../../../cluster/deadline.sh
+. "${SCRIPT_DIR}/../../../cluster/deadline.sh"
 
 PROFILE="${AWS_PROFILE:-default}"
 # The region the gateway signs the upstream Bedrock call for. It has to be one
@@ -56,7 +58,7 @@ SOURCE_NS="kyverno"
 # Both kinds policy.yaml declares, asked for by name: a Kyverno old enough to
 # serve neither is a Kyverno this slice cannot install into, and the remedy for
 # that is the same one.
-if ! kyverno_err="$(kubectl get crd generatingpolicies.policies.kyverno.io mutatingpolicies.policies.kyverno.io 2>&1 >/dev/null)"; then
+if ! kyverno_err="$(kubectl --request-timeout=60s get crd generatingpolicies.policies.kyverno.io mutatingpolicies.policies.kyverno.io 2>&1 >/dev/null)"; then
   if printf '%s' "${kyverno_err}" | grep -qiE 'not found|NotFound'; then
     echo "Kyverno is not installed — run 'task stack:security:enable' first." >&2
   else
@@ -78,9 +80,9 @@ fi
 # no credential is ever an argument to a command or a variable in the
 # environment every later command inherits.
 echo "Resolving credentials from AWS profile '${PROFILE}' ..."
-CREDS_JSON="$(aws configure export-credentials --profile "${PROFILE}" --format process)"
+CREDS_JSON="$(deadline 120 aws configure export-credentials --profile "${PROFILE}" --format process)"
 
-kubectl create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl apply -f -
+kubectl --request-timeout=60s create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # Built on stdin rather than with --from-literal: that flag puts the secret key
 # and the session token in this process's argv, where `ps` shows them to every
@@ -88,7 +90,7 @@ kubectl create namespace "${SOURCE_NS}" --dry-run=client -o yaml | kubectl apply
 # quoting.
 printf '%s' "${CREDS_JSON}" \
   | python3 "${SCRIPT_DIR}/credentials.py" manifest "${SECRET}" "${SOURCE_NS}" "${REGION}" \
-  | kubectl apply -f -
+  | kubectl --request-timeout=60s apply -f -
 
 # ── Retire the ClusterPolicy this slice used to install ────────────────────
 #
@@ -113,27 +115,27 @@ printf '%s' "${CREDS_JSON}" \
 # asked for by name, and only a NotFound answer counts as absent, for the reason
 # the Kyverno check above gives.
 LEGACY_POLICY="inject-local-bedrock-credentials"
-if legacy_err="$(kubectl get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
-  kubectl delete clusterpolicies.kyverno.io "${LEGACY_POLICY}" --ignore-not-found
+if legacy_err="$(kubectl --request-timeout=60s get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
+  kubectl --request-timeout=60s --timeout=5m delete clusterpolicies.kyverno.io "${LEGACY_POLICY}" --ignore-not-found
 elif ! printf '%s' "${legacy_err}" | grep -qiE 'not found|NotFound'; then
   echo "Could not determine whether the old ClusterPolicy kind is served — kubectl said:" >&2
   printf '%s\n' "${legacy_err}" | sort -u | sed 's/^/  /' >&2
   exit 1
 fi
-kubectl delete secrets --all-namespaces \
+kubectl --request-timeout=60s --timeout=5m delete secrets --all-namespaces \
   -l "generate.kyverno.io/policy-name=${LEGACY_POLICY},generate.kyverno.io/rule-name=clone-bedrock-credentials" \
   --field-selector "metadata.name=${SECRET}" --ignore-not-found
 
 # The grant first, so the background controller can read the source and write
 # the copies by the time the GeneratingPolicy asks it to backfill.
-kubectl apply -f "${SCRIPT_DIR}/rbac.yaml"
-kubectl apply -f "${SCRIPT_DIR}/policy.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/rbac.yaml"
+kubectl --request-timeout=60s apply -f "${SCRIPT_DIR}/policy.yaml"
 
 # Wait for Kyverno to accept both policies. An unready policy silently mutates
 # or generates nothing, which is the failure this slice exists to make
 # impossible. A CEL policy reports readiness as a boolean rather than as a
 # condition named Ready, so the wait reads that field.
-kubectl wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
+kubectl --request-timeout=60s wait --for=jsonpath='{.status.conditionStatus.ready}'=true \
   generatingpolicies.policies.kyverno.io/clone-local-bedrock-credentials \
   mutatingpolicies.policies.kyverno.io/inject-local-bedrock-credentials \
   --timeout=60s
