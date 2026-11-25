@@ -460,8 +460,8 @@ jobs:
       # The helpers an installer runs are executed here and nowhere else in CI,
       # so their tests are the only thing that runs them before a workstation
       # does. The script holds the run to the floors pyproject.toml states: every
-      # line and branch of each helper, and the gates together at 75% of lines
-      # and 60% of branches.
+      # line and branch of each helper, and the gates together at a ratchet that
+      # never sits under 75% of lines and 60% of branches.
       - name: Every installer helper fully covered, every gate at its floor
         run: ./scripts/python-test.sh
 

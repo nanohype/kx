@@ -13,8 +13,11 @@
 #   security-path  the helpers kx's installers run, under stack/. Each handles a
 #                  cloud credential or decides what reaches the cluster, so each
 #                  file on its own is held to every line and every branch.
-#   gates          the gates under scripts/, together: 75% of lines and 60% of
-#                  branches, read apart rather than folded into one number.
+#   gates          the gates under scripts/, together, lines and branches read
+#                  apart rather than folded into one number. A ratchet: the floor
+#                  is their coverage as last recorded, never under 75% of lines
+#                  and 60% of branches, and the run fails once coverage passes it
+#                  by a whole point, until pyproject.toml records the gain.
 # Every measured file falls under exactly one floor, so a file added without a
 # test fails its floor rather than going unreported.
 #

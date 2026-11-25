@@ -81,9 +81,10 @@ Taskfile. Its tests go under `tests/installers/` and reach every line and every
 branch: `scripts/python-test.sh`, which the test job runs, holds the run to the
 floors `pyproject.toml` states, and every helper under `stack/` is held to all of
 its lines and branches on its own, so a helper added without tests fails there.
-The gates under `scripts/` are held together to 75% of lines and 60% of
-branches, read apart, through their own controls and the tests of their logic
-under `tests/gates/`.
+The gates under `scripts/` are held together, lines and branches read apart,
+through their own controls and the tests of their logic under `tests/gates/`,
+to a ratchet: their coverage as last recorded, never under 75% of lines and 60%
+of branches, raised when it rises and never lowered.
 
 An addon whose chart cannot be stored as a helm release renders it with
 `helm template` into a server-side `kubectl apply` instead, and carries an

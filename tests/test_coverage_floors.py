@@ -101,6 +101,39 @@ class TestVerdict:
         assert floors.percent(3, 4) == 75.0
 
 
+RATCHETED = {"gates": {"include": ["scripts/*"], "per-file": False, "ratchet": True,
+                       "minimum-lines": 75, "minimum-branches": 60,
+                       "lines": 77, "branches": 71}}
+
+
+class TestRatchet:
+    def test_coverage_within_a_point_of_its_floor_holds(self, floors):
+        files = {"scripts/gate.py": measured(lines=(779, 1000), branches=(719, 1000))}
+        assert floors.verdict(files, RATCHETED)[1] == []
+
+    @pytest.mark.parametrize("lines,branches,raise_to", [
+        ((780, 1000), (719, 1000), "Raise lines to 78 and branches to 71"),
+        ((779, 1000), (720, 1000), "Raise lines to 77 and branches to 72"),
+    ], ids=["lines-past", "branches-past"])
+    def test_a_whole_point_past_the_floor_fails_until_it_is_raised(self, floors, lines,
+                                                                  branches, raise_to):
+        files = {"scripts/gate.py": measured(lines=lines, branches=branches)}
+        _, problems = floors.verdict(files, RATCHETED)
+        assert len(problems) == 1
+        assert "a whole point past the gates floor of 77% and 71%" in problems[0]
+        assert raise_to in problems[0]
+
+    def test_under_the_floor_is_reported_as_under_it(self, floors):
+        files = {"scripts/gate.py": measured(lines=(760, 1000), branches=(800, 1000))}
+        _, problems = floors.verdict(files, RATCHETED)
+        assert problems == ["gates, 1 file(s) together is at lines 76.0% and branches 80.0%, "
+                            "under the gates floor of 77% and 71%."]
+
+    def test_a_floor_with_no_ratchet_is_not_raised(self, floors):
+        files = {"scripts/gate.py": measured(lines=(99, 100), branches=(99, 100))}
+        assert floors.verdict(files, {"gates": FLOORS["gates"]})[1] == []
+
+
 class TestUnusable:
     def test_the_shipped_floors_are_usable(self, floors):
         shipped = floors.floors_in(tomllib.loads(floors.PYPROJECT.read_text()))
@@ -108,11 +141,11 @@ class TestUnusable:
 
     def test_the_shipped_floors_are_the_ones_decided(self, floors):
         shipped = floors.floors_in(tomllib.loads(floors.PYPROJECT.read_text()))
-        assert {name: (f["per-file"], f["lines"], f["branches"])
-                for name, f in shipped.items()} == {
-            "security-path": (True, 100, 100),
-            "gates": (False, 75, 60),
-        }
+        assert set(shipped) == {"security-path", "gates"}
+        helpers, gates = shipped["security-path"], shipped["gates"]
+        assert (helpers["per-file"], helpers["lines"], helpers["branches"]) == (True, 100, 100)
+        assert (gates["per-file"], gates["ratchet"]) == (False, True)
+        assert (gates["minimum-lines"], gates["minimum-branches"]) == (75, 60)
 
     def test_no_floors_at_all(self, floors):
         assert floors.floors_in({}) == {}
@@ -129,8 +162,13 @@ class TestUnusable:
         ({"lines": "75"}, "lines is '75', not a percentage"),
         ({"branches": -1}, "branches is -1, not a percentage"),
         ({"branches": 101}, "branches is 101, not a percentage"),
+        ({"ratchet": "yes"}, "ratchet is 'yes', not true or false"),
+        ({"minimum-lines": "75"}, "minimum-lines is '75', not a percentage"),
+        ({"minimum-lines": 80}, "lines is 75, under its minimum-lines of 80"),
+        ({"minimum-branches": 61}, "branches is 60, under its minimum-branches of 61"),
     ], ids=["no-globs", "globs-not-a-list", "empty-glob", "per-file-not-bool", "lines-bool",
-            "lines-text", "branches-negative", "branches-over-100"])
+            "lines-text", "branches-negative", "branches-over-100", "ratchet-not-bool",
+            "minimum-not-a-percentage", "lines-under-minimum", "branches-under-minimum"])
     def test_a_floor_that_cannot_be_held_to(self, floors, change, says):
         bad = {"gates": {**FLOORS["gates"], **change}}
         problems = floors.unusable(bad)

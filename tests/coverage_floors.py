@@ -14,6 +14,10 @@ Lines and branches are read apart. coverage.py's own total folds the two into
 one number, where every line and half the branches read as a respectable figure
 that is neither of the two things a floor here states.
 
+A floor with `ratchet` set is the coverage last recorded, rounded down, and may
+sit no lower than its `minimum-lines` and `minimum-branches`. The run fails below
+it, and also once coverage is a whole point past it, until it is raised.
+
 Exits 0 when every floor holds, 1 when one does not, and 2 when there is
 nothing to read it against: no coverage module, no data, or no usable floors.
 """
@@ -56,11 +60,24 @@ def unusable(floors: dict[str, dict]) -> list[str]:
             problems.append(f"the {name} floor names no files to include.")
         if not isinstance(floor.get("per-file"), bool):
             problems.append(f"the {name} floor does not say whether it is per-file.")
+        if not isinstance(floor.get("ratchet", False), bool):
+            problems.append(f"the {name} floor's ratchet is {floor['ratchet']!r}, not true or false.")
         for kind in ("lines", "branches"):
             value = floor.get(kind)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
+            if not is_percentage(value):
                 problems.append(f"the {name} floor's {kind} is {value!r}, not a percentage.")
+                continue
+            least = floor.get(f"minimum-{kind}", 0)
+            if not is_percentage(least):
+                problems.append(f"the {name} floor's minimum-{kind} is {least!r}, not a percentage.")
+            elif value < least:
+                problems.append(f"the {name} floor's {kind} is {value}, under its minimum-{kind} "
+                                f"of {least}.")
     return problems
+
+
+def is_percentage(value) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 <= value <= 100
 
 
 def percent(covered: int, total: int) -> float:
@@ -100,6 +117,13 @@ def verdict(files: dict[str, dict], floors: dict[str, dict]) -> tuple[list[str],
                 problems.append(f"{label} is at lines {lines:.1f}% and branches {branches:.1f}%, "
                                 f"under the {name} floor of {floor['lines']}% and "
                                 f"{floor['branches']}%.")
+            elif floor.get("ratchet") and (lines >= floor["lines"] + 1
+                                           or branches >= floor["branches"] + 1):
+                problems.append(f"{label} is at lines {lines:.1f}% and branches {branches:.1f}%, "
+                                f"a whole point past the {name} floor of {floor['lines']}% and "
+                                f"{floor['branches']}%. Raise lines to {int(lines)} and branches "
+                                f"to {int(branches)} in pyproject.toml, so the gain cannot be "
+                                f"given back without a diff that lowers it.")
     return report, problems
 
 

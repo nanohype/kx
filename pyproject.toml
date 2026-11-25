@@ -44,5 +44,13 @@ branches = 100
 # their own controls and through tests of their logic.
 include = ["scripts/*"]
 per-file = false
-lines = 75
-branches = 60
+# Never under 75% of lines and 60% of branches.
+minimum-lines = 75
+minimum-branches = 60
+# A ratchet above that: the gates' coverage, rounded down, as of the last change
+# that moved it. The run fails below it, and fails once coverage is a whole point
+# past it until it is raised, so a gain cannot be given back without a diff that
+# lowers the number.
+ratchet = true
+lines = 77
+branches = 71
