@@ -1,4 +1,5 @@
-# No sidecar: envoy gets the reference and no initContainers list appears.
+# No sidecar: nothing is added, to envoy or anywhere else, and no
+# initContainers list appears.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -11,7 +12,3 @@ spec:
   containers:
     - name: envoy
       image: docker.io/envoyproxy/envoy:distroless-v1.36.0
-      envFrom:
-        - secretRef:
-            name: kx-bedrock-credentials
-            optional: true

@@ -1,6 +1,6 @@
-# The sidecar is the second init container and envoy the second container:
-# each gets the reference at the index its name was found at, and the
-# containers ahead of them are left as they were.
+# The sidecar is the second init container: it gets the reference at the index
+# its name was found at, and every other container, envoy included, is left as
+# it was.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -25,7 +25,3 @@ spec:
       image: docker.io/envoyproxy/gateway:v1.6.0
     - name: envoy
       image: docker.io/envoyproxy/envoy:distroless-v1.36.0
-      envFrom:
-        - secretRef:
-            name: kx-bedrock-credentials
-            optional: true
