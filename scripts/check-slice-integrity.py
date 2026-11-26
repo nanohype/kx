@@ -770,41 +770,55 @@ GATE_DIR = "scripts"
 # on the first axis and had never been asked about the second.
 #
 # The verdict required here is narrow and it is not a judgement about the tree:
-# a non-zero exit, and a sentence rather than a traceback. A crash also exits
-# non-zero, and a gate that blames the interpreter for a missing precondition
-# has not reported anything.
+# a non-zero exit, a sentence rather than a traceback, and the sentence the gate
+# prints for this authority, which `names` holds. A crash also exits non-zero,
+# and a gate that blames the interpreter for a missing precondition has not
+# reported anything. A refusal that does not name the authority is not one this
+# probe can score: either a precondition the gate checks first stopped it, so
+# the branch that handles the missing authority never ran, or that branch no
+# longer says what is missing. Exit status alone passes a gate that refuses an
+# empty render before it looks for its scanner, whatever its scanner branch does.
+#
+# `files` adds what one gate needs beyond the shared fixture, so that the
+# authority is the first thing it finds missing.
 AUTHORITY_PROBES: dict[str, dict] = {
     "check-prose-voice.py": {
         "authority": "git history reaching a merge base",
+        "names": "no merge base between",
         "argv": ["origin/a-ref-that-does-not-exist"],
         "env": {},
         "empty_path": False,
     },
     "check-rendered-schemas.py": {
         "authority": "the kubeconform binary",
+        "names": "kubeconform is not on PATH",
         "argv": ["{root}"],
         "env": {},
         "empty_path": True,
     },
+    # One image in the render. check-images refuses an empty render before it
+    # looks for trivy.
     "check-images.py": {
         "authority": "the trivy binary",
-        "argv": ["--cves", "{root}"],
+        "names": "trivy is not on PATH",
+        "argv": ["--cves", "{root}/render"],
         "env": {},
         "empty_path": True,
+        "files": {UNTRACKED + "render/s.yaml": DEPLOY_WITH % "r/x:1.2.3"},
     },
     "mirror-check.py": {
         "authority": "an eks-gitops checkout",
+        "names": "no eks-gitops checkout at",
         "argv": ["check"],
         "env": {"EKS_GITOPS_DIR": "{root}/not-a-checkout"},
         "empty_path": False,
     },
-    # This table asserts a non-zero exit and no traceback, and carries no
-    # `names` field, so a probe is honest only where exactly one refusal is
-    # plausible on the shared fixture. The gate resolves --chart-source ahead of
-    # every other precondition for that reason: the fixture holds no operator
-    # values file and an empty `siblings`, and neither is ever reached.
+    # The fixture holds no operator values file and an empty `siblings`. The
+    # gate resolves --chart-source ahead of both, which is what lets its refusal
+    # name the checkout rather than either of them.
     "check-operator-flags.py": {
         "authority": "an eks-agent-platform checkout",
+        "names": "no eks-agent-platform checkout at",
         "argv": ["--render", "{root}", "--chart-source", "{root}/not-a-checkout"],
         "env": {},
         "empty_path": False,
@@ -831,20 +845,33 @@ AUTHORITY_FIXTURE_MANIFEST = json.dumps(
     indent=2,
 ) + "\n"
 
-REFUSES = ('import sys\n'
-           'print("cannot reach what this gate reads", file=sys.stderr)\n'
-           'sys.exit(1)\n')
 REPORTS_CLEAN = ('import sys\n'
                  'print("nothing to report")\n'
                  'sys.exit(0)\n')
 
 
-def _authority_tree(reporting_clean: str | None = None) -> dict[str, str]:
-    """Every gate AUTHORITY_PROBES names, refusing, except one named to report clean."""
-    return {
-        f"{GATE_DIR}/{name}": (REPORTS_CLEAN if name == reporting_clean else REFUSES)
-        for name in AUTHORITY_PROBES
-    }
+def _refuses(saying: str) -> str:
+    """A fake gate that prints one sentence and exits 1."""
+    return f"import sys\nprint({saying!r}, file=sys.stderr)\nsys.exit(1)\n"
+
+
+def _authority_tree(reporting_clean: str | None = None,
+                    refusing_first: str | None = None) -> dict[str, str]:
+    """Every gate AUTHORITY_PROBES names, each refusing for want of its authority.
+
+    Except one named to report clean, and one named to refuse over a
+    precondition it checks first, saying nothing about its authority.
+    """
+    tree = {}
+    for name, probe in AUTHORITY_PROBES.items():
+        if name == reporting_clean:
+            body = REPORTS_CLEAN
+        elif name == refusing_first:
+            body = _refuses("nothing to read, so refusing before going any further")
+        else:
+            body = _refuses(probe["names"])
+        tree[f"{GATE_DIR}/{name}"] = body
+    return tree
 
 
 def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]:
@@ -880,6 +907,7 @@ def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]
             fixture = _tree({
                 "stack/s/a/install.sh": BOUNDED,
                 "stack/upstream.json": AUTHORITY_FIXTURE_MANIFEST,
+                **probe.get("files", {}),
             })
             argv = [a.format(root=fixture) for a in probe["argv"]]
             env = dict(os.environ, KX_GATE_ROOT=str(fixture))
@@ -904,6 +932,13 @@ def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]
                     f"{name}: crashed rather than refusing when {probe['authority']} was "
                     f"unavailable. A traceback exits non-zero like a refusal does, so it "
                     f"cannot count as one — the precondition wants naming."
+                )
+            elif probe["names"] not in out:
+                problems.append(
+                    f"{name}: refused without {probe['authority']}, but its report never says "
+                    f"{probe['names']!r}. Either a precondition it checks first stopped it, so "
+                    f"the branch that handles the missing authority did not run, or that "
+                    f"branch no longer says what is missing."
                 )
             else:
                 observed += 1
@@ -2362,6 +2397,12 @@ CONTROLS = {
             _authority_tree(reporting_clean="check-prose-voice.py"),
             _authority_tree(),
             "exited 0",
+        ),
+        (
+            "a gate that refuses over a precondition it checks before its authority",
+            _authority_tree(refusing_first="check-images.py"),
+            _authority_tree(),
+            "never says 'trivy is not on PATH'",
         ),
     ],
     "the tree holds content outside the gate directory": [
