@@ -3,28 +3,17 @@
 
     scripts/check-slice-integrity.py
 
-There is no --self-test flag. Every run executes the positive controls first and
-refuses to report on the tree unless they pass, so there is no CI step to forget
-and no flag a script can silently ignore. A gate that tests itself whenever it
-runs cannot drift from the workflow that calls it.
+CHECKS lists them. There is no --self-test flag: every run first executes each
+invariant's controls, a tree it must reject and one it must accept, and refuses
+to report on the tree unless they pass, so there is no CI step to forget and no
+flag to ignore (docs/adr/0014-gates-prove-they-reject.md).
 
-  1. Every `helm upgrade --install` names an explicit `--timeout`.
-  2. Every file in an addon directory is reached by that addon's install.sh or
-     its slice Taskfile.
-
-Both read source text, and both read the comment-blanked view, because both ask
-whether something is REFERENCED BY CODE — a helm flag on a real invocation, a
-filename something applies. The thing standing where a missing implementation
-should be is usually a comment saying so, so a gate matching over comments
-passes in exactly the case it exists to catch: "we no longer apply orphan.yaml"
-would otherwise prove orphan.yaml is applied.
-
-The view is a per-check decision rather than a rule for the file. A check
-looking for an ANNOTATION — a lint suppression, an update-tool directive, a
-coverage pragma — must read the raw text, because annotations are comments by
-construction and stripping blinds the gate to its own vocabulary. Neither check
-here looks for one. Comment bodies are blanked rather than dropped, so line
-numbers and column offsets survive and a file:line citation stays true.
+An invariant that asks whether code references something, such as a flag on a
+real invocation or a file something applies, reads the source with comment
+bodies blanked, so a comment saying a thing is applied cannot stand in for the
+code that applies it. One that looks for an annotation, such as a lint
+suppression, reads the raw text, since annotations are comments by construction.
+Bodies are blanked rather than dropped, so a file:line citation stays true.
 """
 
 from __future__ import annotations
@@ -205,6 +194,7 @@ MINIMUM_EXAMINED = {
     "every file in an addon directory is applied": 25,
     "every gate is observed to reject and to accept": 4,
     "every path named in markdown resolves": 5,
+    "CLAUDE.md lists the jobs the merge gate needs": 3,
     # Unconditional: one file is the law, not a count sized to this tree.
     "the tree holds content outside the gate directory": 1,
     "every gate refuses when its authority is unavailable": 5,
@@ -234,7 +224,7 @@ MINIMUM_EXAMINED = {
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 16
+MINIMUM_CHECKS = 17
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -1034,6 +1024,73 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
     if not problems and examined == 0:
         return ["markdown is present but names no repo-relative path — refusing to report "
                 "every path resolved over an empty set."]
+    return problems
+
+
+# The workflow whose merge gate decides what merges, and the table in CLAUDE.md
+# that names the jobs it requires.
+CI_WORKFLOW = ".github/workflows/ci.yml"
+MERGE_GATE = "merge-gate"
+JOBS_TABLE = re.compile(r"^\|\s*Job\s*\|\s*Holds\s*\|\s*$")
+TABLE_RULE = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+\s*$")
+JOB_CELL = re.compile(r"^`([A-Za-z0-9_-]+)`$")
+
+
+def merge_gate_jobs_are_listed(root: pathlib.Path = ROOT) -> list[str]:
+    """CLAUDE.md's table of jobs names exactly the jobs the merge gate needs.
+
+    A list of jobs written as prose is true when it is written and wrong from
+    the next job on, and nothing in the prose shows it. The gate's `needs` is
+    the fact, so the table is read against it both ways: a job the gate needs
+    and the table leaves out, and a job the table lists and the gate does not
+    need.
+    """
+    label = "CLAUDE.md lists the jobs the merge gate needs"
+    EXAMINED[label] = 0
+    try:
+        workflow = yaml.safe_load((root / CI_WORKFLOW).read_text())
+    except (OSError, yaml.YAMLError) as e:
+        return [f"{CI_WORKFLOW} cannot be read ({type(e).__name__}), so there is no merge "
+                f"gate to hold CLAUDE.md's table of jobs to."]
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    gate = jobs.get(MERGE_GATE) if isinstance(jobs, dict) else None
+    needs = gate.get("needs") if isinstance(gate, dict) else None
+    needs = [needs] if isinstance(needs, str) else needs
+    if not isinstance(needs, list) or not needs or not all(isinstance(j, str) for j in needs):
+        return [f"{CI_WORKFLOW} has no {MERGE_GATE} job that needs other jobs, so there is "
+                f"nothing to hold CLAUDE.md's table of jobs to."]
+    try:
+        lines = (root / "CLAUDE.md").read_text().splitlines()
+    except OSError:
+        return ["there is no CLAUDE.md, so nothing lists the jobs the merge gate needs."]
+
+    header = next((n for n, line in enumerate(lines, 1) if JOBS_TABLE.match(line)), None)
+    if header is None or header >= len(lines) or not TABLE_RULE.match(lines[header]):
+        return ["CLAUDE.md has no `| Job | Holds |` table, so nothing lists the jobs the merge "
+                "gate needs."]
+    problems = []
+    listed: dict[str, int] = {}
+    for n in range(header + 2, len(lines) + 1):
+        line = lines[n - 1].strip()
+        if not line.startswith("|"):
+            break
+        cell = JOB_CELL.match(line[1:].split("|", 1)[0].strip())
+        if not cell:
+            problems.append(f"CLAUDE.md:{n} is a row of the table of jobs that names no job.")
+        elif cell.group(1) in listed:
+            problems.append(f"CLAUDE.md:{n} lists `{cell.group(1)}` again, after line "
+                            f"{listed[cell.group(1)]}.")
+        else:
+            listed[cell.group(1)] = n
+    for job in needs:
+        if job not in listed:
+            problems.append(f"CLAUDE.md:{header} does not list `{job}`, which the merge gate "
+                            f"in {CI_WORKFLOW} needs.")
+    for job, n in listed.items():
+        if job not in needs:
+            problems.append(f"CLAUDE.md:{n} lists `{job}`, which the merge gate in "
+                            f"{CI_WORKFLOW} does not need.")
+    EXAMINED[label] = len(set(needs) | set(listed))
     return problems
 
 
@@ -2103,6 +2160,7 @@ CHECKS = [
     ("every file in an addon directory is applied", addon_files_are_reached),
     ("every gate is observed to reject and to accept", gates_reject_and_accept),
     ("every path named in markdown resolves", markdown_paths_resolve),
+    ("CLAUDE.md lists the jobs the merge gate needs", merge_gate_jobs_are_listed),
     ("the tree holds content outside the gate directory",
      tree_has_content_outside_the_gates),
     ("every gate refuses when its authority is unavailable",
@@ -2676,6 +2734,81 @@ def _taskfile(*cmds: str) -> str:
     body = "".join(f"      - {c}\n" for c in cmds)
     return f"version: '3'\ntasks:\n  d:\n    cmds:\n{body}"
 
+
+# A workflow whose merge gate needs two jobs, and the CLAUDE.md table naming
+# them. Each case below breaks one side of that agreement.
+GATED = ("jobs:\n  lint: {runs-on: ubuntu-latest}\n  test: {runs-on: ubuntu-latest}\n"
+         "  merge-gate:\n    needs: [lint, test]\n")
+JOBS = ("# kx\n\n## CI\n\n| Job | Holds |\n|---|---|\n"
+        "| `lint` | the linters |\n| `test` | the tests |\n\n## Next\n")
+LINT_ONLY = JOBS.replace("| `test` | the tests |\n", "")
+
+CONTROLS["CLAUDE.md lists the jobs the merge gate needs"] = [
+    (
+        "a job the merge gate needs that CLAUDE.md does not list",
+        {CI_WORKFLOW: GATED, "CLAUDE.md": LINT_ONLY},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+        "does not list `test`",
+    ),
+    (
+        "a job CLAUDE.md lists that the merge gate does not need, cited at its row",
+        {CI_WORKFLOW: GATED.replace("[lint, test]", "[lint]"), "CLAUDE.md": JOBS},
+        {CI_WORKFLOW: GATED.replace("[lint, test]", "[lint]"), "CLAUDE.md": LINT_ONLY},
+        "CLAUDE.md:8 lists `test`",
+    ),
+    (
+        "a gate that needs one job, written as a string rather than a list",
+        {CI_WORKFLOW: GATED.replace("[lint, test]", "lint"), "CLAUDE.md": JOBS},
+        {CI_WORKFLOW: GATED.replace("[lint, test]", "lint"), "CLAUDE.md": LINT_ONLY},
+    ),
+    (
+        "a job listed twice",
+        {CI_WORKFLOW: GATED,
+         "CLAUDE.md": JOBS.replace("| `test` | the tests |\n",
+                                   "| `test` | the tests |\n| `lint` | again |\n")},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+        "CLAUDE.md:9 lists `lint` again",
+    ),
+    (
+        "a row of the table that names no job",
+        {CI_WORKFLOW: GATED,
+         "CLAUDE.md": JOBS.replace("| `test` | the tests |\n",
+                                   "| `test` | the tests |\n| lint | not a code span |\n")},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+        "CLAUDE.md:9 is a row",
+    ),
+    (
+        "jobs listed in prose rather than in the table",
+        {CI_WORKFLOW: GATED, "CLAUDE.md": "# kx\n\nCI runs `lint` and `test`.\n"},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+    (
+        "a header with no table under it",
+        {CI_WORKFLOW: GATED, "CLAUDE.md": "# kx\n\n| Job | Holds |\n"},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+    (
+        "a merge gate that needs nothing",
+        {CI_WORKFLOW: GATED.replace("    needs: [lint, test]\n", "    runs-on: x\n"),
+         "CLAUDE.md": JOBS},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+    (
+        "no CI workflow at all",
+        {"CLAUDE.md": JOBS},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+    (
+        "a CI workflow that is not YAML",
+        {CI_WORKFLOW: "jobs: [unclosed\n", "CLAUDE.md": JOBS},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+    (
+        "no CLAUDE.md at all",
+        {CI_WORKFLOW: GATED, "README.md": "x\n"},
+        {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+]
 
 CONTROLS["nothing kx runs can reach a cluster other than kind-kx"] = [
     (

@@ -173,8 +173,8 @@ The gates split by the kind of question they answer
   push to `main`. It asks only questions whose answer is a fact about the
   commit. A merge gate job requires every other job, and counts a skipped one
   as failed.
-- **Scheduled.** Four workflows run weekly, and on demand. Each asks a question
-  whose answer changes without this repository changing:
+- **Scheduled.** These workflows run weekly, and on demand. Each asks a
+  question whose answer changes without this repository changing:
   - `.github/workflows/chart-provenance.yml`: has a pinned chart been
     deprecated or changed hands?
   - `.github/workflows/mirror-freshness.yml`: has the catalog moved past the

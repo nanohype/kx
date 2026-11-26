@@ -18,11 +18,8 @@ check that is often red for no fault of the change is soon ignored.
 ## Decision
 
 - **`.github/workflows/ci.yml`** runs on every pull request and every push to
-  `main`, and asks only questions about the commit: lint, Renovate pin
-  coverage, chart provenance records, the catalog mirror at its pinned ref,
-  the clusterless render with its mount, schema, image-pin and operator-flag
-  checks, and the Kyverno policy tests. A merge gate job requires every other
-  job, and counts a skipped job as failed.
+  `main`, and asks only questions about the commit. A merge gate job requires
+  every other job, and counts a skipped job as failed.
 - **Questions about the world** run weekly, and on demand, in workflows of
   their own:
   - `chart-provenance.yml`: whether a pinned chart has been deprecated or has
