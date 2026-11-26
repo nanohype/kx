@@ -22,7 +22,7 @@ to the Kubernetes version of the production target. kind's own CNI and
 kube-proxy are off, because Cilium replaces both, so the nodes stay NotReady
 until the core stack installs it.
 
-Two scripts finish the cluster:
+These scripts finish the cluster:
 
 - `cluster/registry.sh` runs a registry container at `localhost:5001` and
   points every node's containerd at it. An image pushed there can be pulled
@@ -84,7 +84,7 @@ reader and what runs.
 Order inside a slice follows the same dependency rule: CRDs before the
 controllers that watch them, and a controller before anything it reconciles.
 
-Two addons cannot be helm releases, and their installers say why:
+These addons cannot be helm releases, and their installers say why:
 
 - **Druid** runs the production chart from the eks-gitops catalog unmodified.
   It is rendered with `helm template`, filtered by
@@ -163,6 +163,16 @@ recorded digest:
   with `--require-hashes`;
 - helm, through `.github/actions/helm`;
 - each other binary, from its release, with a sha256.
+
+A binary is downloaded to a file and checked before it is unpacked onto PATH,
+so a truncated transfer, a proxy's error page or a replaced asset never runs.
+The digest is the one the release publishes beside the archive, or, for a
+release that publishes none, one computed from the asset when the version was
+pinned. It catches a corrupted or substituted asset, not a compromised release,
+which would need the upstream signing key. The Python tools are hash-locked
+rather than resolved in the job, because a resolver picks by interpreter, and an
+older python quietly caps an install at the last release that still supports
+it.
 
 ### When the gates run
 

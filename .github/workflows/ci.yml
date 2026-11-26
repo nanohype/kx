@@ -5,16 +5,13 @@ on:
   push:
     branches: [main]
 
-# One run per ref. A push that lands on top of another leaves the first run
-# grading a tree nobody is proposing any more, and its verdict arrives against
-# the newer commit.
+# One run per ref: a newer push supersedes the run grading the older one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job here only reads the tree. Declared explicitly rather than inherited:
-# the org default is already `read`, but a default is a setting someone can change
-# without touching this file, and the two sibling workflows declare it too.
+# Every job only reads the tree. Declared rather than inherited, because the
+# organization's default can change without a diff here.
 permissions:
   contents: read
 
@@ -27,36 +24,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history, because the prose step diffs base...HEAD and a merge
-          # base needs a common ancestor on BOTH sides. Deepening only the base
-          # leaves the head shallow and the range still unresolvable — and the
-          # gate refuses rather than reporting an empty diff, so getting this
-          # wrong is a red job rather than a silent pass.
+          # Full history: the prose step diffs base...HEAD, which needs the merge
+          # base on both sides.
           fetch-depth: 0
 
-      # Every Python tool this job runs, from one hash-locked file: each
-      # package, transitive ones included, at one version and the hashes PyPI
-      # publishes for it, so the job installs exactly those files or fails.
-      # Pinned in the file rather than resolved here, because a resolver picks
-      # by interpreter: an older python silently caps an install at the last
-      # release that still supports it, so an unpinned install lets whichever
-      # python runs it choose the scanner CI runs.
+      # Hash-locked: every package, transitive ones included, at one version and
+      # its published hashes, so the job installs exactly those files or fails.
       - name: Install the lint tools
         run: pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/lint-requirements.txt
 
       - name: yamllint
         run: yamllint .
 
-      # Grafana ships a default password and is published as a NodePort on a
-      # mapped host port, so that credential is defensible only while the port
-      # is loopback-bound — which its values file states. That makes the binding
-      # a claim, and a claim needs an instrument: kind's listenAddress default is
-      # 0.0.0.0, so a mapping added without it is exposed on every interface and
-      # reads exactly like the ones above it.
-      #
-      # MinIO also ships a default credential but publishes nothing, so it rests
-      # on a different argument its own values file makes. This check is about
-      # the mappings, not about every default password in the tree.
+      # Every published port binds to loopback (docs/adr/0005), and kind binds a
+      # mapping that names no listenAddress to every interface.
       - name: host ports are loopback-bound
         run: |
           python3 - <<'PY'
@@ -72,19 +53,11 @@ jobs:
           print(f"ok  {len(maps)} host port(s) bound to 127.0.0.1")
           PY
 
-      # Pinned and checked before it is unpacked onto PATH, the way kubeconform
-      # is below, rather than taken from apt at whatever version the runner
-      # image carries that week: a shellcheck release that adds a warning would
-      # otherwise redden this job with no change here to point at. shellcheck
-      # publishes no checksum file, so the digest was computed from the release
-      # asset when the version was pinned, and it catches a replaced or
-      # truncated asset from then on.
-      #
-      # `git ls-files` rather than a glob: a glob names one filename and silently
-      # excludes every other shell file in the tree, which is the reduced-corpus
-      # failure the gates in this repo assert against for their own inputs. An
-      # exclusion here has to be a `shellcheck disable` line carrying a reason,
-      # where the reader of the script sees it.
+      # Pinned rather than apt's, so a new shellcheck cannot redden the job with
+      # no change here. It publishes no checksum file, so the digest was computed
+      # from the release asset when the version was pinned. `git ls-files` rather
+      # than a glob, so no shell file goes unlinted; an exclusion is a
+      # `shellcheck disable` line with its reason beside it.
       - name: shellcheck
         env:
           SHELLCHECK_VERSION: v0.11.0
@@ -106,10 +79,8 @@ jobs:
           echo "linting ${#sh[@]} shell file(s)"
           shellcheck "${sh[@]}"
 
-      # Every tracked Python file, not only the gates under scripts/: the helpers
-      # an installer runs, which the test job executes and nothing else in CI
-      # does, and the tests themselves. `git ls-files` for the reason the
-      # shellcheck step gives, and an empty set refused.
+      # Every tracked Python file: the gates, the installers' helpers and the
+      # tests.
       - name: ruff
         run: |
           mapfile -t py < <(git ls-files '*.py')
@@ -120,45 +91,26 @@ jobs:
           echo "linting ${#py[@]} Python file(s)"
           ruff check "${py[@]}"
 
-      # The supply-chain scan, and it fails the build rather than warning. This
-      # repository ships no package manifest, so its dependency surface is the
-      # workflows themselves: the actions they call, the tokens they hold, and
-      # every `${{ }}` that reaches a run block. A branch name is attacker-
-      # controlled on a fork pull request, and an expansion is substituted into
-      # shell source before bash parses it.
+      # The supply-chain scan, and it fails the build. With no package manifest,
+      # the workflows and actions are this repository's dependency surface.
       - name: zizmor
         run: |
-          # --no-online-audits keeps the verdict a function of the commit under
-          # test, the same rule the mirror job states: the online audits ask
-          # GitHub whether an action has since been archived, which is a fact
-          # about the world on the day the job runs and would redden a pull
-          # request that did not cause it. It is also an unbounded network call
-          # inside a blocking gate.
-          # --persona=auditor, not the default. The default persona does not
-          # RUN the excessive-permissions audit at all, so a workflow-level
-          # id-token: write — which every job added later silently inherits,
-          # with no diff that looks like a permission change — is not merely
-          # unreported, it is never looked for. A green tick from a check that
-          # skipped the audit is worse than no check.
-          # The local actions are scanned with the workflows that call them: a
-          # composite action's run block executes with the calling job's token.
+          # --no-online-audits: the online audits ask about the world, not the
+          # commit, over an unbounded call. --persona=auditor: the default
+          # persona skips the excessive-permissions audit. The local actions
+          # too, since their run blocks hold the calling job's token.
           zizmor --no-online-audits --persona=auditor .github/workflows/ .github/actions/
 
-      # Advisory, and exits 0 whatever it finds. Prose conformance is read
-      # rather than matched — a pattern finds only the phrasings its author
-      # thought of — so this surfaces the prose a change adds next to the rules
-      # instead of claiming a verdict over it. Needs the base commit to diff
-      # against, which the checkout above fetches.
+      # Advisory, and exits 0 whatever it finds: it lists the prose a change adds
+      # beside the rules, for a reader, rather than claiming a verdict over it.
       - name: prose the change adds
         if: github.event_name == 'pull_request'
         env:
-          # Through the environment, never interpolated into the run block: a
-          # `${{ }}` expansion is substituted into the shell source before bash
-          # parses it, so a branch named with a shell metacharacter would run.
+          # Through the environment: an expression in the run block would be
+          # substituted into the script before bash parses it.
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # The checkout above takes full history, so the base ref only needs
-          # fetching; no deepening dance, and no silent empty range if it fails.
+          # The checkout has full history, so the base ref only needs fetching.
           git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           python3 scripts/check-prose-voice.py "origin/$BASE_REF"
 
@@ -171,12 +123,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Every chart version in this repo is pinned inside an install.sh, because
-      # explicit install scripts are the point here. Renovate ships no manager
-      # that reads a shell script, so the pins are covered by customManagers in
-      # renovate.json — and a customManager whose regex matches nothing is valid
-      # config watching nothing. renovate-config-validator passes it: the schema
-      # is fine and the pattern never runs against a file.
+      # Renovate reads no shell script, so customManagers watch the install.sh
+      # pins, and a customManager whose regex matches nothing is valid config
+      # watching nothing.
       - name: renovate customManagers cover every install.sh pin
         run: python3 scripts/check-renovate-coverage.py
 
@@ -189,14 +138,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Offline half only. Whether a chart went deprecated upstream overnight is
-      # not a function of this commit, and gating merges on it would redden pull
-      # requests that did not cause it — the same reason mirror freshness is
-      # asked on a schedule. chart-provenance.yml asks the live question.
-      #
-      # What is checked here is that every pinned chart has a record and every
-      # record still names a pinned chart, so the live half cannot quietly stop
-      # covering something.
+      # The offline half: every pin has a record, and every record a pin, so the
+      # live half that chart-provenance.yml runs on a schedule covers every pin
+      # (docs/adr/0011).
       - name: Every pin has a provenance record, and can fail
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
@@ -211,13 +155,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # At the pinned ref, never at eks-gitops' default branch. The verdict has
-      # to be a function of the commit under test — reading upstream's head
-      # would turn this check red the moment Renovate merges a chart bump over
-      # there, which is a fact about that repository and not about this PR.
-      # `mirror-freshness.yml` asks that question on its own schedule.
-      # Full history, because the ref to compare against lives in
-      # stack/upstream.json and is read after the checkout, not before it.
+      # At the ref stack/upstream.json records, never the catalog's default
+      # branch (docs/adr/0011). Full history, because that ref is read after the
+      # checkout.
       - name: Check out the catalog
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -232,11 +172,8 @@ jobs:
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["upstream"]["ref"])')"
-          # Asserted before use. A substitution that produced nothing is not a
-          # tree that pinned nothing, and `git checkout ""` is not a checkout of
-          # the pin. Tested with a bash conditional rather than a match against
-          # an external tool, so an absent tool cannot delete the assertion the
-          # way it would delete a grep.
+          # Asserted before use, with a bash conditional rather than an external
+          # tool: an empty substitution is not a pin.
           if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
             echo "FAIL  upstream.ref read as '$ref', which is not a commit sha."
             echo "      Comparing against an unresolved ref would grade the catalog at whatever"
@@ -255,22 +192,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # The operator slice installs the sibling eks-agent-platform checkout's
-      # chart against kx's values — give it one to render from.
-      #
-      # At the ref stack/upstream.json records, for the reason the mirror job
-      # states: reading that repository's default branch makes this job's
-      # verdict a fact about a commit nobody here proposed, so a merge there
-      # reddens a pull request that did not cause it.
+      # The operator slice renders the sibling eks-agent-platform chart, read at
+      # the ref stack/upstream.json records (docs/adr/0011).
       - name: Read the sibling ref
         id: sibling
         run: |
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
-          # Asserted before it becomes a step output. An empty value here is not
-          # an error to actions/checkout — it is the instruction to take the
-          # DEFAULT BRANCH, which is exactly the reading the comment above says
-          # this job must not do. The failure is silent and the render still
-          # passes, against a commit nobody here proposed.
+          # Asserted before it becomes an output: actions/checkout reads an empty
+          # ref as the default branch.
           if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
             echo "FAIL  siblings.eks-agent-platform.ref read as '$ref', which is not a commit sha."
             echo "      An empty ref makes the checkout take the sibling's default branch, so this"
@@ -290,25 +219,10 @@ jobs:
 
       - uses: ./.github/actions/kubeconform
 
-      # Every gate this job runs proves it can still reject before the stack is
-      # validated, so a gate that has stopped rejecting fails here rather than
-      # reporting a green stack it never checked.
-      # The producer, proven before the consumer. render-check.sh feeds the schema
-      # gate its input, so an extraction that quietly lifted the wrong command
-      # would hand that gate a clean verdict over something the installer never
-      # runs — a tested consumer over an unproven producer.
-      # Invariants about the tree, each closing a class found once and fixed
-      # everywhere — among them an unbounded helm install, a manifest in an
-      # addon directory that nothing applies, a Python program hidden in a shell
-      # string, a Python file that does not compile, and a gate that can no
-      # longer reject. The script lists them all, and runs its own positive
-      # controls before reporting, so there is no separate step to forget.
-      #
-      # In this job because one invariant RUNS every gate in the suite and
-      # observes what it does, rather than reading its source for the word
-      # "control" — and the schema gate's controls need kubeconform, installed
-      # above. A floor that cannot observe a gate refuses to certify it, so this
-      # has to run where every gate can run.
+      # The floor first, so every gate below, render-check.sh among them, has
+      # been seen to reject before its verdict is read (docs/adr/0014). In this
+      # job because the floor runs every gate, and the schema gate's controls
+      # need kubeconform.
       - name: Slice invariants hold, and every gate still rejects
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
@@ -320,23 +234,11 @@ jobs:
           KX_RENDER_OUT: ${{ runner.temp }}/render
         run: ./scripts/render-check.sh
 
-      # Same render, second pass. A custom resource in one slice is defined by a
-      # CRD shipped in another, so nothing can be validated until every slice has
-      # rendered — which is why this is a step here rather than its own job.
-      # Every gate below runs its own positive controls before it reports, so a
-      # gate that has stopped rejecting fails on its own invocation rather than
-      # in a step somebody has to remember to add.
-      # Whether an image reference is immutable IS a fact about the commit under
-      # test, and so is whether a tag a values file pins by hand names the same
-      # release as the chart's own images, so this half blocks. The CVE half asks
-      # a question with a different answer every day and runs on a schedule, in
-      # image-cves.yml — the same split, for the same reason, as chart provenance
-      # and mirror freshness.
-      #
-      # kx pins its own chart versions and those pins are not derived from the
-      # catalog, so no other repository can vouch for what they resolve to. The
-      # render is the input rather than the values files, because a values file
-      # names the deltas and the chart supplies the rest.
+      # Over the same render, so a step rather than a job: a custom resource in
+      # one slice is defined by a CRD another ships. Whether each image reference
+      # is immutable is a fact about the commit; the CVE half runs on a schedule
+      # in image-cves.yml (docs/adr/0011). The render is the input, since a
+      # values file names only the deltas.
       - name: Every image the pinned charts resolve to is immutable, every hand pin on its chart's release
         env:
           RENDER_DIR: ${{ runner.temp }}/render
@@ -349,22 +251,10 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           python3 scripts/check-rendered-schemas.py "$RENDER_DIR"
 
-      # Third pass over the same render, and the only one that joins it to the
-      # sibling checkout the render was produced from. The operator slice hands
-      # the binary flags through the chart's `extraArgs`, which the chart
-      # declares as an untyped array and renders verbatim — so helm has nothing
-      # to hold them to, and neither does anything above.
-      #
-      # Blocking, and it needs no schedule to be. Both of its subjects are in
-      # the commit under test: this slice's values file, and the ref that
-      # decides which checkout the flags are read from. Nothing here reads any
-      # repository's default branch, so no merge elsewhere can redden a pull
-      # request that did not cause it.
-      #
-      # Both paths arrive as arguments rather than through the environment. The
-      # suite floor runs a probed gate with the ambient environment inherited,
-      # so a checkout resolved from KX_EKS_AGENT_PLATFORM_DIR would be read from
-      # a developer's own tree instead of the fixture the floor wrote.
+      # The chart hands the operator its flags through an untyped `extraArgs`
+      # array, so nothing above holds them to the binary. Both paths come as
+      # arguments: the floor runs a probed gate in the ambient environment, where
+      # KX_EKS_AGENT_PLATFORM_DIR would name a developer's own checkout.
       - name: Every flag the operator slice sets reaches a binary that defines it
         env:
           RENDER_DIR: ${{ runner.temp }}/render
@@ -380,22 +270,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # The suite runs twice, under two engines, and both are blocking.
-      #
-      # First, the Kyverno the security slice installs. Its release is read out
-      # of stack/security/kyverno/values.yaml, where the readiness-checker tags
-      # are held to the chart's own release by check-images.py, so this run
-      # moves with the chart pin and cannot quietly test a different engine from
-      # the one a workstation gets. Its digest comes from the checksums file the
-      # same release publishes: that catches a truncated or substituted archive,
-      # not a compromised release, which is the guarantee the kubeconform
-      # download gives too.
-      #
-      # Then the release pinned here, which is the one the policies were written
-      # against and the one the next chart bump installs. Renovate watches this
-      # pin; the first run needs no watching because it follows the chart.
-      #
-      # Downloaded to a file and checked before it is unpacked and run, with the
+      # Twice, both blocking. First under the release the security slice
+      # installs, read from its values, where check-images.py holds the tag to
+      # the chart's release, so this run moves with the chart pin. Then under the
+      # release pinned below, which the policies target and Renovate watches.
+      # Each archive is checked against its digest before it runs, with the
       # retry set .github/actions/kubeconform explains.
       - name: Under the engine the security slice pins
         run: |
@@ -447,9 +326,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # From one hash-locked file: every package, transitive ones included, at
-      # one version and the hashes PyPI publishes for it, so the job installs
-      # exactly those files or fails.
+      # Hash-locked, like the lint job's tools.
       - name: Install the test tools
         run: pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/test-requirements.txt
 
@@ -457,11 +334,8 @@ jobs:
       # job validates with.
       - uses: ./.github/actions/kubeconform
 
-      # The helpers an installer runs are executed here and nowhere else in CI,
-      # so their tests are the only thing that runs them before a workstation
-      # does. The script holds the run to the floors pyproject.toml states: every
-      # line and branch of each helper, and the gates together at a ratchet that
-      # never sits under the minimums recorded beside it.
+      # The installers' helpers run here and nowhere else in CI, under the floors
+      # pyproject.toml states.
       - name: Every installer helper fully covered, every gate at its floor
         run: ./scripts/python-test.sh
 
@@ -479,14 +353,9 @@ jobs:
         kyverno,
         test,
       ]
-    # always() is load-bearing: without it a failed dependency SKIPS this job,
-    # and GitHub counts a skipped check as passing for branch protection, so the
-    # gate would report green exactly when something broke.
-    #
-    # Restricted to pull_request because the gate treats a skipped dependency as
-    # a failure, and a job carrying `if: github.event_name == 'pull_request'` is
-    # legitimately skipped on a push to main. The gate exists to gate merges, and
-    # merges come from pull requests; on push it is skipped and gates nothing.
+    # always(): without it a failed dependency skips this job, and branch
+    # protection counts a skipped check as passing. Pull requests only, since
+    # merges come from them; on push it is skipped and gates nothing.
     if: always() && github.event_name == 'pull_request'
     steps:
       - uses: nanohype/.github/actions/merge-gate@9911d2952b1f9078816c323baa253a63242c1c31 # v1
