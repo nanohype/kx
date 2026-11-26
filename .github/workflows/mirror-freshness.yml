@@ -1,7 +1,7 @@
 name: mirror freshness
 # Asks whether the eks-gitops catalog has moved past the pin in
 # stack/upstream.json. Scheduled rather than in ci.yml, which compares against
-# the catalog at the pinned ref (docs/adr/0011).
+# the catalog at the pinned ref (ADR 0011).
 #
 # A red run here means: `python3 scripts/mirror-check.py sync`, then
 # ./scripts/render-check.sh, and ship whatever the values files need.

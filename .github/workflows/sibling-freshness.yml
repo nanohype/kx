@@ -1,7 +1,7 @@
 name: sibling freshness
 # Asks whether eks-agent-platform has moved past the pin in stack/upstream.json,
 # and whether moving the pin to it would hold. Scheduled rather than in ci.yml,
-# which renders the sibling at the pinned ref (docs/adr/0011).
+# which renders the sibling at the pinned ref (ADR 0011).
 #
 # The distance is reported and never fails on its own: distance alone is no
 # reason to act, and a check that is red whenever the sibling moves is one

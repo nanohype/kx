@@ -36,7 +36,7 @@ jobs:
       - name: yamllint
         run: yamllint .
 
-      # Every published port binds to loopback (docs/adr/0005), and kind binds a
+      # Every published port binds to loopback (ADR 0005), and kind binds a
       # mapping that names no listenAddress to every interface.
       - name: host ports are loopback-bound
         run: |
@@ -140,7 +140,7 @@ jobs:
 
       # The offline half: every pin has a record, and every record a pin, so the
       # live half that chart-provenance.yml runs on a schedule covers every pin
-      # (docs/adr/0011).
+      # (ADR 0011).
       - name: Every pin has a provenance record, and can fail
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
@@ -156,7 +156,7 @@ jobs:
           persist-credentials: false
 
       # At the ref stack/upstream.json records, never the catalog's default
-      # branch (docs/adr/0011). Full history, because that ref is read after the
+      # branch (ADR 0011). Full history, because that ref is read after the
       # checkout.
       - name: Check out the catalog
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +193,7 @@ jobs:
           persist-credentials: false
 
       # The operator slice renders the sibling eks-agent-platform chart, read at
-      # the ref stack/upstream.json records (docs/adr/0011).
+      # the ref stack/upstream.json records (ADR 0011).
       - name: Read the sibling ref
         id: sibling
         run: |
@@ -220,7 +220,7 @@ jobs:
       - uses: ./.github/actions/kubeconform
 
       # The floor first, so every gate below, render-check.sh among them, has
-      # been seen to reject before its verdict is read (docs/adr/0014). In this
+      # been seen to reject before its verdict is read (ADR 0014). In this
       # job because the floor runs every gate, and the schema gate's controls
       # need kubeconform.
       - name: Slice invariants hold, and every gate still rejects
@@ -237,7 +237,7 @@ jobs:
       # Over the same render, so a step rather than a job: a custom resource in
       # one slice is defined by a CRD another ships. Whether each image reference
       # is immutable is a fact about the commit; the CVE half runs on a schedule
-      # in image-cves.yml (docs/adr/0011). The render is the input, since a
+      # in image-cves.yml (ADR 0011). The render is the input, since a
       # values file names only the deltas.
       - name: Every image the pinned charts resolve to is immutable, every hand pin on its chart's release
         env:

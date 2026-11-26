@@ -1,7 +1,7 @@
 name: chart provenance
 # Asks whether each chart this stack pins is still the chart it was pinned for,
 # upstream, now. Scheduled rather than in ci.yml, because the answer changes
-# without this repository changing (docs/adr/0011).
+# without this repository changing (ADR 0011).
 #
 # A red run here means: read the upstream notes for whatever it names, decide
 # whether the chart is still the one you want, then either migrate the pin or

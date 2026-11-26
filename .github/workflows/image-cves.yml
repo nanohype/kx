@@ -3,10 +3,10 @@ name: image cves
 # exception covers. kx's pins are its own, so no other repository vouches for
 # what they resolve to. Scheduled rather than in ci.yml, which holds the half
 # that is a fact about the commit: every image reference immutable
-# (docs/adr/0011). Runtime scanning in the cluster is the trivy-operator addon's.
+# (ADR 0011). Runtime scanning in the cluster is the trivy-operator addon's.
 #
 # A run ends clean, with findings, or unable to run, each with its own exit
-# status, and the job summary names which (docs/adr/0013). On findings, move
+# status, and the job summary names which (ADR 0013). On findings, move
 # the chart pin where the publisher has rebuilt on a patched base, declaring
 # the divergence in stack/upstream.json when that moves ahead of the catalog;
 # otherwise record a time-boxed exception in stack/image-cve-exceptions.json.
