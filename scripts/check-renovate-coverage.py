@@ -28,8 +28,11 @@ import json
 import pathlib
 import re
 import sys
-import tempfile
 import textwrap
+
+from gatelib import scratch
+from gatelib.report import guarded
+from gatelib.text import strip_comments
 
 # Valid in Python's re, absent from RE2. A pattern using one of these would pass
 # locally and match nothing when Renovate runs it.
@@ -55,62 +58,6 @@ ROOT = pathlib.Path(
 # against the shipped rules rather than against whatever a fixture carries.
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-
-def strip_comments(text: str) -> str:
-    """Source with `#` comment bodies blanked, quote-aware.
-
-    A `#` opens a comment only at the start of a word and only outside quotes,
-    so a URL fragment and a quoted hash both survive.
-
-    Which view a check reads is a per-check decision, not a blanket rule:
-
-      raw       when the thing being looked for IS an annotation. Renovate reads
-                whole files, so a question of the form "would Renovate match
-                this?" has to be asked of the text Renovate actually sees.
-      stripped  when a comment must not be able to satisfy a code reference — a
-                pin, a call, a filename something applies.
-
-    Reading one view for both purposes is the defect. A gate that strips
-    everywhere goes blind to annotations, which are comments by construction;
-    a gate that strips nowhere lets a comment stand in for an implementation.
-    """
-    out = []
-    for line in text.splitlines():
-        # An unbalanced quote must not swallow the rest of the line. A word like
-        # dont'care opens a quote that never closes, and every `#` after it then
-        # reads as quoted — so a comment survives blanking and whatever it
-        # mentions counts as code. Scanned twice: if a quote is still open at
-        # end of line it was an apostrophe inside a word, so the second pass
-        # treats that character as literal.
-        buf = []
-        for literal_apostrophe in (False, True):
-            buf, quote, i = [], None, 0
-            while i < len(line):
-                c = line[i]
-                if quote:
-                    buf.append(c)
-                    if c == "\\" and quote == '"' and i + 1 < len(line):
-                        buf.append(line[i + 1])
-                        i += 2
-                        continue
-                    if c == quote:
-                        quote = None
-                elif c == "'" and literal_apostrophe:
-                    buf.append(c)
-                elif c in "\"'":
-                    quote = c
-                    buf.append(c)
-                elif c == "#" and (not buf or buf[-1].isspace()):
-                    buf.append(" " * (len(line) - i))
-                    quote = None
-                    break
-                else:
-                    buf.append(c)
-                i += 1
-            if quote is None:
-                break
-        out.append("".join(buf))
-    return "\n".join(out)
 
 # What makes a script pin-bearing. Classified by what the script installs, not
 # by whether it contains the string this gate looks for: filtering on
@@ -310,13 +257,12 @@ def self_test() -> int:
     patterns = compile_patterns(json.loads((SOURCE_ROOT / "renovate.json").read_text()))
     failures = []
 
-    def tree(files):
-        d = pathlib.Path(tempfile.mkdtemp(prefix="kx-renovate-"))
-        for rel, body in files.items():
-            f = d / "stack" / rel / "install.sh"
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(body)
-        return d, sorted(str(x) for x in d.glob("stack/*/*/install.sh"))
+    def covered(files) -> int:
+        """coverage()'s verdict over a fixture tree of install.sh files, removed after."""
+        with scratch.tree({f"stack/{rel}/install.sh": body for rel, body in files.items()},
+                          prefix="kx-renovate-") as root:
+            scripts = sorted(str(x) for x in root.glob("stack/*/*/install.sh"))
+            return coverage(patterns, scripts, root=root, quiet=True)
 
     WATCHED = ('helm repo add x https://x.example\n'
                'helm upgrade --install a x/a --version 1.2.3\n')
@@ -333,8 +279,7 @@ def self_test() -> int:
          {"s/a": 'kubectl apply -f ./local.yaml\n'}),
     ]
     for label, files in breaks:
-        root, scripts = tree(files)
-        if coverage(patterns, scripts, root=root, quiet=True) == 0:
+        if covered(files) == 0:
             failures.append(label)
             print(f"  ACCEPTED  {label}   <-- not caught")
         else:
@@ -379,7 +324,8 @@ def self_test() -> int:
     # expected, and the gate passes over a tree it never looked at.
     probe = subprocess.run(
         [sys.executable, "-c",
-         "import importlib.util,sys;"
+         "import importlib.util,os,sys;"
+         "sys.path.insert(0, os.path.dirname(sys.argv[1]));"
          "s=importlib.util.spec_from_file_location('rc', sys.argv[1]);"
          "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
          "m.compile_patterns({'customManagers': []})",
@@ -387,7 +333,7 @@ def self_test() -> int:
         capture_output=True, text=True, check=False,
         timeout=60,
     )
-    if probe.returncode == 0:
+    if probe.returncode == 0 or "declares no customManagers" not in probe.stdout:
         failures.append("a config with no customManagers is accepted")
         print("  ACCEPTED  (positive) a renovate.json with every manager deleted")
     else:
@@ -397,9 +343,8 @@ def self_test() -> int:
     # carries it is correctly reported as carrying none. The opposite reading —
     # treating prose as a pin — makes the exclusion assertion fire on a file
     # that has nothing to watch.
-    root, scripts = tree({"s/a": WATCHED,
-                          "s/b": '# --version 9.9.9 was the old pin\nkubectl apply -f ./x.yaml\n'})
-    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+    if covered({"s/a": WATCHED,
+                "s/b": '# --version 9.9.9 was the old pin\nkubectl apply -f ./x.yaml\n'}) != 0:
         failures.append("a version in a comment is not a pin")
         print("  ACCEPTED  (positive) a version in a comment is treated as an unwatched pin")
     else:
@@ -408,10 +353,9 @@ def self_test() -> int:
     # A file whose only registry marker is in prose is not pin-bearing. Asserted
     # as a positive, because the failure this guards is a false alarm rather
     # than a miss, and a gate that cries wolf is one people learn to skip.
-    root, scripts = tree({"s/a": WATCHED,
-                          "s/b": '# this used to `helm repo add` but installs from a path now\n'
-                                 'helm upgrade --install b ./chart\n'})
-    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+    if covered({"s/a": WATCHED,
+                "s/b": '# this used to `helm repo add` but installs from a path now\n'
+                       'helm upgrade --install b ./chart\n'}) != 0:
         failures.append("a registry marker in a comment is not a pin")
         print("  ACCEPTED  (positive) a `helm repo add` in a comment is treated as a pin")
     else:
@@ -420,10 +364,9 @@ def self_test() -> int:
     # The release-URL shape, which is why the third manager exists. Asserted as
     # a positive: a break-only suite passes just as happily when every pattern
     # matches nothing.
-    root, scripts = tree({"s/a": WATCHED, "s/b":
-        'GW_VERSION="v1.5.1"\nkubectl apply -f '
-        '"https://github.com/kubernetes-sigs/gateway-api/releases/download/${GW_VERSION}/x.yaml"\n'})
-    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+    release_url = ('GW_VERSION="v1.5.1"\nkubectl apply -f "https://github.com/kubernetes-sigs/'
+                   'gateway-api/releases/download/${GW_VERSION}/x.yaml"\n')
+    if covered({"s/a": WATCHED, "s/b": release_url}) != 0:
         failures.append("a release-URL pin is watched")
         print("  ACCEPTED  (positive) a release-URL pin is reported unwatched")
     else:
@@ -433,14 +376,13 @@ def self_test() -> int:
     # deadline that bounds its chart fetch. Asserted as a positive, so a manager
     # anchored to a line that starts with helm fails here rather than leaving
     # every pin it stopped reading unwatched.
-    root, scripts = tree({"s/a": WATCHED,
+    if covered({"s/a": WATCHED,
                           "s/b": 'helm repo add y https://y.example\n'
                                  'deadline 900 helm upgrade --install b y/b \\\n'
                                  '  --version 4.5.6 \\\n'
                                  '  --wait --timeout 10m\n',
                           "s/c": 'deadline 300 helm template c oci://r.example/o/c \\\n'
-                                 '  --version 1.0.0 >"${MANIFEST}"\n'})
-    if coverage(patterns, scripts, root=root, quiet=True) != 0:
+                                 '  --version 1.0.0 >"${MANIFEST}"\n'}) != 0:
         failures.append("a pin under deadline is watched")
         print("  ACCEPTED  (positive) a pin under deadline is reported unwatched")
     else:
@@ -576,32 +518,6 @@ def verdict(cfg, root: pathlib.Path) -> int:
             or coverage(compile_patterns(cfg), corpus, root=root))
 
 
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('spared    ', 'matched   ', 'passed    '))),
-    }
-
-
 def main() -> int:
     # Always, before reporting on the tree. A gate that has not just proven it
     # rejects is a gate being trusted rather than checked, and a proof behind a
@@ -614,4 +530,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded(main, "check-renovate-coverage", 1))

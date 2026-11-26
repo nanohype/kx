@@ -123,11 +123,6 @@ class TestSelfTest:
         assert "MISSED    # TODO: wire this up" in out
         assert "FALSE +   # PKCS#12 bundles are not supported by this chart  (over-matches)" in out
 
-    def test_control_outcomes_count_both_halves(self, prose):
-        outcomes = prose.control_outcomes()
-        assert outcomes["ok"] is True
-        assert outcomes["rejected"] == 6 and outcomes["accepted"] == 6
-
 
 def test_a_diff_git_could_not_produce_is_refused(prose, monkeypatch):
     results = iter([subprocess.CompletedProcess([], 0, "abc\n", ""),

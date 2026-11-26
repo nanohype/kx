@@ -40,16 +40,19 @@ the render gate stayed green. The description was the only field that moved.
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import os
 import json
 import pathlib
-import re
 import subprocess
 import sys
-import tempfile
 
 import yaml
+
+from gatelib import scratch
+from gatelib.pins import install_pins
+from gatelib.report import die as stop, guarded
 
 # The tree this gate reads. Overridable so the suite-wide floor can point the
 # gate at a fixture it wrote and observe the real exit status, rather than
@@ -65,98 +68,30 @@ RECORDS = ROOT / "stack" / "chart-provenance.json"
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE_RECORDS = SOURCE_ROOT / "stack" / "chart-provenance.json"
 
-REPO_ADD = re.compile(r"^[ \t]*helm repo add\s+(\S+)\s+(\S+)", re.M)
-# Both verbs, because a chart a slice renders and applies is pinned exactly as
-# one it installs as a release: envoy-gateway-crds runs `helm template` into a
-# server-side apply, since its chart is too large to store as a release, and its
-# pin needs a provenance record like any other. Either runs under the
-# `deadline N` that bounds its chart fetch, which is read through.
-HELM_INSTALL = re.compile(
-    r"^[ \t]*(?:deadline[ \t]+\d+[ \t]+)?helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M
-)
-VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
 
-
-def strip_comments(text: str) -> str:
-    """Source with `#` comment bodies blanked, quote-aware.
-
-    A superseded pin recorded in a comment above the live one would otherwise
-    win an unanchored search, and this file records what a chart WAS pinned for
-    — so reading the dead version puts the wrong description on the record and
-    every later comparison is against a chart nobody installs.
-    """
-    out = []
-    for line in text.splitlines():
-        # An unbalanced quote must not swallow the rest of the line. A word like
-        # dont'care opens a quote that never closes, and every `#` after it then
-        # reads as quoted — so a comment survives blanking and whatever it
-        # mentions counts as code. Scanned twice: if a quote is still open at
-        # end of line it was an apostrophe inside a word, so the second pass
-        # treats that character as literal.
-        buf = []
-        for literal_apostrophe in (False, True):
-            buf, quote, i = [], None, 0
-            while i < len(line):
-                c = line[i]
-                if quote:
-                    buf.append(c)
-                    if c == "\\" and quote == '"' and i + 1 < len(line):
-                        buf.append(line[i + 1])
-                        i += 2
-                        continue
-                    if c == quote:
-                        quote = None
-                elif c == "'" and literal_apostrophe:
-                    buf.append(c)
-                elif c in "\"'":
-                    quote = c
-                    buf.append(c)
-                elif c == "#" and (not buf or buf[-1].isspace()):
-                    buf.append(" " * (len(line) - i))
-                    quote = None
-                    break
-                else:
-                    buf.append(c)
-                i += 1
-            if quote is None:
-                break
-        out.append("".join(buf))
-    return "\n".join(out)
-
-
-def die(msg: str) -> None:
-    print(f"chart-provenance: {msg}", file=sys.stderr)
-    sys.exit(1)
+die = functools.partial(stop, "chart-provenance", code=1)
 
 
 def pins(root: pathlib.Path | None = None) -> dict[str, dict]:
     """{chart: {repo, version, source}} for every helm pin in stack/*/*/install.sh."""
     root = root or ROOT
     found: dict[str, dict] = {}
-    for script in sorted(root.glob("stack/*/*/install.sh")):
-        text = strip_comments(script.read_text())
-        install = HELM_INSTALL.search(text)
-        version = VERSION_FLAG.search(text)
-        if not install or not version:
-            continue  # kubectl-apply slices and locally-built images
-        ref = install.group(2)
-        if ref.startswith("oci://"):
-            repo, chart = ref, ref.rstrip("/").split("/")[-1]
-        else:
-            alias, _, chart = ref.partition("/")
+    for pin in install_pins(root):
+        if pin.version is None:
+            continue  # locally-built charts, which carry no remote pin
+        if not pin.ref.startswith("oci://"):
+            alias, _, chart = pin.ref.partition("/")
             if not chart:
                 continue
-            urls = {a: u for a, u in REPO_ADD.findall(text)}
-            repo = urls.get(alias)
-            if not repo:
+            if not pin.repo:
                 die(
-                    f"{script.relative_to(root)} installs {ref} but adds no repo "
+                    f"{pin.script.relative_to(root)} installs {pin.ref} but adds no repo "
                     f"named {alias!r} — the parser and the script disagree"
                 )
-        found[chart] = {
-            "repo": repo,
-            "version": version.group(1),
-            "source": str(script.relative_to(root)),
+        found[pin.chart] = {
+            "repo": pin.repo,
+            "version": pin.version,
+            "source": str(pin.script.relative_to(root)),
         }
     if not found:
         die("read no chart pins out of stack/*/*/install.sh — the parser and the tree disagree")
@@ -310,29 +245,23 @@ def self_test() -> int:
     # A pin carried by `helm template` rather than `helm upgrade --install`,
     # read through the real parser out of a fixture tree. A parser that dropped
     # the shape would hand check_offline nothing to miss a record for.
-    with tempfile.TemporaryDirectory(prefix="provenance-") as tmp:
-        script = pathlib.Path(tmp) / "stack" / "s" / "rendered" / "install.sh"
-        script.parent.mkdir(parents=True)
-        script.write_text(
-            "helm template r oci://r.example/o/rendered-chart \\\n"
-            "  --version 1.0.0 >\"${MANIFEST}\"\n"
-            "kubectl apply --server-side -f \"${MANIFEST}\"\n"
-        )
-        rendered = pins(pathlib.Path(tmp))
+    with scratch.tree({"stack/s/rendered/install.sh":
+                       "helm template r oci://r.example/o/rendered-chart \\\n"
+                       "  --version 1.0.0 >\"${MANIFEST}\"\n"
+                       "kubectl apply --server-side -f \"${MANIFEST}\"\n"},
+                      prefix="provenance-") as tmp:
+        rendered = pins(tmp)
     p_rendered = {**real_pins, **rendered}
 
     # A pin under the deadline every installer runs its install under, read the
     # same way, for the same reason.
-    with tempfile.TemporaryDirectory(prefix="provenance-") as tmp:
-        script = pathlib.Path(tmp) / "stack" / "s" / "deadlined" / "install.sh"
-        script.parent.mkdir(parents=True)
-        script.write_text(
-            "helm repo add x https://x.example --force-update >/dev/null\n"
-            "deadline 900 helm upgrade --install d x/deadlined-chart \\\n"
-            "  --version 1.0.0 \\\n"
-            "  --wait --timeout 10m\n"
-        )
-        deadlined = pins(pathlib.Path(tmp))
+    with scratch.tree({"stack/s/deadlined/install.sh":
+                       "helm repo add x https://x.example --force-update >/dev/null\n"
+                       "deadline 900 helm upgrade --install d x/deadlined-chart \\\n"
+                       "  --version 1.0.0 \\\n"
+                       "  --wait --timeout 10m\n"},
+                      prefix="provenance-") as tmp:
+        deadlined = pins(tmp)
     p_deadlined = {**real_pins, **deadlined}
 
     breaks = [
@@ -367,32 +296,6 @@ def self_test() -> int:
     return 0
 
 
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('passed    ',))),
-    }
-
-
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
@@ -411,4 +314,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded(main, "chart-provenance", 1))

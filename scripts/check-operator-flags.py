@@ -60,15 +60,19 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import io
 import json
 import os
 import pathlib
 import re
 import sys
-import tempfile
 
 import yaml
+
+from gatelib import scratch
+from gatelib.manifests import ManifestLoader
+from gatelib.report import refuse
 
 # The tree this gate reads. Overridable so the suite-wide floor can point the
 # gate at a fixture it wrote and observe the real exit status, rather than
@@ -83,21 +87,6 @@ ROOT = pathlib.Path(
     os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent
 )
 
-
-class ManifestLoader(yaml.SafeLoader):
-    """SafeLoader that tolerates a bare `=` in rendered CRDs.
-
-    prometheus-operator-crds ships an Alertmanager matchType enum listing the
-    match operators, and `- =` unquoted is YAML 1.1's "default value" tag rather
-    than the string. SafeLoader refuses it outright, taking the whole document
-    with it — and a document lost while reading the render is a container this
-    gate never examines, which is the failure it exists to prevent.
-    """
-
-
-ManifestLoader.add_constructor(
-    "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
-)
 
 # The slice whose values are under test, and the sibling entry that names where
 # its flags are defined. Both are paths in the tree, not in the checkout.
@@ -124,9 +113,7 @@ FLAG_DEF = re.compile(
 )
 
 
-def die(msg: str) -> int:
-    print(f"check-operator-flags: {msg}", file=sys.stderr)
-    return 1
+die = functools.partial(refuse, "check-operator-flags")
 
 
 def flag_names(entries) -> list[str]:
@@ -282,8 +269,7 @@ def self_test() -> int:
     # The render reader, against a tree written here. A Deployment carrying some
     # other image must not contribute arguments, or the gate would credit a flag
     # to the operator that something else was passed.
-    with tempfile.TemporaryDirectory() as d:
-        r = pathlib.Path(d)
+    with scratch.directory("kx-operator-flags-") as r:
         (r / "op.yaml").write_text(
             "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: op}\nspec:\n"
             "  template:\n    spec:\n      containers:\n        - name: c\n"

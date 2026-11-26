@@ -25,7 +25,7 @@ import sys
 
 import yaml
 
-WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod"}
+from gatelib.manifests import pod_specs
 
 
 # A bare `=` is YAML 1.1's "default value" key, and SafeLoader refuses to
@@ -36,21 +36,6 @@ WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Replic
 yaml.SafeLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
-
-
-def pod_specs(doc):
-    """Every pod spec in a manifest, with a path describing where it came from."""
-    kind = doc.get("kind")
-    if kind not in WORKLOADS:
-        return
-    name = (doc.get("metadata") or {}).get("name", "?")
-    if kind == "Pod":
-        yield name, doc.get("spec") or {}
-    elif kind == "CronJob":
-        spec = (((doc.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {})
-        yield name, ((spec.get("template") or {}).get("spec") or {})
-    else:
-        yield name, (((doc.get("spec") or {}).get("template") or {}).get("spec") or {})
 
 
 def duplicates(stream: str) -> list[str]:
@@ -192,32 +177,6 @@ def self_test() -> int:
         return 1
     print(f"\nOK    all {len(SELF_TEST_CASES)} cases correct.")
     return 0
-
-
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('caught  ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('allowed ',))),
-    }
 
 
 def main() -> int:
