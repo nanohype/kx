@@ -25,7 +25,7 @@ import sys
 
 import yaml
 
-WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod"}
+from gatelib.manifests import pod_specs
 
 
 # A bare `=` is YAML 1.1's "default value" key, and SafeLoader refuses to
@@ -36,21 +36,6 @@ WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Replic
 yaml.SafeLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
-
-
-def pod_specs(doc):
-    """Every pod spec in a manifest, with a path describing where it came from."""
-    kind = doc.get("kind")
-    if kind not in WORKLOADS:
-        return
-    name = (doc.get("metadata") or {}).get("name", "?")
-    if kind == "Pod":
-        yield name, doc.get("spec") or {}
-    elif kind == "CronJob":
-        spec = (((doc.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {})
-        yield name, ((spec.get("template") or {}).get("spec") or {})
-    else:
-        yield name, (((doc.get("spec") or {}).get("template") or {}).get("spec") or {})
 
 
 def duplicates(stream: str) -> list[str]:

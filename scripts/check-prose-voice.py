@@ -112,6 +112,16 @@ class RangeUnavailable(Exception):
     """
 
 
+def _git(args: list[str]) -> subprocess.CompletedProcess:
+    """git, bounded. One that outruns its bound is a range that could not be computed."""
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True, check=False,
+                              timeout=60)
+    except subprocess.TimeoutExpired as e:
+        raise RangeUnavailable(
+            f"`git {' '.join(args)}` did not finish within {e.timeout:g}s") from e
+
+
 def added_prose(base: str) -> list[tuple[str, str]]:
     """(file, line) for every prose-looking line the diff adds.
 
@@ -122,21 +132,14 @@ def added_prose(base: str) -> list[tuple[str, str]]:
             "git is not on PATH, so no range can be computed. A gate that cannot run its "
             "own tool reports nothing about the change."
         )
-    merge_base = subprocess.run(
-        ["git", "merge-base", base, "HEAD"], capture_output=True, text=True, check=False,
-        timeout=60,
-    )
+    merge_base = _git(["merge-base", base, "HEAD"])
     if merge_base.returncode != 0:
         raise RangeUnavailable(
             f"no merge base between {base} and HEAD: "
             f"{merge_base.stderr.strip() or 'git gave no reason'}. On a shallow checkout "
             f"this usually means the fetch did not reach far enough back."
         )
-    diff = subprocess.run(
-        ["git", "diff", "--unified=0", f"{base}...HEAD"],
-        capture_output=True, text=True, check=False,
-        timeout=60,
-    )
+    diff = _git(["diff", "--unified=0", f"{base}...HEAD"])
     if diff.returncode != 0:
         raise RangeUnavailable(
             f"git diff against {base} failed: {diff.stderr.strip() or 'no reason given'}"

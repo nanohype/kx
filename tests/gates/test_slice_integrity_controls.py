@@ -41,8 +41,10 @@ def test_the_control_rejects_its_violation_and_passes_its_clean_tree(label, case
     _name, broken, clean = case[:3]
     must_say = case[3] if len(case) > 3 else None
     assert broken != clean, "the broken and clean fixtures are identical, so this proves nothing"
-    assert check(integrity._tree(clean)) == [], "the check already fails on the clean tree"
-    reported = check(integrity._tree(broken))
+    with integrity._tree(clean) as clean_root:
+        assert check(clean_root) == [], "the check already fails on the clean tree"
+    with integrity._tree(broken) as broken_root:
+        reported = check(broken_root)
     assert reported, "the check accepted the violation"
     if must_say is not None:
         assert any(must_say in r for r in reported), f"no report names {must_say!r}: {reported}"

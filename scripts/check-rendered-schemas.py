@@ -36,6 +36,7 @@ this gate refuses them when they are not the pinned release or not the files
 schemas/sources.json records.
 """
 
+import functools
 import hashlib
 import os
 import json
@@ -44,31 +45,18 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 import yaml
+
+from gatelib import scratch
+from gatelib.manifests import ManifestLoader
+from gatelib.report import die as stop, guarded
 
 # The tree this gate reads. Overridable so the suite-wide floor can point the
 # gate at a fixture it wrote and observe the real exit status, rather than
 # asking the gate to describe its own behaviour.
 ROOT = pathlib.Path(os.environ.get("KX_GATE_ROOT", "") or pathlib.Path(__file__).resolve().parent.parent)
 
-
-class ManifestLoader(yaml.SafeLoader):
-    """SafeLoader that tolerates a bare `=` in rendered CRDs.
-
-    prometheus-operator-crds ships an Alertmanager matchType enum listing the
-    match operators, and `- =` unquoted is YAML 1.1's "default value" tag rather
-    than the string. SafeLoader refuses it outright, which would take the whole
-    document — and with it every CRD in that file — out of the schema store.
-    Losing schemas silently is the failure this gate exists to prevent, so the
-    tag is resolved to the string it plainly means.
-    """
-
-
-ManifestLoader.add_constructor(
-    "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
-)
 
 # The schemas this gate reads besides the render's own CRDs, vendored at the
 # versions kx pins by scripts/vendor-schemas.py, which records every file's
@@ -109,9 +97,7 @@ SUMMARY_RE = re.compile(
 )
 
 
-def die(msg, code=2):
-    print(f"check-rendered-schemas: {msg}", file=sys.stderr)
-    sys.exit(code)
+die = functools.partial(stop, "check-rendered-schemas", code=2)
 
 
 def check_crd_structure(doc):
@@ -167,18 +153,17 @@ def write_crd(doc, schema_dir):
     return written
 
 
-def crd_schemas(render_dir, schema_dir=None):
+def crd_schemas(render_dir, schema_dir, filtered):
     """Every CRD in the rendered output, as kubeconform-locatable JSON schemas.
 
-    Returns the schema dir and the number of schemas written. The count is
+    Returns the number of schemas written, with the CRDs read and any structural
+    problems; every other document is written to `filtered`. The count is
     returned rather than inferred later: a converter that silently emitted
     nothing would leave every custom resource resolving to no schema, which is
     skipping again with new machinery and a green check on top. Written into
     `schema_dir` when one is given, after whatever it already holds, so the
     CRD a pinned chart renders is the one its resources are held to.
     """
-    schema_dir = schema_dir or pathlib.Path(tempfile.mkdtemp(prefix="kx-crd-schemas-"))
-    filtered = pathlib.Path(tempfile.mkdtemp(prefix="kx-manifests-"))
     written = 0
     crds = 0
     crd_problems = []
@@ -198,7 +183,7 @@ def crd_schemas(render_dir, schema_dir=None):
             (filtered / path.name).write_text(
                 "\n---\n".join(yaml.safe_dump(d) for d in keep)
             )
-    return schema_dir, written, filtered, crds, crd_problems
+    return written, crds, crd_problems
 
 
 def _nullable(schema):
@@ -334,7 +319,7 @@ def kinds_in(paths):
     return kinds
 
 
-def vendored_store(schema_dir, crd_dir, targets_of):
+def vendored_store(schema_dir, crd_dir, filtered, targets_of):
     """The whole schema store for one run, in `schema_dir`.
 
     Cilium's vendored CRDs first and the CRDs in `crd_dir` after them, so one a
@@ -352,14 +337,14 @@ def vendored_store(schema_dir, crd_dir, targets_of):
         die("the vendored schemas do not match what kx pins — refusing to validate against "
             "them.", code=1)
     cilium = vendored_crds(dirs["cilium"], schema_dir)
-    _, rendered, filtered, crds, crd_problems = crd_schemas(crd_dir, schema_dir)
+    rendered, crds, crd_problems = crd_schemas(crd_dir, schema_dir, filtered)
     targets = targets_of(filtered)
     swagger = json.loads((dirs["kubernetes"] / "swagger.json").read_text())
     builtin = builtin_schemas(swagger, schema_dir, kinds_in(targets))
     counts = {"cilium": cilium, "rendered": rendered, "builtin": builtin,
               "crds": crds, "kubernetes": f"v{pins['kubernetes']}", "cilium_version":
               f"v{pins['cilium']}"}
-    return targets, filtered, counts, crd_problems
+    return targets, counts, crd_problems
 
 
 def builtin_schemas(swagger, schema_dir, wanted):
@@ -466,11 +451,10 @@ def gate(render_dir):
     if not manifests:
         die(f"no rendered manifests in {render_dir} — refusing to report success over an empty set.")
 
-    schema_dir = pathlib.Path(tempfile.mkdtemp(prefix="kx-schemas-"))
-    filtered = None
-    try:
-        targets, filtered, counts, crd_problems = vendored_store(
-            schema_dir, render_dir, lambda kept: sorted(kept.glob("*.yaml")))
+    with scratch.directory("kx-schemas-") as schema_dir, \
+            scratch.directory("kx-manifests-") as filtered:
+        targets, counts, crd_problems = vendored_store(
+            schema_dir, render_dir, filtered, lambda kept: sorted(kept.glob("*.yaml")))
         if crd_problems:
             for pr in crd_problems:
                 print(f"  CRD FAIL  {pr}", file=sys.stderr)
@@ -501,10 +485,6 @@ def gate(render_dir):
               f"Kubernetes {counts['kubernetes']}, none skipped; "
               f"{counts['crds']} CRD(s) structurally checked.")
         return 0
-    finally:
-        shutil.rmtree(schema_dir, ignore_errors=True)
-        if filtered:
-            shutil.rmtree(filtered, ignore_errors=True)
 
 
 def self_test():
@@ -517,72 +497,70 @@ def self_test():
     # The store the gate builds, over the fixtures: Cilium's vendored CRDs, the
     # fixture CRD, and the built-in kinds the cases hold.
     cases = sorted((fixtures / "accept").glob("*.yaml")) + sorted((fixtures / "reject").glob("*.yaml"))
-    schema_dir = pathlib.Path(tempfile.mkdtemp(prefix="kx-schemas-"))
-    _targets, filtered, counts, _problems = vendored_store(
-        schema_dir, fixtures / "crds", lambda _kept: cases)
-    shutil.rmtree(filtered, ignore_errors=True)
-    if counts["rendered"] == 0:
-        die("the converter derived no schemas from tests/schema/crds/")
-    if not (schema_dir / "kx.test" / "widget_v1.json").is_file():
-        die(f"the Widget schema is missing; {counts['rendered']} other schema(s) present.")
-    for kind, path in (("Deployment", "apps/deployment_v1.json"),
-                       ("CiliumNetworkPolicy", "cilium.io/ciliumnetworkpolicy_v2.json")):
-        if not (schema_dir / path).is_file():
-            die(f"the {kind} schema is missing from the vendored store, so the cases that "
-                f"hold one would prove nothing about it.")
+    with scratch.directory("kx-schemas-") as schema_dir, \
+            scratch.directory("kx-manifests-") as filtered:
+        _targets, counts, _problems = vendored_store(
+            schema_dir, fixtures / "crds", filtered, lambda _kept: cases)
+        if counts["rendered"] == 0:
+            die("the converter derived no schemas from tests/schema/crds/")
+        if not (schema_dir / "kx.test" / "widget_v1.json").is_file():
+            die(f"the Widget schema is missing; {counts['rendered']} other schema(s) present.")
+        for kind, path in (("Deployment", "apps/deployment_v1.json"),
+                           ("CiliumNetworkPolicy", "cilium.io/ciliumnetworkpolicy_v2.json")):
+            if not (schema_dir / path).is_file():
+                die(f"the {kind} schema is missing from the vendored store, so the cases that "
+                    f"hold one would prove nothing about it.")
 
-    for fixture in sorted((fixtures / "accept").glob("*.yaml")):
+        for fixture in sorted((fixtures / "accept").glob("*.yaml")):
+            checked += 1
+            rc, out = run_kubeconform(schema_dir, [fixture])
+            s = summarise(out) or {}
+            if rc != 0:
+                print(f"FAIL  {fixture.name} must be admitted but was rejected:\n{out}")
+                failures += 1
+            elif s.get("skipped") != 0:
+                print(f"FAIL  {fixture.name} was admitted but {s.get('skipped')} skipped:\n{out}")
+                failures += 1
+            else:
+                print(f"  admitted  {fixture.name}")
+
+        for fixture in sorted((fixtures / "reject").glob("*.yaml")):
+            checked += 1
+            rc, out = run_kubeconform(schema_dir, [fixture])
+            s = summarise(out) or {}
+            if rc == 0:
+                print(f"FAIL  {fixture.name} was ADMITTED but must be rejected:\n{out}")
+                failures += 1
+            elif s.get("skipped") != 0:
+                print(f"FAIL  {fixture.name} was not admitted, but only because it was SKIPPED "
+                      f"— the exact defect this gate replaces:\n{out}")
+                failures += 1
+            else:
+                print(f"  rejected  {fixture.name}")
+
+        # Restore the defect and confirm the unknown kind goes back to
+        # skipped-with-exit-0. If the mutation changes nothing, the reject assertion
+        # above proved nothing — the fixture was never resolving to a schema at all.
         checked += 1
-        rc, out = run_kubeconform(schema_dir, [fixture])
-        s = summarise(out) or {}
-        if rc != 0:
-            print(f"FAIL  {fixture.name} must be admitted but was rejected:\n{out}")
+        unknown = fixtures / "reject" / "unknown-kind.yaml"
+        rc_strict, out_strict = run_kubeconform(schema_dir, [unknown])
+        rc_broken, out_broken = run_kubeconform(schema_dir, [unknown], ignore_missing=True)
+        s_strict = summarise(out_strict) or {}
+        s_broken = summarise(out_broken) or {}
+
+        if s_strict.get("skipped") == s_broken.get("skipped"):
+            print("FAIL  the mutation changed nothing — skipped count identical with and without "
+                  f"-ignore-missing-schemas ({s_strict.get('skipped')}). The assertion above did "
+                  "not fire and this suite proves nothing.")
             failures += 1
-        elif s.get("skipped") != 0:
-            print(f"FAIL  {fixture.name} was admitted but {s.get('skipped')} skipped:\n{out}")
+        elif not (rc_broken == 0 and s_broken.get("skipped", 0) >= 1):
+            print(f"FAIL  with -ignore-missing-schemas the unknown kind should be admitted as a "
+                  f"skip, got rc={rc_broken} summary={s_broken}")
             failures += 1
         else:
-            print(f"  admitted  {fixture.name}")
-
-    for fixture in sorted((fixtures / "reject").glob("*.yaml")):
-        checked += 1
-        rc, out = run_kubeconform(schema_dir, [fixture])
-        s = summarise(out) or {}
-        if rc == 0:
-            print(f"FAIL  {fixture.name} was ADMITTED but must be rejected:\n{out}")
-            failures += 1
-        elif s.get("skipped") != 0:
-            print(f"FAIL  {fixture.name} was not admitted, but only because it was SKIPPED "
-                  f"— the exact defect this gate replaces:\n{out}")
-            failures += 1
-        else:
-            print(f"  rejected  {fixture.name}")
-
-    # Restore the defect and confirm the unknown kind goes back to
-    # skipped-with-exit-0. If the mutation changes nothing, the reject assertion
-    # above proved nothing — the fixture was never resolving to a schema at all.
-    checked += 1
-    unknown = fixtures / "reject" / "unknown-kind.yaml"
-    rc_strict, out_strict = run_kubeconform(schema_dir, [unknown])
-    rc_broken, out_broken = run_kubeconform(schema_dir, [unknown], ignore_missing=True)
-    s_strict = summarise(out_strict) or {}
-    s_broken = summarise(out_broken) or {}
-
-    if s_strict.get("skipped") == s_broken.get("skipped"):
-        print("FAIL  the mutation changed nothing — skipped count identical with and without "
-              f"-ignore-missing-schemas ({s_strict.get('skipped')}). The assertion above did "
-              "not fire and this suite proves nothing.")
-        failures += 1
-    elif not (rc_broken == 0 and s_broken.get("skipped", 0) >= 1):
-        print(f"FAIL  with -ignore-missing-schemas the unknown kind should be admitted as a "
-              f"skip, got rc={rc_broken} summary={s_broken}")
-        failures += 1
-    else:
-        print(f"  mutation  -ignore-missing-schemas turns the unknown kind into rc=0 "
-              f"Skipped:{s_broken['skipped']} (strict: rc={rc_strict} "
-              f"Skipped:{s_strict.get('skipped')}) — the assertion fires")
-
-    shutil.rmtree(schema_dir, ignore_errors=True)
+            print(f"  mutation  -ignore-missing-schemas turns the unknown kind into rc=0 "
+                  f"Skipped:{s_broken['skipped']} (strict: rc={rc_strict} "
+                  f"Skipped:{s_strict.get('skipped')}) — the assertion fires")
 
     # The vendored store is refused, not used, when it is not what kx pins or
     # not what sources.json records.
@@ -609,8 +587,7 @@ def vendoring_cases():
     """
     pins, _ = pinned_versions()
     yield "a pin the vendored release does not match", vendored_sources({"kubernetes": "0.0.1"})[1]
-    with tempfile.TemporaryDirectory(prefix="kx-vendored-") as tmp:
-        copy = pathlib.Path(tmp)
+    with scratch.directory("kx-vendored-") as copy:
         shutil.copy(SOURCES, copy / SOURCES.name)
         version = f"v{pins['cilium']}"
         shutil.copytree(VENDORED / "cilium" / version, copy / "cilium" / version)
@@ -643,4 +620,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded(main, "check-rendered-schemas", 2))

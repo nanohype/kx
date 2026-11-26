@@ -45,26 +45,6 @@ def mounts(load_script):
     return load_script(GATE)
 
 
-class TestPodSpecs:
-    @pytest.mark.parametrize("doc,spec", [
-        ({"kind": "Pod", "metadata": {"name": "p"}, "spec": {"containers": []}},
-         {"containers": []}),
-        ({"kind": "Deployment", "metadata": {"name": "p"},
-          "spec": {"template": {"spec": {"containers": []}}}}, {"containers": []}),
-        ({"kind": "CronJob", "metadata": {"name": "p"},
-          "spec": {"jobTemplate": {"spec": {"template": {"spec": {"containers": []}}}}}},
-         {"containers": []}),
-    ], ids=["pod", "deployment", "cronjob"])
-    def test_each_workload_kind_yields_its_pod_spec(self, mounts, doc, spec):
-        assert list(mounts.pod_specs(doc)) == [("p", spec)]
-
-    def test_a_kind_that_runs_no_pod_yields_nothing(self, mounts):
-        assert list(mounts.pod_specs({"kind": "Service", "spec": {"ports": []}})) == []
-
-    def test_a_workload_with_no_name_or_spec(self, mounts):
-        assert list(mounts.pod_specs({"kind": "Job"})) == [("?", {})]
-
-
 class TestDuplicates:
     def test_two_mounts_on_one_path_are_named_with_their_volumes(self, mounts):
         assert mounts.duplicates(TWICE) == [

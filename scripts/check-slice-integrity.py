@@ -41,9 +41,13 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+from collections.abc import Iterator
 
 import yaml
+
+from gatelib import scratch
+from gatelib.report import guarded
+from gatelib.text import strip_comments
 
 # Overridable so the suite-wide floor can point a gate at a fixture it wrote and
 # observe the real exit status instead of asking the gate about itself.
@@ -176,53 +180,6 @@ def helm_invocations(text: str) -> list[tuple[int, str]]:
     """
     found, _ = helm_commands(text)
     return [(line, cmd) for line, verb, cmd in found if verb in HELM_STATEFUL]
-
-
-def strip_comments(text: str) -> str:
-    """Source with `#` comment bodies blanked, quote-aware.
-
-    A `#` opens a comment only at the start of a word and only outside quotes.
-    Naive removal would take the fragment identifier out of a URL and the `#` out
-    of a quoted string, and both appear in this tree. Blanked rather than
-    dropped so every line keeps its length.
-    """
-    out = []
-    for line in text.splitlines():
-        # An unbalanced quote must not swallow the rest of the line. A word like
-        # dont'care opens a quote that never closes, and every `#` after it then
-        # reads as quoted — so a comment survives blanking and whatever it
-        # mentions counts as code. Scanned twice: if a quote is still open at
-        # end of line it was an apostrophe inside a word, so the second pass
-        # treats that character as literal.
-        buf = []
-        for literal_apostrophe in (False, True):
-            buf, quote, i = [], None, 0
-            while i < len(line):
-                c = line[i]
-                if quote:
-                    buf.append(c)
-                    if c == "\\" and quote == '"' and i + 1 < len(line):
-                        buf.append(line[i + 1])
-                        i += 2
-                        continue
-                    if c == quote:
-                        quote = None
-                elif c == "'" and literal_apostrophe:
-                    buf.append(c)
-                elif c in "\"'":
-                    quote = c
-                    buf.append(c)
-                elif c == "#" and (not buf or buf[-1].isspace()):
-                    buf.append(" " * (len(line) - i))
-                    quote = None
-                    break
-                else:
-                    buf.append(c)
-                i += 1
-            if quote is None:
-                break
-        out.append("".join(buf))
-    return "\n".join(out)
 
 
 EXAMINED: dict[str, int] = {}
@@ -659,17 +616,17 @@ def gates_reject_and_accept(root: pathlib.Path = ROOT) -> list[str]:
         gate = scripts_dir / script_of(name, probe)
         verdict, output = {}, {}
         for kind in ("bad", "good"):
-            fixture = _tree(probe[kind])
-            argv = [a.format(root=fixture) for a in probe["argv"]]
-            env = dict(os.environ, KX_GATE_ROOT=str(fixture))
-            try:
-                proc = subprocess.run([sys.executable, str(gate), *argv], capture_output=True,
-                                      text=True, timeout=180, check=False, env=env)
-                verdict[kind] = proc.returncode
-                output[kind] = proc.stdout + proc.stderr
-            except subprocess.TimeoutExpired:
-                problems.append(f"{name}: did not finish within 180s on its {kind} fixture.")
-                verdict[kind] = None
+            with _tree(probe[kind]) as fixture:
+                argv = [a.format(root=fixture) for a in probe["argv"]]
+                env = dict(os.environ, KX_GATE_ROOT=str(fixture))
+                try:
+                    proc = subprocess.run([sys.executable, str(gate), *argv], capture_output=True,
+                                          text=True, timeout=180, check=False, env=env)
+                    verdict[kind] = proc.returncode
+                    output[kind] = proc.stdout + proc.stderr
+                except subprocess.TimeoutExpired:
+                    problems.append(f"{name}: did not finish within 180s on its {kind} fixture.")
+                    verdict[kind] = None
         if verdict.get("bad") == 0:
             problems.append(
                 f"{name}: exited 0 on a tree built to violate the invariant it names. This "
@@ -901,51 +858,52 @@ def gates_refuse_without_their_authority(root: pathlib.Path = ROOT) -> list[str]
             problems.append(f"AUTHORITY_PROBES names {GATE_DIR}/{name}, which is not in the "
                             f"tree — a probe that outlasts its gate proves nothing.")
     observed = 0
-    with tempfile.TemporaryDirectory() as empty_bin:
+    with scratch.directory("kx-empty-path-") as empty_bin:
         for name, probe in sorted(AUTHORITY_PROBES.items()):
             if name not in present:
                 continue
             # Everything the gate needs except the one authority being removed.
             # A fixture that also withholds an unrelated precondition tests that
             # precondition instead, and scores the answer against this one.
-            fixture = _tree({
+            with _tree({
                 "stack/s/a/install.sh": BOUNDED,
                 "stack/upstream.json": AUTHORITY_FIXTURE_MANIFEST,
                 **probe.get("files", {}),
-            })
-            argv = [a.format(root=fixture) for a in probe["argv"]]
-            env = dict(os.environ, KX_GATE_ROOT=str(fixture))
-            env.update({k: v.format(root=fixture) for k, v in probe["env"].items()})
-            if probe["empty_path"]:
-                env["PATH"] = empty_bin
-            try:
-                proc = subprocess.run([sys.executable, str(scripts_dir / name), *argv],
-                                      capture_output=True, text=True, timeout=180,
-                                      check=False, env=env)
-            except subprocess.TimeoutExpired:
-                problems.append(f"{name}: did not finish within 180s without {probe['authority']}.")
-                continue
-            out = proc.stdout + proc.stderr
-            if proc.returncode == 0:
-                problems.append(
-                    f"{name}: exited 0 with {probe['authority']} unavailable. It reported a "
-                    f"verdict on a change it could not read."
-                )
-            elif "Traceback (most recent call last)" in out:
-                problems.append(
-                    f"{name}: crashed rather than refusing when {probe['authority']} was "
-                    f"unavailable. A traceback exits non-zero like a refusal does, so it "
-                    f"cannot count as one — the precondition wants naming."
-                )
-            elif probe["names"] not in out:
-                problems.append(
-                    f"{name}: refused without {probe['authority']}, but its report never says "
-                    f"{probe['names']!r}. Either a precondition it checks first stopped it, so "
-                    f"the branch that handles the missing authority did not run, or that "
-                    f"branch no longer says what is missing."
-                )
-            else:
-                observed += 1
+            }) as fixture:
+                argv = [a.format(root=fixture) for a in probe["argv"]]
+                env = dict(os.environ, KX_GATE_ROOT=str(fixture))
+                env.update({k: v.format(root=fixture) for k, v in probe["env"].items()})
+                if probe["empty_path"]:
+                    env["PATH"] = str(empty_bin)
+                try:
+                    proc = subprocess.run([sys.executable, str(scripts_dir / name), *argv],
+                                          capture_output=True, text=True, timeout=180,
+                                          check=False, env=env)
+                except subprocess.TimeoutExpired:
+                    problems.append(f"{name}: did not finish within 180s without "
+                                    f"{probe['authority']}.")
+                    continue
+                out = proc.stdout + proc.stderr
+                if proc.returncode == 0:
+                    problems.append(
+                        f"{name}: exited 0 with {probe['authority']} unavailable. It reported a "
+                        f"verdict on a change it could not read."
+                    )
+                elif "Traceback (most recent call last)" in out:
+                    problems.append(
+                        f"{name}: crashed rather than refusing when {probe['authority']} was "
+                        f"unavailable. A traceback exits non-zero like a refusal does, so it "
+                        f"cannot count as one — the precondition wants naming."
+                    )
+                elif probe["names"] not in out:
+                    problems.append(
+                        f"{name}: refused without {probe['authority']}, but its report never says "
+                        f"{probe['names']!r}. Either a precondition it checks first stopped it, so "
+                        f"the branch that handles the missing authority did not run, or that "
+                        f"branch no longer says what is missing."
+                    )
+                else:
+                    observed += 1
     EXAMINED["every gate refuses when its authority is unavailable"] = observed
     return problems
 
@@ -1415,11 +1373,10 @@ def python_files_compile(root: pathlib.Path = ROOT) -> list[str]:
         return ["found no tracked Python file — refusing to report every one compiling over "
                 "an empty set."]
     version = sys.version.split()[0]
-    with tempfile.TemporaryDirectory(prefix="kx-pycompile-") as scratch:
+    with scratch.directory("kx-pycompile-") as cache:
         for n, f in enumerate(files):
             try:
-                py_compile.compile(str(f), cfile=os.path.join(scratch, f"{n}.pyc"),
-                                   doraise=True)
+                py_compile.compile(str(f), cfile=str(cache / f"{n}.pyc"), doraise=True)
             except py_compile.PyCompileError as e:
                 where = getattr(e.exc_value, "lineno", None)
                 at = f":{where}" if where else ""
@@ -3090,8 +3047,9 @@ CONTROLS["every helm install is found, and names a timeout"] += [
 ]
 
 
-def _tree(files: dict[str, str]) -> pathlib.Path:
-    """A fixture tree, as a real repository.
+@contextlib.contextmanager
+def _tree(files: dict[str, str]) -> Iterator[pathlib.Path]:
+    """A fixture tree, as a real repository, removed when the block ends.
 
     Tracked, because checks scoped to `git ls-files` examine the tracked set and
     a fixture outside that set tests nothing. A plain directory sends those
@@ -3103,21 +3061,8 @@ def _tree(files: dict[str, str]) -> pathlib.Path:
     Files are staged by name. `git ls-files` reads the index, so staging is what
     puts them in the population; no commit is needed.
     """
-    d = pathlib.Path(tempfile.mkdtemp(prefix="kx-integrity-"))
-    staged = []
-    for key, body in files.items():
-        untracked = key.startswith(UNTRACKED)
-        rel = key[len(UNTRACKED):] if untracked else key
-        f = d / rel
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(body)
-        if not untracked:
-            staged.append(rel)
-    subprocess.run(["git", "init", "-q", str(d)], check=False, capture_output=True, timeout=60)
-    if staged:
-        subprocess.run(["git", "-C", str(d), "add", "--", *staged], check=False,
-                       capture_output=True, timeout=60)
-    return d
+    with scratch.tree(files, prefix="kx-integrity-", git=True, untracked=UNTRACKED) as root:
+        yield root
 
 
 # Checks controlled outside the (broken, clean) table, with the reason. The
@@ -3173,13 +3118,14 @@ def controls() -> int:
     # undefined population: the binary missing, and a tree that is not a
     # repository. Neither may reach a verdict.
     real_path = os.environ.get("PATH", "")
-    with tempfile.TemporaryDirectory() as no_git:
-        os.environ["PATH"] = no_git
+    with scratch.directory("kx-no-git-") as no_git:
+        os.environ["PATH"] = str(no_git)
         try:
-            absent = require_git(pathlib.Path(no_git))
+            absent = require_git(no_git)
         finally:
             os.environ["PATH"] = real_path
-    not_a_repo = require_git(pathlib.Path(tempfile.mkdtemp(prefix="kx-not-a-repo-")))
+    with scratch.directory("kx-not-a-repo-") as plain:
+        not_a_repo = require_git(plain)
     if not absent or "git is not on PATH" not in absent:
         print("  GIT OPEN    require_git accepted a PATH with no git on it.")
         failures += 1
@@ -3199,7 +3145,8 @@ def controls() -> int:
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            silent_count = run(_tree({"stack/s/a/install.sh": BOUNDED}))
+            with _tree({"stack/s/a/install.sh": BOUNDED}) as root:
+                silent_count = run(root)
     finally:
         CHECKS[:] = saved_checks
         MINIMUM_EXAMINED.clear()
@@ -3218,13 +3165,12 @@ def controls() -> int:
     # a floor" is satisfied by a floor downgraded to a warning, which still
     # prints. Running the same tree with the floors removed isolates what they
     # contribute to the verdict, which is the only thing that matters about them.
-    starved_tree = _tree({
-        "stack/s/a/install.sh": BOUNDED,
-        "README.md": "see `stack/s/a/install.sh`\n",
-    })
     buf = io.StringIO()
     saved = dict(MINIMUM_EXAMINED)
-    with contextlib.redirect_stdout(buf):
+    with _tree({
+        "stack/s/a/install.sh": BOUNDED,
+        "README.md": "see `stack/s/a/install.sh`\n",
+    }) as starved_tree, contextlib.redirect_stdout(buf):
         with_floors = run(starved_tree)
         MINIMUM_EXAMINED.clear()
         try:
@@ -3277,13 +3223,16 @@ def controls() -> int:
                 failures += 1
                 accounted += 1
                 continue
-            if check(_tree(clean)):
+            with _tree(clean) as clean_root:
+                unsound = check(clean_root)
+            if unsound:
                 print(f"  UNSOUND     {name} — the gate already fails on the clean tree, so "
                       f"failing on the mutation would prove nothing.")
                 failures += 1
                 accounted += 1
                 continue
-            reported = check(_tree(broken))
+            with _tree(broken) as broken_root:
+                reported = check(broken_root)
             if not reported:
                 print(f"  FAILS OPEN  {name} — the gate accepted it.")
                 failures += 1
@@ -3330,9 +3279,9 @@ def controls() -> int:
                  "good": {"scripts/check-probe.py": body}}
         GATE_PROBES["check-probe.py"] = probe
         try:
-            fixture_root = _tree({**probe["bad"]})
-            (fixture_root / "scripts").mkdir(exist_ok=True)
-            reported = gates_reject_and_accept(fixture_root)
+            with _tree({**probe["bad"]}) as fixture_root:
+                (fixture_root / "scripts").mkdir(exist_ok=True)
+                reported = gates_reject_and_accept(fixture_root)
             caught = bool([p for p in reported
                            if "exited 0 on a tree built to violate" in p
                            or "crashed on its" in p])
@@ -3443,4 +3392,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded(main, "check-slice-integrity", 2))

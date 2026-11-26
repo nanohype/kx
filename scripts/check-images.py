@@ -61,9 +61,11 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 
 import yaml
+
+from gatelib import scratch
+from gatelib.manifests import pod_specs
 
 # The tree this gate reads its exceptions from. Overridable so the suite-wide
 # floor can point the gate at a fixture it wrote, as the other gates are.
@@ -88,7 +90,6 @@ yaml.SafeLoader.add_constructor(
     "tag:yaml.org,2002:value", lambda loader, node: loader.construct_scalar(node)
 )
 
-WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod"}
 
 # A tag that names a moving target. An image on one of these is a different
 # program on the next pull, and nothing in the tree records which one an adopter
@@ -156,20 +157,6 @@ RELEASED_TOGETHER: dict[str, str] = {
 }
 
 
-def pod_specs(doc):
-    """Every pod spec in a manifest, whatever wraps it."""
-    kind = doc.get("kind")
-    if kind not in WORKLOADS:
-        return
-    if kind == "Pod":
-        yield doc.get("spec") or {}
-    elif kind == "CronJob":
-        spec = ((doc.get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}
-        yield (spec.get("template") or {}).get("spec") or {}
-    else:
-        yield ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
-
-
 def resolved_images(render_dir: pathlib.Path) -> dict[str, set[str]]:
     """{image reference: {slice}} over every container the render produces.
 
@@ -182,7 +169,7 @@ def resolved_images(render_dir: pathlib.Path) -> dict[str, set[str]]:
         for doc in yaml.safe_load_all(path.read_text()):
             if not isinstance(doc, dict):
                 continue
-            for spec in pod_specs(doc):
+            for _name, spec in pod_specs(doc):
                 containers = (spec.get("initContainers") or []) + (spec.get("containers") or [])
                 for c in containers:
                     if isinstance(c, dict) and c.get("image"):
@@ -306,7 +293,10 @@ def scan(image: str, timeout: int = 300) -> tuple[list[dict], str | None]:
     if p.returncode != 0:
         tail = (p.stderr or p.stdout).strip().splitlines()
         return [], tail[-1][:200] if tail else "trivy failed with no output"
-    return vulns_in(p.stdout), None
+    try:
+        return vulns_in(p.stdout), None
+    except ValueError as e:
+        return [], str(e)
 
 
 def vulns_in(trivy_json: str) -> list[dict]:
@@ -314,11 +304,20 @@ def vulns_in(trivy_json: str) -> list[dict]:
 
     Separate from scan() so the controls can drive it with a recorded report:
     the scanner is a dependency, and what this gate owns is how it reads one.
+
+    A report this cannot read raises ValueError. No findings is what a clean
+    image produces, so a report read as none for want of reading it would make
+    an image clean that was never scanned. scan() reports the image as one this
+    run could not scan instead.
     """
     try:
         doc = json.loads(trivy_json)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as e:
+        raise ValueError(f"trivy's report is not JSON ({e.msg}, at character {e.pos})") from e
+    if not isinstance(doc, dict):
+        kind = {list: "a JSON array", str: "a JSON string", bool: "a JSON boolean",
+                int: "a JSON number", float: "a JSON number", type(None): "JSON null"}[type(doc)]
+        raise ValueError(f"trivy's report is {kind}, not the object trivy writes")
     out = []
     for result in doc.get("Results") or []:
         for v in result.get("Vulnerabilities") or []:
@@ -500,11 +499,11 @@ def report_scan(result: dict) -> int:
 # this gate owns is how a report is read, and a control that needs the network
 # is a control that gets skipped.
 
-def _render(docs: list[str]) -> pathlib.Path:
-    d = pathlib.Path(tempfile.mkdtemp(prefix="kx-images-"))
-    for i, body in enumerate(docs):
-        (d / f"slice{i}.yaml").write_text(body)
-    return d
+def _images_of(docs: list[str]) -> dict[str, set[str]]:
+    """resolved_images() over a render holding `docs`, one slice each."""
+    with scratch.tree({f"slice{i}.yaml": body for i, body in enumerate(docs)},
+                      prefix="kx-images-") as d:
+        return resolved_images(d)
 
 
 DEPLOY = """
@@ -584,14 +583,14 @@ def controls() -> int:
          dict(app), {**app, "reg.io:5000/hook:2.0.0": {"s"}}, "no longer produces")
 
     # Extraction: an image outside a pod spec is not something an adopter pulls.
-    imgs = resolved_images(_render([DEPLOY % "r/real:1.0"]))
+    imgs = _images_of([DEPLOY % "r/real:1.0"])
     if set(imgs) != {"r/real:1.0"}:
         print(f"  WRONG       extraction returned {set(imgs)}, expected the one container image")
         failures += 1
     else:
         print("  control ok  an image in a pod spec is extracted")
 
-    noise = resolved_images(_render(["apiVersion: v1\nkind: ConfigMap\ndata:\n  image: r/nope:1\n"]))
+    noise = _images_of(["apiVersion: v1\nkind: ConfigMap\ndata:\n  image: r/nope:1\n"])
     if noise:
         print(f"  FAILS OPEN  an `image:` key outside a pod spec was extracted: {set(noise)}")
         failures += 1
@@ -604,6 +603,21 @@ def controls() -> int:
     else:
         print("  FAILS OPEN  a trivy report is not read correctly")
         failures += 1
+    unread = []
+    for garbled in ("trivy: unexpected end of output", "[]"):
+        try:
+            vulns_in(garbled)
+        except ValueError:
+            continue
+        except Exception as e:  # a crash is no refusal either, and must not end the controls
+            unread.append(f"{garbled!r}, which raised {type(e).__name__}")
+            continue
+        unread.append(f"{garbled!r}, read as no findings")
+    if unread:
+        print(f"  FAILS OPEN  a report trivy did not write was not refused: {'; '.join(unread)}")
+        failures += 1
+    else:
+        print("  control ok  a report that is not trivy's object is refused, never read as clean")
 
     # The exemption list is asserted, not described.
     UNSCANNABLE["r/ghost-unscannable:1.0"] = "a subject the render does not produce"
@@ -692,8 +706,8 @@ def controls() -> int:
 
     # The tracking issue is written from the step output, so the state has to
     # arrive there exactly as the scan names it.
-    with tempfile.TemporaryDirectory(prefix="kx-outputs-") as outdir:
-        outputs = pathlib.Path(outdir) / "outputs"
+    with scratch.directory("kx-outputs-") as outdir:
+        outputs = outdir / "outputs"
         saved = {k: os.environ.pop(k, None) for k in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
         os.environ["GITHUB_OUTPUT"] = str(outputs)
         try:
@@ -711,10 +725,9 @@ def controls() -> int:
 
     # The exceptions file, read from a tree like the real one.
     def file_problems(entries):
-        d = pathlib.Path(tempfile.mkdtemp(prefix="kx-exceptions-"))
-        (d / "stack").mkdir()
-        (d / EXCEPTIONS).write_text(json.dumps({"exceptions": entries}))
-        return load_exceptions(d)[1]
+        with scratch.tree({EXCEPTIONS: json.dumps({"exceptions": entries})},
+                          prefix="kx-exceptions-") as d:
+            return load_exceptions(d)[1]
 
     good = {"image": "r/x:1.0", "id": "CVE-0000-0001", "reason": "waiting on upstream",
             "recorded": "2026-05-01", "expires": "2026-07-01"}
@@ -728,7 +741,9 @@ def controls() -> int:
          lambda exs: exceptions_name_rendered_images(exs, one),
          [excepted(image="r/gone:1.0")], [excepted()], "no longer produces")
 
-    if load_exceptions(pathlib.Path(tempfile.mkdtemp(prefix="kx-no-exceptions-"))) == ([], []):
+    with scratch.directory("kx-no-exceptions-") as d:
+        holds_none = load_exceptions(d) == ([], [])
+    if holds_none:
         print("  control ok  an absent exceptions file is accepted as holding none")
     else:
         print("  WRONG       an absent exceptions file was not read as holding none")
