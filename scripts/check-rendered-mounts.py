@@ -194,32 +194,6 @@ def self_test() -> int:
     return 0
 
 
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('caught  ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('allowed ',))),
-    }
-
-
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()

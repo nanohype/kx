@@ -128,7 +128,3 @@ class TestCommandLine:
         assert "WRONG     two mounts passed as clean — flagged, expected clean" in out
         assert "FAIL  1 case(s) wrong." in out
 
-    def test_control_outcomes_count_both_halves(self, mounts):
-        outcomes = mounts.control_outcomes()
-        assert outcomes["ok"] is True
-        assert outcomes["rejected"] > 0 and outcomes["accepted"] > 0

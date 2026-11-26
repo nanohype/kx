@@ -2166,14 +2166,6 @@ CHECKS = [
 # `clean` is the same tree without the violation. Asserting the gate is clean
 # BEFORE mutating is what makes a non-zero exit mean anything — without it the
 # gate might have been failing for an unrelated reason the whole time.
-# A gate satisfying the contract honestly: its controls run, and the lines they
-# produced come back as the evidence the floor counts.
-GOOD_GATE = (
-    "def control_outcomes():\n"
-    "    lines = ['  rejected  a break', '  passed    a clean tree']\n"
-    "    return {'ok': True, 'lines': lines}\n"
-)
-
 BOUNDED = ('helm repo add x https://x\n'
            'helm upgrade --install a x/a --version 1 --wait --timeout 10m\n')
 

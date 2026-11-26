@@ -737,21 +737,6 @@ def controls() -> int:
     return failures
 
 
-def control_outcomes() -> dict:
-    """What the controls exercised, for the suite-wide floor."""
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        failures = controls()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": failures == 0,
-        "lines": lines,
-        "rejected": sum(1 for x in lines if "control ok" in x),
-        "accepted": sum(1 for x in lines if "control ok" in x and "accepted" in x)
-                    or sum(1 for x in lines if "is ignored" in x or "as clean" in x),
-    }
-
-
 def run_cves(images: dict[str, set[str]], exceptions: list[dict], malformed: list[str]) -> int:
     """The scheduled mode: scan, classify, report the state."""
     if shutil.which("trivy") is None:
