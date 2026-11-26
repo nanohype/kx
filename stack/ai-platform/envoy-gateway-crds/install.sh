@@ -45,7 +45,7 @@ deadline 300 helm template envoy-gateway-crds oci://docker.io/envoyproxy/gateway
   --version 1.10.0 \
   --values "${SCRIPT_DIR}/values.yaml" >"${MANIFEST}"
 
-kubectl --request-timeout=60s apply --server-side --force-conflicts --field-manager envoy-gateway-crds \
+kubectl apply --server-side --force-conflicts --field-manager envoy-gateway-crds \
   --request-timeout=120s -f "${MANIFEST}"
 
 # Established before the controller installs. Without the wait, envoy-gateway's
