@@ -106,10 +106,10 @@ jobs:
           echo "linting ${#sh[@]} shell file(s)"
           shellcheck "${sh[@]}"
 
-      # Every tracked Python file, not only the gates under scripts/. The helpers
-      # an installer runs are the Python nothing in CI executes, so the lint is
-      # the only reader they get before a workstation runs them. `git ls-files`
-      # for the reason the shellcheck step gives, and an empty set refused.
+      # Every tracked Python file, not only the gates under scripts/: the helpers
+      # an installer runs, which the test job executes and nothing else in CI
+      # does, and the tests themselves. `git ls-files` for the reason the
+      # shellcheck step gives, and an empty set refused.
       - name: ruff
         run: |
           mapfile -t py < <(git ls-files '*.py')
@@ -288,32 +288,7 @@ jobs:
 
       - uses: ./.github/actions/helm
 
-      # Downloaded to a file and checked before it is unpacked onto PATH and run.
-      # Piping the response straight into tar executes whatever arrives: a
-      # truncated transfer, a proxy error page, or a replaced asset all reach
-      # the next step as a binary. The digest is the one the release publishes
-      # alongside the archive, so it catches corruption and substitution of the
-      # asset; it does not attest the release itself, which would need the
-      # upstream signing key.
-      #
-      # --retry-all-errors alongside --retry, because the other two do not cover
-      # the failure this download actually has. --retry covers transient HTTP
-      # and a timeout; --retry-connrefused adds a refused connection. A reset
-      # partway through the transfer is in neither set, so the first one ends
-      # the download — on the blocking path, over a fetch no change here can
-      # affect.
-      - name: Install kubeconform
-        env:
-          KUBECONFORM_VERSION: v0.8.0
-          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
-        run: |
-          url="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
-          curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
-            -o kubeconform.tar.gz "$url"
-          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
-          tar -xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
-          rm kubeconform.tar.gz
-          kubeconform -v
+      - uses: ./.github/actions/kubeconform
 
       # Every gate this job runs proves it can still reject before the stack is
       # validated, so a gate that has stopped rejecting fails here rather than
@@ -421,7 +396,7 @@ jobs:
       # pin; the first run needs no watching because it follows the chart.
       #
       # Downloaded to a file and checked before it is unpacked and run, with the
-      # retry set the kubeconform step above explains.
+      # retry set .github/actions/kubeconform explains.
       - name: Under the engine the security slice pins
         run: |
           ver="$(sed -n '/^webhooksCleanup:/,/^[^ ]/ s/^    tag: *\(v[0-9][^ ]*\)$/\1/p' stack/security/kyverno/values.yaml)"
@@ -463,6 +438,33 @@ jobs:
           tar -xz -C "$dir" -f "$dir/$asset" kyverno
           PATH="$dir:$PATH" ./scripts/kyverno-test.sh
 
+  test:
+    name: Python tests hold their coverage floors
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # From one hash-locked file: every package, transitive ones included, at
+      # one version and the hashes PyPI publishes for it, so the job installs
+      # exactly those files or fails.
+      - name: Install the test tools
+        run: pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/test-requirements.txt
+
+      # The schema gate's self-test runs kubeconform, at the release the render
+      # job validates with.
+      - uses: ./.github/actions/kubeconform
+
+      # The helpers an installer runs are executed here and nowhere else in CI,
+      # so their tests are the only thing that runs them before a workstation
+      # does. The script holds the run to the floors pyproject.toml states: every
+      # line and branch of each helper, and the gates together at a ratchet that
+      # never sits under the minimums recorded beside it.
+      - name: Every installer helper fully covered, every gate at its floor
+        run: ./scripts/python-test.sh
+
   merge-gate:
     name: merge gate
     runs-on: ubuntu-latest
@@ -475,6 +477,7 @@ jobs:
         mirror,
         render,
         kyverno,
+        test,
       ]
     # always() is load-bearing: without it a failed dependency SKIPS this job,
     # and GitHub counts a skipped check as passing for branch protection, so the

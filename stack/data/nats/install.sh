@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace nats --dry-run=client -o yaml | k
 
 deadline 900 helm upgrade --install nats nats/nats \
   --namespace nats \
-  --version 2.15.2 \
+  --version 2.15.3 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

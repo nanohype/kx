@@ -77,7 +77,14 @@ never a `python3 -c` string or a heredoc. Nothing in CI runs an installer, so a
 program in a shell string meets its first parser on a workstation; as a file,
 the lint job reads it and `check-slice-integrity.py` compiles it, and that
 script refuses Python run from a string or stdin in any shell script or
-Taskfile.
+Taskfile. Its tests go under `tests/installers/` and reach every line and every
+branch: `scripts/python-test.sh`, which the test job runs, holds the run to the
+floors `pyproject.toml` states, and every helper under `stack/` is held to all of
+its lines and branches on its own, so a helper added without tests fails there.
+The gates under `scripts/` are held together, lines and branches read apart,
+through their own controls and the tests of their logic under `tests/gates/`,
+to a ratchet: their coverage as last recorded, never under the minimum lines and
+branches `pyproject.toml` states, raised when it rises and never lowered.
 
 An addon whose chart cannot be stored as a helm release renders it with
 `helm template` into a server-side `kubectl apply` instead, and carries an
@@ -85,7 +92,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 
 ## Taskfile model
 
-- Top-level: `task up | down | reset | status | stack:* | port-forward:*`
+- Top-level: `task up | down | reset | status | stack:* | port-forward:* | test:*`
 - Per-slice: `stack/<slice>/Taskfile.yaml` provides `enable` and `disable` targets that loop over the slice's addons
 - Slice enable runs `install.sh` per addon in order; disable runs `helm uninstall` per addon, or the addon's `uninstall.sh` where there is no release to uninstall (envoy-gateway-crds, bedrock-credentials)
 - Every script that reaches the cluster sources `cluster/kubeconfig.sh` right after it sets `SCRIPT_DIR`, and every Taskfile command that runs kubectl, helm or kind carries `KUBECONFIG='{{.ROOT_DIR}}/.kube/config'` itself. A Taskfile's `env:` cannot do this, because it never overrides a `KUBECONFIG` the shell already exports. `check-slice-integrity.py` refuses a command that reaches a cluster without its binding
@@ -97,7 +104,7 @@ An addon whose chart cannot be stored as a helm release renders it with
 - Don't add ArgoCD App-of-Apps or ApplicationSets that point at the local stack — argo-cd is idle by design
 - Don't add a `labs/`, `tutorial/`, `lessons/` or similar curriculum directory — this is a workspace, not a curriculum
 - Don't add a `substitutes/` directory or surface the cloud/local swap as a feature — the swap belongs inside the addon's `install.sh`
-- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` runs five jobs behind a merge gate — lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them. Every tool a workflow installs is pinned to a version and checked against a recorded digest: the Python tools from `.github/lint-requirements.txt` and `.github/gate-requirements.txt` with `--require-hashes`, helm through `.github/actions/helm`, and each binary from its release with a sha256
+- Don't add CI that needs a live cluster or cloud credentials. Anything that requires a running kind cluster stays a local `task` target. `.github/workflows/ci.yml` gates every merge on lint (yamllint, shellcheck, ruff), Renovate pin coverage, chart provenance, the eks-gitops mirror comparison, the Kyverno policy tests, the Python tests under the coverage floors `pyproject.toml` states, and a clusterless `helm template` render gate over every slice followed by mount and schema validation of what it rendered, against schemas vendored from the pinned Kubernetes and Cilium releases (`schemas/`, written by `scripts/vendor-schemas.py`) so the gate reads nothing over the network. The questions whose answer changes without this repository changing — has a chart been deprecated upstream, do the pinned images carry a CRITICAL, has the catalog moved past the pin, has the eks-agent-platform sibling — run on a schedule in their own workflows, because asking them on the blocking path reddens pull requests that did not cause them. Every tool a workflow installs is pinned to a version and checked against a recorded digest: the Python tools from `.github/lint-requirements.txt`, `.github/gate-requirements.txt` and `.github/test-requirements.txt` with `--require-hashes`, helm through `.github/actions/helm`, and each binary from its release with a sha256
 - Don't pin chart versions from memory — `helm search repo <chart>` and pin to current at scaffold time
 - Don't speculatively add charts. These are conscious omissions for a web/AI/infra/devops focus (not ML) — NOT missing. Skip until a specific project needs them: Vault, Crossplane, Flux, Tekton, Linkerd, Istio, Harbor, Longhorn, Rook-Ceph, Kubeflow, KServe, Seldon, Triton, vLLM, Kueue, JupyterHub, LiteLLM, Langfuse, Ollama, Qdrant, Weaviate, Milvus.
 

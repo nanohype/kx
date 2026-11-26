@@ -10,6 +10,8 @@
 
     python3 credentials.py remaining <expiration>
 
+    printf '%s' "${err}" | python3 credentials.py served <kubectl-exit-status>
+
 The credentials arrive on stdin, in the process-credential format the aws CLI
 prints, and leave as a Secret manifest on stdout. Nothing secret is taken as an
 argument or read from the environment: an argument is in this process's argv,
@@ -29,10 +31,16 @@ The Secret records when the session stops working, in its
 refuse, before the installer writes anything, and prints that time for its
 summary. `remaining` reads it back for the verify task and exits 1 once it has
 passed.
+
+`served` reads what `kubectl get crd` wrote to stderr, given its exit status,
+and prints served, absent or unknown. install.sh and uninstall.sh act on a
+Kyverno kind only when it is served, and stop on unknown, so a cluster kubectl
+cannot read is never taken for one without the kind.
 """
 
 import base64
 import json
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -123,10 +131,31 @@ def remaining(value: str, now: datetime) -> tuple[bool, str]:
     return True, f"{value}, in {hours}h {minutes:02d}m"
 
 
+# kubectl's answer for an object that does not exist: `Error from server
+# (NotFound): ... not found`, matched in either spelling and any case.
+NOT_FOUND = re.compile(r"not ?found", re.IGNORECASE)
+
+
+def served(status: int, said: str) -> str:
+    """`served`, `absent` or `unknown`: what `kubectl get crd` answered.
+
+    `status` is its exit status and `said` its stderr. kubectl exits non-zero
+    for a CRD that does not exist and for a cluster it cannot reach alike, and
+    only the first is an answer about the kind. Read as absent, the second sends
+    an operator to install Kyverno when nothing is listening, and lets the
+    teardown report a withdrawal it never made.
+    """
+    if status == 0:
+        return "served"
+    return "absent" if NOT_FOUND.search(said) else "unknown"
+
+
 USAGE = ("usage: credentials.py check\n"
          "       credentials.py manifest <secret-name> <namespace> <region>\n"
          "       credentials.py remaining <expiration>\n"
-         "(check and manifest read the aws CLI's process-credential JSON on stdin)")
+         "       credentials.py served <kubectl-exit-status>\n"
+         "(check and manifest read the aws CLI's process-credential JSON on stdin;\n"
+         " served reads what `kubectl get crd` wrote to stderr)")
 
 
 def main(argv: list[str]) -> int:
@@ -141,6 +170,12 @@ def main(argv: list[str]) -> int:
         still_valid, line = remaining(argv[2], now)
         print(line)
         return 0 if still_valid else 1
+    # Exits 0 with whichever answer it reached, so the caller can print
+    # kubectl's evidence beside an unknown one; a non-zero exit is a call this
+    # helper could not read, which the caller's `case` refuses like an unknown.
+    if len(argv) == 3 and argv[1] == "served" and argv[2].isdigit():
+        print(served(int(argv[2]), sys.stdin.read()))
+        return 0
     print(USAGE, file=sys.stderr)
     return 2
 
