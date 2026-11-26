@@ -31,6 +31,14 @@ grafana:
   # thing between this password and anyone on the same wifi.
   adminPassword: admin
 
+  # No helm-test hook. The chart's test is a pod that runs bats against the
+  # Grafana Service, and helm creates it only for `helm test`, which nothing in
+  # kx runs. `helm template` renders it all the same, so with the hook on, the
+  # render gate and the image scan would hold its bats image to the standard of
+  # an image an install pulls.
+  testFramework:
+    enabled: false
+
   # The read path for the two signals the otel-collector slice writes. Without
   # these, logs reach Loki and traces reach Tempo and neither is queryable —
   # every panel a project might build has a datasource picker with one entry in
