@@ -742,13 +742,17 @@ MD_LINK = re.compile(r"\]\(([^)\s#]+)(?:#[^)]*)?\)")
 # reader resolves somewhere other than this tree.
 NOT_A_PATH = re.compile(
     r"^(https?:|mailto:|#|~)"          # links out, in-page anchors, a home dir
-    r"|^\.\./"                          # a sibling checkout, which may not be cloned
     r"|[*{}<>=]"                       # a glob, a placeholder, or a key=value
     r"|^-"                             # a flag
     r"|^/"                             # an absolute path or a JSON pointer
     r"|:[0-9/]"                        # a URL or a host:port
     r"|\.\.\."                         # an ellipsis, which is a placeholder like <slice>
 )
+
+# Inline code naming a sibling checkout, which may not be cloned. A link is
+# resolved instead, and is left alone only once it resolves outside the tree:
+# its target says where it points, which inline code does not.
+SIBLING = re.compile(r"^\.\./")
 
 # Inline code, the other way a document names a path. Ambiguous where a link is
 # not, so it is read through FIRST_SEGMENT_IS_REAL below.
@@ -993,10 +997,13 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
 
     Two views, because a document names paths two ways and they need different
     rules. A LINK target is an unambiguous claim — a thing the reader clicks —
-    so any target carrying a separator is checked. INLINE CODE is ambiguous:
-    `karpenter.sh/capacity-type` is a label key and `username/password/host` is
-    prose, so a token is read as a path only when its first segment is a real
-    entry at the repository root.
+    so every target is checked, resolved from the directory of the document
+    that holds it, which is where the click lands. One that resolves outside
+    the tree names a sibling checkout, which may not be cloned, and is left to
+    the reader. INLINE CODE is ambiguous: `karpenter.sh/capacity-type` is a
+    label key and `username/password/host` is prose, so a token is read as a
+    path only when its first segment is a real entry at the repository root,
+    and it is resolved from there.
 
     That discriminator bounds what this can catch, and the bound is worth
     stating: it sees a file moving inside a directory that still exists, and it
@@ -1031,29 +1038,32 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
         return ["found no markdown at the repository root — refusing to report every path "
                 "resolved over an empty set."]
     tops = {entry.name for entry in root.iterdir()}
+    top = os.path.normpath(root.absolute())
 
-    def check(ref: str, doc: pathlib.Path, n: int) -> None:
+    def check(ref: str, doc: pathlib.Path, n: int, base: pathlib.Path) -> None:
         nonlocal examined
-        # Only a leading ./ is stripped. Stripping "." would turn
-        # .github/workflows/ci.yml into a path that does not exist —
-        # which is what the first version of this reported.
-        rel = ref[2:] if ref.startswith("./") else ref
+        # Resolved by its spelling, the way a renderer resolves a link: normpath
+        # folds ./ and ../ and leaves a leading dot alone, so
+        # .github/workflows/ci.yml keeps naming the file it names.
+        target = os.path.normpath(os.path.join(base.absolute(), ref))
+        if os.path.commonpath([top, target]) != top:
+            return
         examined += 1
-        if not (root / rel.rstrip("/")).exists():
+        if not os.path.exists(target):
             problems.append(f"{doc.relative_to(root)}:{n} names `{ref}`, which does not exist.")
 
     for doc in docs:
         for n, line in enumerate(doc.read_text().splitlines(), 1):
             for m in MD_LINK.finditer(line):
                 ref = m.group(1).strip()
-                if ref and "/" in ref and not NOT_A_PATH.search(ref):
-                    check(ref, doc, n)
+                if ref and not NOT_A_PATH.search(ref):
+                    check(ref, doc, n, doc.parent)
             for m in MD_CODE.finditer(line):
                 ref = m.group(1).strip()
-                if not ref or "/" not in ref or NOT_A_PATH.search(ref):
+                if not ref or "/" not in ref or NOT_A_PATH.search(ref) or SIBLING.search(ref):
                     continue
                 if ref.split("/")[0] in tops:
-                    check(ref, doc, n)
+                    check(ref, doc, n, root)
 
     EXAMINED["every path named in markdown resolves"] = examined
     # Printing the denominator is not gating on it. Markdown that names no path
@@ -1856,19 +1866,23 @@ def kubectl_words(rest: str) -> tuple[str, str]:
 
 
 def _bound(segment: str, flag: str, *aliases: str) -> str | None:
-    """None when `segment` gives `flag` a positive duration, else why it does not.
+    """None when `segment` gives `flag` one positive duration, else why it does not.
 
-    The last value given is the one read, as the tools themselves read a
-    repeated flag. Zero is how kubectl's --request-timeout, rollout status's
-    --timeout and curl's --max-time each spell "no limit", so a zero is refused
-    rather than read as a bound, and so is a value this cannot read as a
-    duration: a bound that is named has to be one a reader can see.
+    Zero is how kubectl's --request-timeout, rollout status's --timeout and
+    curl's --max-time each spell "no limit", so a zero is refused rather than
+    read as a bound, and so is a value this cannot read as a duration: a bound
+    that is named has to be one a reader can see. So is a flag given twice,
+    under one spelling or two. The tool reads the last value and a reader of the
+    line meets the first, so the call shows a bound it does not have.
     """
     names = "|".join(re.escape(f) for f in (flag, *aliases))
     values = re.findall(rf"(?<![\w-])(?:{names})(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
     if not values:
         return f"without {flag}"
-    value = values[-1]
+    if len(values) > 1:
+        return (f"with {flag} given {len(values)} times, and only the last, "
+                f"{values[-1] or '(empty)'}, is read")
+    value = values[0]
     if not DURATION.fullmatch(value) or not re.search(r"[1-9]", value):
         return f"with {flag} {value or '(empty)'}, which is no bound"
     return None
@@ -2384,6 +2398,32 @@ CONTROLS = {
              "scripts/real.py": "x\n"},
         ),
         (
+            "a link resolved from its document's directory rather than the root",
+            {"docs/a.md": "see [it](stack/yes/install.sh)\n", "stack/yes/install.sh": "x\n"},
+            {"docs/a.md": "see [it](../stack/yes/install.sh)\n", "stack/yes/install.sh": "x\n"},
+            "docs/a.md:1 names `stack/yes/install.sh`",
+        ),
+        (
+            "a link from one document under docs/ to another",
+            {"docs/a.md": "see [b](adr/0002-b.md)\n", "docs/adr/0001-b.md": "x\n"},
+            {"docs/a.md": "see [b](adr/0001-b.md)\n", "docs/adr/0001-b.md": "x\n"},
+            "names `adr/0002-b.md`",
+        ),
+        (
+            "a link target with no separator is a path",
+            {"README.md": "see [the rules](CLAUDE.mdx)\n", "CLAUDE.md": "x\n"},
+            {"README.md": "see [the rules](CLAUDE.md)\n", "CLAUDE.md": "x\n"},
+            "names `CLAUDE.mdx`",
+        ),
+        (
+            "a link out of the tree is a sibling checkout, and the one beside it still a path",
+            {"docs/a.md": "[s](../../eks-gitops/AGENTS.md) and [x](../scripts/gone.py)\n",
+             "scripts/real.py": "x\n"},
+            {"docs/a.md": "[s](../../eks-gitops/AGENTS.md) and [x](../scripts/real.py)\n",
+             "scripts/real.py": "x\n"},
+            "names `../scripts/gone.py`",
+        ),
+        (
             "an inline-code path whose first segment is not a repo entry is not a path",
             {"README.md": "`scripts/gone.py` and `username/password/host`\n",
              "scripts/real.py": "x\n"},
@@ -2891,6 +2931,18 @@ CONTROLS["every call that leaves this machine is bounded"] = [
         {"s.sh": "kubectl --request-timeout 0 get ns\n"},
         {"s.sh": "kubectl --request-timeout 60s get ns\n"},
         "kubectl get with --request-timeout 0",
+    ),
+    (
+        "a request timeout given twice, which shows one bound and applies another",
+        {"s.sh": "kubectl --request-timeout=60s apply \\\n  --request-timeout=120s -f x.yaml\n"},
+        {"s.sh": "kubectl apply \\\n  --request-timeout=120s -f x.yaml\n"},
+        "kubectl apply with --request-timeout given 2 times, and only the last, 120s, is read",
+    ),
+    (
+        "a transfer bound given twice, under its two spellings",
+        {"s.sh": 'curl -sSfL -m 60 --max-time 120 -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL --max-time 120 -o x "https://example/x"\n'},
+        "curl with --max-time given 2 times",
     ),
     (
         # Each word that opens a command is proven under the Python invariant;

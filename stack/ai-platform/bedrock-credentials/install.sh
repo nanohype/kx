@@ -10,9 +10,9 @@
 #
 # This resolves the local profile once, stores it where Kyverno can clone it,
 # and installs two policies: a GeneratingPolicy that clones it into each tenant
-# namespace, and a MutatingPolicy that points the gateway's signing sidecar (and
-# its envoy container) at the clone. Credentials are never patched onto a
-# running pod: the data plane is generated, so a patch is reconciled away.
+# namespace, and a MutatingPolicy that points the gateway's signing sidecar at
+# the clone. Credentials are never patched onto a running pod: the data plane
+# is generated, so a patch is reconciled away.
 #
 # Optional slice. Without it the platform still installs and reconciles — only
 # a real Bedrock call fails, which is the honest local default.
