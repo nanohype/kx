@@ -73,6 +73,7 @@ Each slice has a matching `:disable` target; the core stack stays up. `task stac
 
 ```
 cluster/   kind config, cluster lifecycle tasks, local registry + coredns setup
+docs/      architecture, threat model, and the decision records under adr/
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
