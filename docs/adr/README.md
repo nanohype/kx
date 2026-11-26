@@ -24,6 +24,7 @@ replaced as one thing.
 | [0014](0014-gates-prove-they-reject.md) | Every gate is observed to reject |
 | [0015](0015-datapath-memory-limits-only.md) | The datapath carries a memory limit and no CPU limit |
 | [0016](0016-coredns-public-resolvers.md) | CoreDNS forwards external names to public resolvers |
+| [0017](0017-gates-share-one-library.md) | What the gates share is written once |
 
 ## Writing one
 

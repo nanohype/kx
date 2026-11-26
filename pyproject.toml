@@ -52,5 +52,5 @@ minimum-branches = 60
 # past it until it is raised, so a gain cannot be given back without a diff that
 # lowers the number.
 ratchet = true
-lines = 78
-branches = 73
+lines = 80
+branches = 74

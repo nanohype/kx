@@ -17,6 +17,11 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# A gate imports scripts/gatelib by name, which resolves because python3 puts a
+# script's directory first on sys.path when it runs the script. Loading a gate
+# by path from a test runs no script, so the directory is put there for it.
+sys.path.insert(0, str(ROOT / "scripts"))
+
 # Loading a helper must leave no __pycache__ beside it. check-slice-integrity
 # walks every addon directory on disk and reports any entry nothing names, so a
 # bytecode cache written there by a test run turns the next integrity run red.

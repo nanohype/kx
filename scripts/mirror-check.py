@@ -43,8 +43,8 @@ schedule.
 """
 
 import contextlib
+import functools
 import io
-import tempfile
 import json
 import os
 import re
@@ -54,6 +54,10 @@ from pathlib import Path
 
 import yaml
 
+from gatelib import scratch
+from gatelib.pins import HELM_INSTALL, VERSION_FLAG, helm_block, install_pins
+from gatelib.report import die as stop, guarded
+
 # The tree this gate reads. Overridable so the suite-wide floor can point the
 # gate at a fixture it wrote and observe the real exit status, rather than
 # asking the gate to describe its own behaviour.
@@ -61,9 +65,7 @@ ROOT = Path(os.environ.get("KX_GATE_ROOT", "") or Path(__file__).resolve().paren
 MANIFEST = ROOT / "stack" / "upstream.json"
 
 
-def die(msg):
-    print(f"mirror-check: {msg}", file=sys.stderr)
-    sys.exit(1)
+die = functools.partial(stop, "mirror-check", code=1)
 
 
 # The keys every command reaches for. Asserted on load so a malformed manifest
@@ -232,88 +234,6 @@ def upstream_pins(gitops):
     return pins
 
 
-# A chart a slice renders and applies is pinned as surely as one it installs as
-# a release, so both verbs are read. envoy-gateway-crds is why: its chart is too
-# large to store as a helm release, so it runs `helm template` into a server-side
-# apply, and a parser reading only `upgrade --install` would report the
-# catalog's gateway-crds-helm as a chart kx never installs. Either verb runs under
-# the `deadline N` that bounds its chart fetch, which is read through.
-HELM_INSTALL = re.compile(
-    r"^[ \t]*(?:deadline[ \t]+\d+[ \t]+)?helm (?:upgrade --install|template)\s+(\S+)\s+(\S+)", re.M
-)
-VERSION_FLAG = re.compile(r"--version[ \t]+(\S+)")
-
-
-def helm_block(text):
-    """(span, command) for the helm invocation that pins the chart, or None.
-
-    Scoped to the invocation rather than the file, and the file is read with
-    comment bodies blanked first. Both matter here, and the second one bit:
-    VERSION_FLAG is unanchored, so a superseded pin left in a comment ABOVE the
-    live one won the search. The chart name was read correctly — that pattern is
-    line-anchored — while the version came from the dead copy, so `check`
-    compared a version the installer never runs and `sync` rewrote the comment
-    and left the real pin alone, then reported the slice re-pinned.
-    """
-    blanked = strip_comments(text)
-    m = HELM_INSTALL.search(blanked)
-    if not m:
-        return None
-    start = m.start()
-    end = len(blanked)
-    for line_start in range(start, len(blanked)):
-        if blanked[line_start] == "\n" and not blanked[:line_start].rstrip("\n").endswith("\\"):
-            end = line_start
-            break
-    return (start, end), blanked[start:end]
-
-
-def strip_comments(text):
-    """Source with `#` comment bodies blanked, quote-aware.
-
-    Blanked rather than dropped so every offset in the result is the offset in
-    the original — `sync` rewrites by span, and a shifted span rewrites the
-    wrong bytes.
-    """
-    out = []
-    for line in text.splitlines():
-        # An unbalanced quote must not swallow the rest of the line. A word like
-        # dont'care opens a quote that never closes, and every `#` after it then
-        # reads as quoted — so a comment survives blanking and whatever it
-        # mentions counts as code. Scanned twice: if a quote is still open at
-        # end of line it was an apostrophe inside a word, so the second pass
-        # treats that character as literal.
-        buf = []
-        for literal_apostrophe in (False, True):
-            buf, quote, i = [], None, 0
-            while i < len(line):
-                c = line[i]
-                if quote:
-                    buf.append(c)
-                    if c == "\\" and quote == '"' and i + 1 < len(line):
-                        buf.append(line[i + 1])
-                        i += 2
-                        continue
-                    if c == quote:
-                        quote = None
-                elif c == "'" and literal_apostrophe:
-                    buf.append(c)
-                elif c in "\"'":
-                    quote = c
-                    buf.append(c)
-                elif c == "#" and (not buf or buf[-1].isspace()):
-                    buf.append(" " * (len(line) - i))
-                    quote = None
-                    break
-                else:
-                    buf.append(c)
-                i += 1
-            if quote is None:
-                break
-        out.append("".join(buf))
-    return "\n".join(out)
-
-
 # Slices that install a chart from a path rather than a pinned remote, so there
 # is no version for the mirror to compare. Named, because the alternative is a
 # silent drop: the verdict below is a count over whatever the parser recognised,
@@ -336,21 +256,13 @@ def kx_pins():
     """
     pins = {}
     unpinned = []
-    for script in sorted(ROOT.glob("stack/*/*/install.sh")):
-        slice_name = str(script.parent.relative_to(ROOT))
-        text = script.read_text()
-        block = helm_block(text)
-        if not block:
-            continue  # applies manifests rather than installing a chart
-        _, cmd = block
-        install = HELM_INSTALL.search(cmd)
-        version = VERSION_FLAG.search(cmd)
-        if not version:
+    for pin in install_pins(ROOT):
+        slice_name = str(pin.script.parent.relative_to(ROOT))
+        if pin.version is None:
             if slice_name not in NO_REMOTE_PIN:
                 unpinned.append(slice_name)
             continue
-        chart = install.group(2).split("/")[-1]
-        pins[chart] = (version.group(1), script)
+        pins[pin.chart] = (pin.version, pin.script)
     if unpinned:
         for slice_name in unpinned:
             print(f"mirror-check: {slice_name} installs a chart with no --version — "
@@ -637,20 +549,14 @@ def self_test() -> int:
     # not a literal must not share a branch: the generator's own pattern is
     # exempt, and a reference that is neither a literal nor a complete template
     # action is a chart this parser cannot account for.
-    def upstream_from(docs):
-        d = Path(tempfile.mkdtemp(prefix="mirror-appsets-"))
-        (d / "applicationsets").mkdir()
-        for n, body in enumerate(docs):
-            (d / "applicationsets" / f"a{n}.yaml").write_text(body)
-        return d
-
     def read(body):
         """(pins, exit code) for one ApplicationSet, exercising the real reader."""
-        try:
-            with contextlib.redirect_stderr(io.StringIO()):
-                return upstream_pins(upstream_from([body])), 0
-        except SystemExit as e:
-            return {}, e.code
+        with scratch.tree({"applicationsets/a0.yaml": body}, prefix="mirror-appsets-") as d:
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    return upstream_pins(d), 0
+            except SystemExit as e:
+                return {}, e.code
 
     literal = ("spec:\n  template:\n    spec:\n      source:\n"
                "        chart: cilium\n        targetRevision: 1.19.6\n")
@@ -773,32 +679,6 @@ def self_test() -> int:
     return 0
 
 
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('rejected  ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('passed    ',))),
-    }
-
-
 def main():
     if "--self-test" in sys.argv:
         sys.exit(self_test())
@@ -815,4 +695,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(guarded(main, "mirror-check", 1))
