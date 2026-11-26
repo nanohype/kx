@@ -78,6 +78,12 @@ policyEnforcementMode: default
 
 # Gateway API controller. Requires the upstream CRDs (installed out-of-band by
 # stack/core/gateway-api-crds/install.sh before cilium installs).
+#
+# On kind a Gateway is Accepted and never Programmed. Cilium gives each Gateway
+# a LoadBalancer Service and nothing on kind assigns one an address, so the
+# Gateway's status reports Programmed=False with reason AddressNotAssigned. Its
+# routes are reached in-cluster, through the Service cilium-gateway-<name>; the
+# path from the host is an Ingress, on localhost:80 and :443.
 gatewayAPI:
   enabled: true
   enableAlpn: true

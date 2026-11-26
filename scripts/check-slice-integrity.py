@@ -1831,19 +1831,23 @@ def kubectl_words(rest: str) -> tuple[str, str]:
 
 
 def _bound(segment: str, flag: str, *aliases: str) -> str | None:
-    """None when `segment` gives `flag` a positive duration, else why it does not.
+    """None when `segment` gives `flag` one positive duration, else why it does not.
 
-    The last value given is the one read, as the tools themselves read a
-    repeated flag. Zero is how kubectl's --request-timeout, rollout status's
-    --timeout and curl's --max-time each spell "no limit", so a zero is refused
-    rather than read as a bound, and so is a value this cannot read as a
-    duration: a bound that is named has to be one a reader can see.
+    Zero is how kubectl's --request-timeout, rollout status's --timeout and
+    curl's --max-time each spell "no limit", so a zero is refused rather than
+    read as a bound, and so is a value this cannot read as a duration: a bound
+    that is named has to be one a reader can see. So is a flag given twice,
+    under one spelling or two. The tool reads the last value and a reader of the
+    line meets the first, so the call shows a bound it does not have.
     """
     names = "|".join(re.escape(f) for f in (flag, *aliases))
     values = re.findall(rf"(?<![\w-])(?:{names})(?:=|\s+)[\"']?([^\s;|&)\"'`]*)", segment)
     if not values:
         return f"without {flag}"
-    value = values[-1]
+    if len(values) > 1:
+        return (f"with {flag} given {len(values)} times, and only the last, "
+                f"{values[-1] or '(empty)'}, is read")
+    value = values[0]
     if not DURATION.fullmatch(value) or not re.search(r"[1-9]", value):
         return f"with {flag} {value or '(empty)'}, which is no bound"
     return None
@@ -2886,6 +2890,18 @@ CONTROLS["every call that leaves this machine is bounded"] = [
         {"s.sh": "kubectl --request-timeout 0 get ns\n"},
         {"s.sh": "kubectl --request-timeout 60s get ns\n"},
         "kubectl get with --request-timeout 0",
+    ),
+    (
+        "a request timeout given twice, which shows one bound and applies another",
+        {"s.sh": "kubectl --request-timeout=60s apply \\\n  --request-timeout=120s -f x.yaml\n"},
+        {"s.sh": "kubectl apply \\\n  --request-timeout=120s -f x.yaml\n"},
+        "kubectl apply with --request-timeout given 2 times, and only the last, 120s, is read",
+    ),
+    (
+        "a transfer bound given twice, under its two spellings",
+        {"s.sh": 'curl -sSfL -m 60 --max-time 120 -o x "https://example/x"\n'},
+        {"s.sh": 'curl -sSfL --max-time 120 -o x "https://example/x"\n'},
+        "curl with --max-time given 2 times",
     ),
     (
         # Each word that opens a command is proven under the Python invariant;
