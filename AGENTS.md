@@ -132,6 +132,7 @@ The operator reconciles Namespace, ResourceQuota, NetworkPolicy, AppProject — 
 - Local ingress lands at `localhost:80` / `localhost:443`: kind maps both loopback ports to the one port Cilium's shared Ingress listener binds on the control-plane node's host network, which serves plain HTTP and TLS alike. The `cilium` IngressClass is the default, so an Ingress naming no class is served; one naming `nginx` is not
 - `task status` is the canonical "what's running" command — don't kubectl-fish for it
 - `task down` deletes the cluster and the local registry container. No node carries a host mount, so everything in the cluster goes with it — a project keeps what it needs in its own manifests
+- Gateways are reached in-cluster. On kind a Gateway is Accepted but never Programmed, because nothing assigns its LoadBalancer Service an address; its routes answer on that Service, `cilium-gateway-<name>`, from inside the cluster. From the host, use an Ingress on `localhost:80` / `localhost:443`
 
 ## Pointers
 
