@@ -84,6 +84,14 @@ tasks:
     cmds:
       - bash scripts/kyverno-test.sh
 
+  # Clusterless: pytest over tests/ under coverage, the same run the test CI job
+  # makes. Needs a python3 with .github/test-requirements.txt installed, and
+  # kubeconform on PATH for the schema gate's self-test.
+  test:python:
+    desc: Run the Python tests under coverage (needs pytest, coverage and kubeconform)
+    cmds:
+      - bash scripts/python-test.sh
+
   argocd:initial-password:
     desc: Print the ArgoCD admin password
     cmds:

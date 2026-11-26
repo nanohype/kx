@@ -1,0 +1,56 @@
+# Settings for kx's Python tests: pytest, coverage.py, and the coverage floors
+# scripts/python-test.sh holds a run to. Nothing here is a package; kx's Python
+# is the helpers its installers run, under stack/, and the gates under scripts/.
+
+[tool.pytest]
+# An older pytest would run with its own defaults for every option it predates,
+# this table included; refusing is better than a run nobody configured.
+minversion = "9.2"
+testpaths = ["tests"]
+# importlib rather than the default prepend: nothing here is a package, and
+# prepending each test directory to sys.path lets two test modules that share a
+# basename shadow each other.
+addopts = ["--import-mode=importlib"]
+# Unknown options, unregistered markers, an xfail that passes and duplicate
+# parametrization ids are errors rather than warnings.
+strict = true
+
+[tool.coverage.run]
+branch = true
+source = ["scripts", "stack"]
+
+[tool.coverage.report]
+# A file nothing imports is still reported, at zero. Otherwise coverage looks
+# for unexecuted files only in directories holding an __init__.py, which none
+# here does, so a helper or gate added without a test would go unreported rather
+# than fail its floor.
+include_namespace_packages = true
+precision = 1
+show_missing = true
+
+# The floors, read by tests/coverage_floors.py after the run. Every measured
+# file falls under exactly one, and a file under neither fails the run.
+[tool.kx.coverage-floors.security-path]
+# The helpers kx's installers run. Each one handles a cloud credential or
+# decides what reaches the cluster, so each file on its own is held to every
+# line and every branch.
+include = ["stack/*"]
+per-file = true
+lines = 100
+branches = 100
+
+[tool.kx.coverage-floors.gates]
+# The gates under scripts/, held together. The suite reaches them through
+# their own controls and through tests of their logic.
+include = ["scripts/*"]
+per-file = false
+# Never under 75% of lines and 60% of branches.
+minimum-lines = 75
+minimum-branches = 60
+# A ratchet above that: the gates' coverage, rounded down, as of the last change
+# that moved it. The run fails below it, and fails once coverage is a whole point
+# past it until it is raised, so a gain cannot be given back without a diff that
+# lowers the number.
+ratchet = true
+lines = 78
+branches = 73
