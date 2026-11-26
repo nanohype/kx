@@ -77,9 +77,9 @@ docs/      architecture, threat model, and the decision records under adr/
 stack/
   core/    always-on addons
   <slice>/ opt-in addons grouped by use case
-scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage, kyverno policy tests)
+scripts/   CI gates (render, schema, operator flags, mirror, chart provenance, renovate coverage), and the Kyverno and Python test runners
 schemas/   what the schema gate holds resources to, vendored from the pinned Kubernetes and Cilium releases
-tests/     fixtures the gates prove themselves against, and the Kyverno policy suites
+tests/     fixtures the gates prove themselves against, the Kyverno policy suites, and the Python tests (task test:python)
 Taskfile.yaml
 ```
 

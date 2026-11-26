@@ -60,17 +60,25 @@ SOURCE_NS="kyverno"
 # Both kinds policy.yaml declares, asked for by name: a Kyverno old enough to
 # serve neither is a Kyverno this slice cannot install into, and the remedy for
 # that is the same one.
-if ! kyverno_err="$(kubectl --request-timeout=60s get crd generatingpolicies.policies.kyverno.io mutatingpolicies.policies.kyverno.io 2>&1 >/dev/null)"; then
-  if printf '%s' "${kyverno_err}" | grep -qiE 'not found|NotFound'; then
+#
+# credentials.py reads kubectl's answer, where tests hold it: served, absent,
+# or unknown for anything it cannot place.
+kyverno_rc=0
+kyverno_err="$(kubectl --request-timeout=60s get crd generatingpolicies.policies.kyverno.io mutatingpolicies.policies.kyverno.io 2>&1 >/dev/null)" || kyverno_rc=$?
+case "$(printf '%s' "${kyverno_err}" | python3 "${SCRIPT_DIR}/credentials.py" served "${kyverno_rc}")" in
+  served) ;;
+  absent)
     echo "Kyverno is not installed — run 'task stack:security:enable' first." >&2
-  else
+    exit 1
+    ;;
+  *)
     echo "Could not determine whether Kyverno is installed — kubectl said:" >&2
     printf '%s\n' "${kyverno_err}" | sort -u | sed 's/^/  /' >&2
     echo "Fix that first; enabling the security slice will not help until kubectl" >&2
     echo "can reach the cluster." >&2
-  fi
-  exit 1
-fi
+    exit 1
+    ;;
+esac
 
 # Resolved through the CLI rather than read out of ~/.aws, so SSO sessions,
 # assumed roles and credential_process all work the same way. A profile whose
@@ -125,13 +133,17 @@ printf '%s' "${CREDS_JSON}" \
 # asked for by name, and only a NotFound answer counts as absent, for the reason
 # the Kyverno check above gives.
 LEGACY_POLICY="inject-local-bedrock-credentials"
-if legacy_err="$(kubectl --request-timeout=60s get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)"; then
-  kubectl --request-timeout=60s --timeout=5m delete clusterpolicies.kyverno.io "${LEGACY_POLICY}" --ignore-not-found
-elif ! printf '%s' "${legacy_err}" | grep -qiE 'not found|NotFound'; then
-  echo "Could not determine whether the old ClusterPolicy kind is served — kubectl said:" >&2
-  printf '%s\n' "${legacy_err}" | sort -u | sed 's/^/  /' >&2
-  exit 1
-fi
+legacy_rc=0
+legacy_err="$(kubectl --request-timeout=60s get crd clusterpolicies.kyverno.io 2>&1 >/dev/null)" || legacy_rc=$?
+case "$(printf '%s' "${legacy_err}" | python3 "${SCRIPT_DIR}/credentials.py" served "${legacy_rc}")" in
+  served) kubectl --request-timeout=60s --timeout=5m delete clusterpolicies.kyverno.io "${LEGACY_POLICY}" --ignore-not-found ;;
+  absent) ;;
+  *)
+    echo "Could not determine whether the old ClusterPolicy kind is served — kubectl said:" >&2
+    printf '%s\n' "${legacy_err}" | sort -u | sed 's/^/  /' >&2
+    exit 1
+    ;;
+esac
 kubectl --request-timeout=60s --timeout=5m delete secrets --all-namespaces \
   -l "generate.kyverno.io/policy-name=${LEGACY_POLICY},generate.kyverno.io/rule-name=clone-bedrock-credentials" \
   --field-selector "metadata.name=${SECRET}" --ignore-not-found

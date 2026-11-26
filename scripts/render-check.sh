@@ -20,9 +20,10 @@
 # transform widens.
 #
 # `--self-test` proves the lifting works, over the shapes the tree actually
-# contains. This script is the input to check-rendered-schemas.py, so an
-# extraction that silently returned the wrong command would give that gate a
-# clean bill of health over something the installer never runs.
+# contains, and that a slice's render reaches the mount check and the output
+# file. This script is the input to check-rendered-schemas.py, so an extraction
+# that silently returned the wrong command would give that gate a clean bill of
+# health over something the installer never runs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -84,6 +85,16 @@ renders_sibling_chart() { # file
   [[ "$arg" =~ $re ]] || return 1
   var="${BASH_REMATCH[1]}"
   grep -qE "^${var}=.*[.][.]/eks-gitops/" "$1"
+}
+
+# One slice's lifted command, rendered into the mount check, with the render
+# kept in out_file for the schema gate (/dev/null when nothing keeps it). The
+# mount check reads the pipe rather than a file, so the manifests it judges are
+# the ones the render produced, and its verdict is the slice's. pipefail carries
+# a render that fails after printing, which the mount check alone would pass.
+# The command is eval'd here, so the caller sets the variables it references.
+render_and_check() { # slice out_file cmd
+  eval "$3" | tee "$2" | python3 "$ROOT/scripts/check-rendered-mounts.py" "$1"
 }
 
 # Prove the lifting handles the shapes in the tree, and reports nothing rather
@@ -205,8 +216,42 @@ if [[ "${1:-}" == "--self-test" ]]; then
     echo "  ok  trailing kubectl excluded"
   fi
 
-  [[ "$fails" -eq 0 ]] || { echo "$fails extraction failure(s)."; exit 1; }
-  echo "OK    $checks shape(s) extract as specified."
+  # What the render loop does with a lifted command, end to end: the render
+  # reaches the mount check and its verdict is the slice's, a render that fails
+  # fails the slice even when what it printed was clean, and the render lands in
+  # the file the schema gate reads. Each case differs from the clean one in the
+  # one way it names.
+  pod() { # the second mount's path
+    printf 'apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers:\n    - name: c\n      image: r/x:1\n      volumeMounts:\n        - {name: a, mountPath: /a}\n        - {name: b, mountPath: %s}\n  volumes:\n    - {name: a, emptyDir: {}}\n    - {name: b, emptyDir: {}}\n' "$1"
+  }
+  pod /b >"$t/mounts-clean.yaml"
+  pod /a >"$t/mounts-twice.yaml"
+  composed() { # name want(0|1) cmd
+    checks=$((checks + 1))
+    local rc=0
+    render_and_check fixture "$t/kept.yaml" "$3" >/dev/null 2>&1 || rc=$?
+    [[ "$rc" -eq 0 ]] || rc=1
+    if [[ "$rc" -ne "$2" ]]; then
+      echo "FAIL  $1 (the slice's pipe exited $rc, want $2)"; fails=$((fails + 1))
+    else
+      echo "  ok  $1"
+    fi
+  }
+  composed "a render with two mounts on one path fails its slice" 1 "cat '$t/mounts-twice.yaml'"
+  composed "a render that fails after printing clean output fails its slice" 1 "cat '$t/mounts-clean.yaml'; false"
+  composed "a clean render passes its slice" 0 "cat '$t/mounts-clean.yaml'"
+
+  checks=$((checks + 1))
+  rm -f "$t/kept.yaml"
+  render_and_check fixture "$t/kept.yaml" "cat '$t/mounts-clean.yaml'" >/dev/null 2>&1 || true
+  if cmp -s "$t/kept.yaml" "$t/mounts-clean.yaml"; then
+    echo "  ok  the render is kept for the schema gate"
+  else
+    echo "FAIL  the render is not kept in the output file the schema gate reads"; fails=$((fails + 1))
+  fi
+
+  [[ "$fails" -eq 0 ]] || { echo "$fails case(s) wrong."; exit 1; }
+  echo "OK    $checks case(s) behave as specified."
   exit 0
 fi
 
@@ -215,7 +260,7 @@ fi
 # gate a clean verdict over something the installer never runs — and a proof
 # behind a flag is one the workflow can forget to ask for.
 if ! "${BASH_SOURCE[0]}" --self-test >/dev/null 2>&1; then
-  echo "FAIL  the extraction self-test does not pass — refusing to render." >&2
+  echo "FAIL  the self-test does not pass — refusing to render." >&2
   "${BASH_SOURCE[0]}" --self-test >&2 || true
   exit 2
 fi
@@ -426,7 +471,7 @@ for script in "${scripts[@]}"; do
     # shellcheck disable=SC2030,SC2034  # consumed by the eval'd block
     SCRIPT_DIR="$(dirname "$script")"
     [[ -n "$assignments" ]] && eval "$assignments"
-    eval "$cmd" | tee "$out_file" | python3 "$ROOT/scripts/check-rendered-mounts.py" "$slice"
+    render_and_check "$slice" "$out_file" "$cmd"
   ); then
     echo "OK    $slice"
   else

@@ -1,0 +1,40 @@
+name: kubeconform
+description: >-
+  Install the kubeconform release the schema gate validates with, pinned to one
+  version and checked against its published digest before it reaches PATH.
+
+# One place for the version, because two jobs run the binary: the render job
+# validates every rendered resource with it, and the test job runs the schema
+# gate's self-test, which drives the same binary. Two copies of the pin would be
+# two digests to move on every bump, and a test job grading a different
+# validator from the one the render job uses.
+#
+# Downloaded to a file and checked before it is unpacked onto PATH and run.
+# Piping the response straight into tar executes whatever arrives: a truncated
+# transfer, a proxy error page, or a replaced asset all reach the next step as a
+# binary. The digest is the one the release publishes alongside the archive, so
+# it catches corruption and substitution of the asset; it does not attest the
+# release itself, which would need the upstream signing key.
+#
+# --retry-all-errors alongside --retry, because the other two do not cover the
+# failure this download actually has. --retry covers transient HTTP and a
+# timeout; --retry-connrefused adds a refused connection. A reset partway
+# through the transfer is in neither set, so the first one ends the download —
+# on the blocking path, over a fetch no change here can affect.
+runs:
+  using: composite
+  steps:
+    - name: Install kubeconform
+      shell: bash
+      env:
+        KUBECONFORM_VERSION: v0.8.0
+        KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+      run: |
+        archive="$RUNNER_TEMP/kubeconform.tar.gz"
+        url="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+        curl -sSfL --max-time 120 --retry 3 --retry-connrefused --retry-all-errors \
+          -o "$archive" "$url"
+        echo "${KUBECONFORM_SHA256}  $archive" | sha256sum -c -
+        tar -xz -C /usr/local/bin -f "$archive" kubeconform
+        rm "$archive"
+        kubeconform -v

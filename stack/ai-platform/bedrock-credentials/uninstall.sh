@@ -47,16 +47,20 @@ done < <(
 # `kubectl delete` of an unknown kind is an error that would stop the teardown
 # before it began. Only a NotFound answer for the CRD counts as not served; any
 # other failure is a cluster this script cannot read, and it stops rather than
-# reporting a teardown it did not do.
+# reporting a teardown it did not do. credentials.py reads the answer, where
+# tests hold it, and anything but served or absent stops here.
 delete_if_served() { # crd kind-plural name
-  local err
-  if err="$(kubectl --request-timeout=60s get crd "$1" 2>&1 >/dev/null)"; then
-    kubectl --request-timeout=60s --timeout=5m delete "$2" "$3" --ignore-not-found
-  elif ! printf '%s' "${err}" | grep -qiE 'not found|NotFound'; then
-    echo "Could not determine whether $1 is served — kubectl said:" >&2
-    printf '%s\n' "${err}" | sort -u | sed 's/^/  /' >&2
-    exit 1
-  fi
+  local err rc=0
+  err="$(kubectl --request-timeout=60s get crd "$1" 2>&1 >/dev/null)" || rc=$?
+  case "$(printf '%s' "${err}" | python3 "${SCRIPT_DIR}/credentials.py" served "${rc}")" in
+    served) kubectl --request-timeout=60s --timeout=5m delete "$2" "$3" --ignore-not-found ;;
+    absent) ;;
+    *)
+      echo "Could not determine whether $1 is served — kubectl said:" >&2
+      printf '%s\n' "${err}" | sort -u | sed 's/^/  /' >&2
+      exit 1
+      ;;
+  esac
 }
 delete_if_served generatingpolicies.policies.kyverno.io \
   generatingpolicies.policies.kyverno.io "${GENERATOR}"
