@@ -112,6 +112,16 @@ class RangeUnavailable(Exception):
     """
 
 
+def _git(args: list[str]) -> subprocess.CompletedProcess:
+    """git, bounded. One that outruns its bound is a range that could not be computed."""
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True, check=False,
+                              timeout=60)
+    except subprocess.TimeoutExpired as e:
+        raise RangeUnavailable(
+            f"`git {' '.join(args)}` did not finish within {e.timeout:g}s") from e
+
+
 def added_prose(base: str) -> list[tuple[str, str]]:
     """(file, line) for every prose-looking line the diff adds.
 
@@ -122,21 +132,14 @@ def added_prose(base: str) -> list[tuple[str, str]]:
             "git is not on PATH, so no range can be computed. A gate that cannot run its "
             "own tool reports nothing about the change."
         )
-    merge_base = subprocess.run(
-        ["git", "merge-base", base, "HEAD"], capture_output=True, text=True, check=False,
-        timeout=60,
-    )
+    merge_base = _git(["merge-base", base, "HEAD"])
     if merge_base.returncode != 0:
         raise RangeUnavailable(
             f"no merge base between {base} and HEAD: "
             f"{merge_base.stderr.strip() or 'git gave no reason'}. On a shallow checkout "
             f"this usually means the fetch did not reach far enough back."
         )
-    diff = subprocess.run(
-        ["git", "diff", "--unified=0", f"{base}...HEAD"],
-        capture_output=True, text=True, check=False,
-        timeout=60,
-    )
+    diff = _git(["diff", "--unified=0", f"{base}...HEAD"])
     if diff.returncode != 0:
         raise RangeUnavailable(
             f"git diff against {base} failed: {diff.stderr.strip() or 'no reason given'}"
@@ -203,32 +206,6 @@ def self_test() -> int:
         return 1
     print(f"\nOK    {len(should_flag) + len(should_pass)} case(s) behave as specified.")
     return 0
-
-
-def control_outcomes() -> dict:
-    """What the controls actually exercised, for the suite-wide floor.
-
-    Counted by running them and reading the outcome, never by matching source
-    text. A floor that decides whether a gate has controls by looking for the
-    word "control" is satisfied by a comment saying the controls were removed —
-    which is the same defect one level up from the one the controls exist for.
-
-    Both halves matter. A gate that rejects everything is as useless as one that
-    rejects nothing, and either count alone passes a one-sided check.
-    """
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = self_test()
-    lines = buf.getvalue().splitlines()
-    return {
-        "ok": rc == 0,
-        # The evidence, not just a tally of it. The floor derives the counts
-        # from these lines rather than trusting a number a gate could return
-        # without having run anything.
-        "lines": lines,
-        "rejected": sum(1 for line in lines if any(m in line for m in ('flagged   ',))),
-        "accepted": sum(1 for line in lines if any(m in line for m in ('spared    ',))),
-    }
 
 
 def main() -> int:

@@ -126,7 +126,10 @@ installer says what it stands in for
 ## The gate layer
 
 The repository holds itself to rules a reader cannot check by eye, and each rule
-is a gate under `scripts/`. Every gate runs without a cluster.
+is a gate under `scripts/`. Every gate runs without a cluster. What more than
+one gate needs, such as reading a chart pin or a rendered manifest, is written
+once in `scripts/gatelib/`, which is a library rather than a gate
+([0017](adr/0017-gates-share-one-library.md)).
 
 | Gate | Holds |
 |---|---|
@@ -170,8 +173,8 @@ The gates split by the kind of question they answer
   push to `main`. It asks only questions whose answer is a fact about the
   commit. A merge gate job requires every other job, and counts a skipped one
   as failed.
-- **Scheduled.** Four workflows run weekly, and on demand. Each asks a question
-  whose answer changes without this repository changing:
+- **Scheduled.** These workflows run weekly, and on demand. Each asks a
+  question whose answer changes without this repository changing:
   - `.github/workflows/chart-provenance.yml`: has a pinned chart been
     deprecated or changed hands?
   - `.github/workflows/mirror-freshness.yml`: has the catalog moved past the
