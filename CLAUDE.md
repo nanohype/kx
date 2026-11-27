@@ -24,7 +24,7 @@ Local mappings:
 | external-dns (Route53) | (not installed by default; coredns RFC2136 if needed) | Add to data/ slice if a project requires it |
 | velero (S3) | velero + minio | Same Velero, S3-compatible backend |
 | karpenter / karpenter-resources | (not applicable on kind) | No EC2 to provision |
-| kube-state-metrics (standalone) | kube-prometheus-stack | In-cluster Prometheus/Alertmanager/Grafana replace AMP + Amazon Managed Grafana; kube-state-metrics and node-exporter ship bundled in the stack instead of as standalone charts |
+| kube-state-metrics (standalone) | kube-prometheus-stack | In-cluster Prometheus/Alertmanager/Grafana replace AMP + Amazon Managed Grafana; kube-state-metrics, which eks-gitops runs as a standalone chart, ships bundled in the stack here, as node-exporter does |
 | opentelemetry-collector (the OTLP gateway) | `stack/observability/otel-collector` | Same chart and pin, same gateway mode, same `telemetry.monitoring.svc` Service alias tenant charts wire against. Only the export leg differs, because kx has no AWS: metrics remote-write to the in-cluster Prometheus (`enableRemoteWriteReceiver`) instead of AMP with SigV4, and logs go to the Loki single-binary Service rather than the gateway kx disables. Traces to Tempo are identical |
 | grafana-operator (reconciles into external Amazon Managed Grafana) | grafana-operator | Same chart. It reconciles into whatever instance a `Grafana` CR names, and kx installs none: a project that wants its dashboards in the kube-prometheus-stack Grafana supplies a `Grafana` CR whose `external` block carries that Grafana's URL and admin credential |
 

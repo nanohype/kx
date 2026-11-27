@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # kube-prometheus-stack — prometheus + grafana + alertmanager + node-exporter + kube-state-metrics
 # Stands in for Amazon Managed Prometheus and Amazon Managed Grafana, which
-# eks-gitops reaches as external services. kube-state-metrics and node-exporter
-# come bundled here, where eks-gitops pins them as charts of their own.
+# eks-gitops reaches as external services. kube-state-metrics comes bundled
+# here, where eks-gitops pins it as a chart of its own.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh
