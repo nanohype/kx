@@ -215,6 +215,8 @@ MINIMUM_EXAMINED = {
     "nothing kx runs can reach a cluster other than kind-kx": 70,
     # Unconditional: both ports, or the check did not look.
     "localhost:80 and :443 reach Cilium's Ingress": 2,
+    # The Ingress ports at least, which the invariant above requires.
+    "every port kind publishes binds to loopback": 2,
     # Counts every outbound command and subprocess call, which the run prints;
     # set well under it.
     "every call that leaves this machine is bounded": 200,
@@ -224,7 +226,7 @@ MINIMUM_EXAMINED = {
 # CONTROLS both emptied, every per-check control has nothing to report on and
 # the run loop has nothing to iterate, so the whole gate exits 0 having asserted
 # nothing at all.
-MINIMUM_CHECKS = 17
+MINIMUM_CHECKS = 18
 
 # And the control table, which is the corpus that licenses every other verdict
 # in this file. `names - set(CONTROLS)` gates on a label having a KEY; what the
@@ -2138,6 +2140,43 @@ def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
     EXAMINED["localhost:80 and :443 reach Cilium's Ingress"] = len(INGRESS_HOST_PORTS)
     return problems
 
+
+LOOPBACK = "127.0.0.1"
+
+
+def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
+    """Every port kind publishes on the host binds to loopback.
+
+    What sits behind those ports is configured for one person on one machine,
+    with default or generated credentials, which is defensible only while no
+    other machine can reach it (docs/adr/0005-host-ports-bind-to-loopback.md).
+    kind binds a mapping that names no listenAddress to every interface.
+    """
+    label = "every port kind publishes binds to loopback"
+    EXAMINED[label] = 0
+    try:
+        kind = yaml.safe_load((root / KIND_CONFIG).read_text()) or {}
+    except FileNotFoundError:
+        return [f"{KIND_CONFIG} does not exist — refusing to report its ports bound without it."]
+    except yaml.YAMLError as e:
+        return [f"{KIND_CONFIG} does not parse ({e}), so the ports it publishes cannot be read."]
+    nodes = kind.get("nodes") if isinstance(kind, dict) else None
+    mappings = [(node, m) for node in nodes or [] if isinstance(node, dict)
+                for m in node.get("extraPortMappings") or [] if isinstance(m, dict)]
+    if not mappings:
+        return [f"{KIND_CONFIG} publishes no port — refusing to report every port bound to "
+                f"loopback over an empty set."]
+    problems = []
+    for node, m in mappings:
+        bound = m.get("listenAddress")
+        if bound != LOOPBACK:
+            on = bound if bound else "every interface, kind's default with no listenAddress"
+            problems.append(f"{KIND_CONFIG} publishes host port {m.get('hostPort')} from the "
+                            f"{node.get('role', '?')} node on {on}, not {LOOPBACK}.")
+    EXAMINED[label] = len(mappings)
+    return problems
+
+
 CHECKS = [
     ("every helm install is found, and names a timeout", helm_calls_are_bounded),
     ("no helm repo add swallows its own failure", repo_adds_do_not_swallow),
@@ -2157,6 +2196,7 @@ CHECKS = [
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
     ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
     ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
+    ("every port kind publishes binds to loopback", host_ports_bind_loopback),
     ("every call that leaves this machine is bounded", external_calls_are_bounded),
 ]
 
@@ -2793,6 +2833,44 @@ CONTROLS["CLAUDE.md lists the jobs the merge gate needs"] = [
         "no CLAUDE.md at all",
         {CI_WORKFLOW: GATED, "README.md": "x\n"},
         {CI_WORKFLOW: GATED, "CLAUDE.md": JOBS},
+    ),
+]
+
+# A kind config publishing two ports, both on loopback. Each case below
+# unbinds one, or takes away what the check reads.
+BOUND = ("nodes:\n  - role: control-plane\n    extraPortMappings:\n"
+         "      - {containerPort: 80, hostPort: 80, listenAddress: \"127.0.0.1\"}\n"
+         "      - {containerPort: 30030, hostPort: 30030, listenAddress: \"127.0.0.1\"}\n")
+
+CONTROLS["every port kind publishes binds to loopback"] = [
+    (
+        "a mapping that names no listenAddress, cited by its port",
+        {KIND_CONFIG: BOUND.replace(', hostPort: 30030, listenAddress: "127.0.0.1"',
+                                    ", hostPort: 30030")},
+        {KIND_CONFIG: BOUND},
+        "publishes host port 30030 from the control-plane node on every interface",
+    ),
+    (
+        "a mapping bound to every interface by name",
+        {KIND_CONFIG: BOUND.replace('hostPort: 80, listenAddress: "127.0.0.1"',
+                                    'hostPort: 80, listenAddress: "0.0.0.0"')},
+        {KIND_CONFIG: BOUND},
+        "host port 80 from the control-plane node on 0.0.0.0",
+    ),
+    (
+        "a kind config that publishes nothing",
+        {KIND_CONFIG: "nodes:\n  - role: control-plane\n"},
+        {KIND_CONFIG: BOUND},
+    ),
+    (
+        "a kind config that does not parse",
+        {KIND_CONFIG: "nodes: [unclosed\n"},
+        {KIND_CONFIG: BOUND},
+    ),
+    (
+        "no kind config at all",
+        {"cluster/other.yaml": BOUND},
+        {KIND_CONFIG: BOUND},
     ),
 ]
 
