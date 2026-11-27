@@ -43,6 +43,8 @@ branches = 100
 # The gates under scripts/, held together. The suite reaches them through
 # their own controls and through tests of their logic.
 include = ["scripts/*"]
+# The library the gates share has a floor of its own, below.
+exclude = ["scripts/gatelib/*"]
 per-file = false
 # Never under 75% of lines and 60% of branches.
 minimum-lines = 75
@@ -52,5 +54,14 @@ minimum-branches = 60
 # past it until it is raised, so a gain cannot be given back without a diff that
 # lowers the number.
 ratchet = true
-lines = 80
-branches = 74
+lines = 84
+branches = 79
+
+[tool.kx.coverage-floors.library]
+# What the gates share, under scripts/gatelib/. Every gate's verdict passes
+# through it, so each file on its own is held to every line and every branch,
+# as the installers' helpers are.
+include = ["scripts/gatelib/*"]
+per-file = true
+lines = 100
+branches = 100

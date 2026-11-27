@@ -87,6 +87,24 @@ class TestVerdict:
         assert "stack/a/helper.py falls under the everything and security-path floors; a file " \
                "is held to one." in problems
 
+    def test_an_excluded_file_is_held_by_the_floor_that_names_it(self, floors):
+        split = {**FLOORS,
+                 "gates": {**FLOORS["gates"], "exclude": ["scripts/lib/*"]},
+                 "library": {"include": ["scripts/lib/*"], "per-file": True, "lines": 100,
+                             "branches": 100}}
+        files = {**FULL, "scripts/lib/shared.py": measured(lines=(9, 10))}
+        report, problems = floors.verdict(files, split)
+        assert problems == ["scripts/lib/shared.py is at lines 90.0% and branches 100.0%, under "
+                            "the library floor of 100% and 100%."]
+        assert "  ok    gates, 1 file(s) together: lines 100.0% of 75, branches 100.0% of 60" in report
+
+    def test_an_exclude_that_leaves_a_file_to_no_floor(self, floors):
+        split = {**FLOORS, "gates": {**FLOORS["gates"], "exclude": ["scripts/lib/*"]}}
+        files = {**FULL, "scripts/lib/shared.py": measured()}
+        _, problems = floors.verdict(files, split)
+        assert problems == ["scripts/lib/shared.py is measured, but no floor includes it, so "
+                            "nothing holds it."]
+
     def test_a_floor_that_includes_nothing(self, floors):
         _, problems = floors.verdict({"scripts/gate.py": measured()}, FLOORS)
         assert problems == ["the security-path floor includes no measured file, so it holds "
@@ -141,9 +159,12 @@ class TestUnusable:
 
     def test_the_shipped_floors_are_the_ones_decided(self, floors):
         shipped = floors.floors_in(tomllib.loads(floors.PYPROJECT.read_text()))
-        assert set(shipped) == {"security-path", "gates"}
-        helpers, gates = shipped["security-path"], shipped["gates"]
+        assert set(shipped) == {"security-path", "gates", "library"}
+        helpers, gates, library = shipped["security-path"], shipped["gates"], shipped["library"]
         assert (helpers["per-file"], helpers["lines"], helpers["branches"]) == (True, 100, 100)
+        assert (library["per-file"], library["lines"], library["branches"]) == (True, 100, 100)
+        assert library["include"] == ["scripts/gatelib/*"]
+        assert gates["exclude"] == library["include"]
         assert (gates["per-file"], gates["ratchet"]) == (False, True)
         assert (gates["minimum-lines"], gates["minimum-branches"]) == (75, 60)
 
@@ -163,11 +184,14 @@ class TestUnusable:
         ({"branches": -1}, "branches is -1, not a percentage"),
         ({"branches": 101}, "branches is 101, not a percentage"),
         ({"ratchet": "yes"}, "ratchet is 'yes', not true or false"),
+        ({"exclude": "scripts/lib/*"}, "exclude is 'scripts/lib/*', not a list of globs"),
+        ({"exclude": [""]}, "exclude is [''], not a list of globs"),
         ({"minimum-lines": "75"}, "minimum-lines is '75', not a percentage"),
         ({"minimum-lines": 80}, "lines is 75, under its minimum-lines of 80"),
         ({"minimum-branches": 61}, "branches is 60, under its minimum-branches of 61"),
     ], ids=["no-globs", "globs-not-a-list", "empty-glob", "per-file-not-bool", "lines-bool",
             "lines-text", "branches-negative", "branches-over-100", "ratchet-not-bool",
+            "exclude-not-a-list", "exclude-empty-glob",
             "minimum-not-a-percentage", "lines-under-minimum", "branches-under-minimum"])
     def test_a_floor_that_cannot_be_held_to(self, floors, change, says):
         bad = {"gates": {**FLOORS["gates"], **change}}
