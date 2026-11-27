@@ -22,7 +22,8 @@ Every host port kx publishes binds to 127.0.0.1:
   `listenAddress: "127.0.0.1"`;
 - `cluster/registry.sh` publishes the registry on `127.0.0.1:5001`.
 
-`scripts/check-slice-integrity.py` fails a kind mapping that does not bind
+`scripts/check-slice-integrity.py` fails a kind mapping, or a port a script
+or Taskfile publishes with `docker run` or `docker create`, that does not bind
 loopback.
 
 A service with a default credential and no host port, such as the data slice's
@@ -43,4 +44,5 @@ which binds loopback by default.
 - Loopback does not separate kx from the workstation's own processes, a
   browser included. The defaults are accepted on that basis, and
   [the threat model](../threat-model.md) states what remains.
-- A new port mapping that leaves out `listenAddress` fails CI.
+- A new port mapping that leaves out `listenAddress`, or a container published
+  without `127.0.0.1`, fails CI.
