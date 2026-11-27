@@ -2,8 +2,8 @@
 
 kx is a kind cluster on one workstation, running the charts the
 [eks-gitops](https://github.com/nanohype/eks-gitops) catalog runs in
-production, so a project developed against it deploys unchanged to a real
-cluster. This document covers:
+production at the versions it pins, so a project developed against it meets
+the chart shapes it will meet on a real cluster. This document covers:
 
 - the cluster;
 - the stack installed into it;

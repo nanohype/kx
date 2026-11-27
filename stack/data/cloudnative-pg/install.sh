@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # cloudnative-pg — postgres operator. Per-project Postgres clusters via the Cluster CR.
+# Stands in for the Aurora clusters the tenant-substrate module provisions: a
+# tenant declaring a relational datastore gets RDS in production and a CNPG
+# cluster here.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh

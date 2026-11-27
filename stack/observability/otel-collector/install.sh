@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # opentelemetry-collector — the OTLP gateway every tenant chart writes to.
 #
+# The same chart, pin and gateway mode as eks-gitops. Only the export leg
+# differs, because kx has no AWS: values.yaml says where each signal goes.
+#
 # Installs after prometheus/loki/tempo because all three are its export targets:
 # the collector starts, fails to reach a backend that is not up yet, and retries,
 # but there is no reason to make it.
