@@ -1,13 +1,7 @@
 name: mirror freshness
 # Asks whether the eks-gitops catalog has moved past the pin in
-# stack/upstream.json.
-#
-# Deliberately not part of ci.yml. That workflow compares kx against the
-# catalog AT THE PINNED REF, so its verdict is a fact about the commit under
-# test. Whether the pin is also the newest thing eks-gitops has is a different
-# question with a different answer every day — Renovate watches every chart
-# pin over there, so asking it on the blocking path would turn a required check
-# red because a bump merged in another repository.
+# stack/upstream.json. Scheduled rather than in ci.yml, which compares against
+# the catalog at the pinned ref (ADR 0011).
 #
 # A red run here means: `python3 scripts/mirror-check.py sync`, then
 # ./scripts/render-check.sh, and ship whatever the values files need.
@@ -17,9 +11,7 @@ on:
     - cron: "0 15 * * 1"
   workflow_dispatch:
 
-# One run per ref. A push that lands on top of another leaves the first run
-# grading a tree nobody is proposing any more, and its verdict arrives against
-# the newer commit.
+# One run per ref: a new run supersedes one still running.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

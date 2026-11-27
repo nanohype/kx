@@ -3,18 +3,12 @@ description: >-
   Install the helm release every kx workflow renders with, pinned to one
   version and checked against its recorded digest before it reaches PATH.
 
-# One place for the version every render runs on. The render gate's verdict is
-# a function of the commit under test only if the renderer is part of the
-# commit: helm installed at "latest" makes a green check a fact about the day
-# the job ran, and a helm release that changes rendering would redden or
-# silently change every check at once with no diff here to point at.
+# One place for the version every render runs on, so a render's verdict is a
+# fact about the commit rather than about the day helm was installed.
 #
-# Downloaded to a file and checked before it is unpacked onto PATH, the way the
-# kubeconform and trivy steps are. The digest is the one get.helm.sh publishes
-# beside the archive, so it catches a truncated transfer and a replaced asset;
-# it does not attest the release itself. Renovate moves HELM_VERSION and cannot
-# move the digest with it, so a bump fails here until the digest is updated,
-# which is the direction a mismatch should fail in.
+# Downloaded to a file and checked against the digest get.helm.sh publishes
+# before it reaches PATH. Renovate moves HELM_VERSION but not the digest, so a
+# bump fails here until the digest is updated.
 runs:
   using: composite
   steps:

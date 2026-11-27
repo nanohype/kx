@@ -1,28 +1,12 @@
 name: sibling freshness
 # Asks whether eks-agent-platform has moved past the pin in stack/upstream.json,
-# and whether moving the pin to it would hold.
+# and whether moving the pin to it would hold. Scheduled rather than in ci.yml,
+# which renders the sibling at the pinned ref (ADR 0011).
 #
-# The symmetric question to mirror-freshness.yml, which asks it of the chart
-# catalog. Both live outside ci.yml for the reason that workflow states: it
-# grades the sibling AT THE PINNED REF so its verdict is a fact about the commit
-# under test, and reading a default branch on the blocking path reddens pull
-# requests that did not cause the change.
-#
-# The two halves report differently, and the split is the whole design.
-#
-# DISTANCE is reported and never fails on its own. Grouped by ISO week over the
-# paths this workspace consumes, that repository carries at least one commit in
-# every week of its recent history. A check that failed on distance would be red
-# in most weeks, and a weekly red whose only remedy is a hand-edited sha is muted
-# long before it carries a change worth reading — which is how a pin comes to be
-# watched by nothing in the first place.
-#
-# FIT fails. Rendering this workspace's slices against that repository's default
-# branch, and holding the operator's flags to the binary there, answers the
-# question a distance count only gestures at: would the bump land. Across every
-# revision of the flag source and of the chart's Deployment template, neither
-# half of that fires — so a red here is a change somebody needs to read, not a
-# calendar event.
+# The distance is reported and never fails on its own: distance alone is no
+# reason to act, and a check that is red whenever the sibling moves is one
+# people learn to mute. The fit fails: every slice rendered against the
+# sibling's default branch, and the operator's flags held to the binary there.
 #
 # A red run means: read what moved, then move the pin with the render as its
 # evidence, the way stack/upstream.json's `_siblings_README` describes.
@@ -32,9 +16,7 @@ on:
     - cron: "0 17 * * 1"
   workflow_dispatch:
 
-# One run per ref. A push that lands on top of another leaves the first run
-# grading a tree nobody is proposing any more, and its verdict arrives against
-# the newer commit.
+# One run per ref: a new run supersedes one still running.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -52,9 +34,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Full history, because the distance is measured from a commit this
-      # repository names to that repository's head, and a shallow checkout has
-      # neither the pinned commit nor the range between them.
+      # Full history: the distance runs from the pinned commit to the branch's
+      # head.
       - name: Check out the sibling at its default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,26 +44,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Prints the commits, not a verdict about them. A count alone cannot be
-      # read for whether anything mattered, and output that carries its own
-      # evidence cannot report an absence it did not establish.
+      # Prints the commits rather than a verdict: a count alone cannot say
+      # whether anything mattered.
       - name: How far behind is the pin
         env:
           SIBLING_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
         run: |
           ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
-          # Asserted before use, the way ci.yml asserts the same field. Tested
-          # with a bash conditional rather than against an external tool, so an
-          # absent tool cannot delete the assertion.
+          # Asserted before use, as ci.yml asserts the same field.
           if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
             echo "FAIL  siblings.eks-agent-platform.ref read as '$ref', which is not a commit sha."
             exit 1
           fi
 
-          # A pin that is not an ancestor of the default branch is not behind it
-          # — it is off it, which a distance count cannot express and which a
-          # rebase or a force-push upstream produces silently. Reported as the
-          # different thing it is.
+          # A pin off the default branch, as a rebase or a force-push upstream
+          # leaves it, has no distance to measure, and is reported as that.
           if ! git -C "$SIBLING_DIR" merge-base --is-ancestor "$ref" HEAD; then
             echo "FAIL  ${ref:0:12} is not an ancestor of the sibling's default branch."
             echo "      The pin names a commit that branch no longer contains, so there is no"
@@ -119,8 +95,8 @@ jobs:
 
       - uses: ./.github/actions/helm
 
-      # Against the sibling's default branch rather than the pin, which is the
-      # whole point of this workflow and the reason it cannot live in ci.yml.
+      # Against the sibling's default branch, which is what this workflow asks
+      # about.
       - name: Would every slice still render against that branch
         env:
           KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
@@ -129,10 +105,8 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ./scripts/render-check.sh
 
-      # The half a render cannot reach. The chart takes this workspace's flags
-      # through an untyped `extraArgs` array and renders them verbatim, so a flag
-      # renamed on that branch, or a template that stopped reading the array,
-      # leaves the render clean and the operator broken.
+      # The half a render cannot reach: a flag renamed on that branch still
+      # renders clean through the untyped `extraArgs` array.
       - name: Would the operator still accept the flags this workspace sets
         env:
           RENDER_DIR: ${{ runner.temp }}/render

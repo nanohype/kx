@@ -62,9 +62,10 @@ Behind those ports sit defaults chosen for one person on one machine:
   `task argocd:initial-password` prints it.
 - The registry has no authentication.
 
-Two services with default credentials publish nothing. The data slice's object
-store and Druid (`stack/data/druid/pre-install/secrets.yaml`) are reached
-in-cluster or through `kubectl port-forward`, which binds loopback.
+The data slice's object store and Druid
+(`stack/data/druid/pre-install/secrets.yaml`) also ship default credentials,
+and publish nothing. Both are reached in-cluster or through
+`kubectl port-forward`, which binds loopback.
 
 | | Threat | Bound |
 |---|---|---|
@@ -112,7 +113,7 @@ Bedrock call, carries a reference to its namespace's copy
 | Information disclosure | The keys pass through processes on the workstation. | They never reach a process's argv or environment. The installer hands them to `credentials.py` on stdin, and `credentials.py` writes the Secret manifest to kubectl on stdin. `scripts/check-slice-integrity.py` holds every script to keeping secrets off argv. In the gateway pod, only the signing sidecar carries the reference, and Envoy and the other containers never see the credential. |
 | Elevation of privilege | Kyverno's background controller holds cluster-wide Secret access while the slice is installed. | Residual, below. Disabling the slice withdraws the grant. |
 
-Two tasks complete the lifecycle:
+These tasks complete the lifecycle:
 
 - `task stack:ai-platform:credentials:verify` reports when the session expires,
   and fails once it has.
@@ -176,7 +177,7 @@ The fetched artifacts checked against a recorded digest:
   republished version changes what installs.
 - **Publishers are trusted at the pinned version.** A malicious release that
   carries no known vulnerability passes every check here.
-- **Two charts come from sibling checkouts.** Druid's chart is read from the
+- **Some charts come from sibling checkouts.** Druid's chart is read from the
   eks-gitops checkout beside kx, and the operator's from the eks-agent-platform
   checkout. Each installs as that checkout stands.
 - **Only CRITICAL fails the scan.** Severities below it do not fail the
