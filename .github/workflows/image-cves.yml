@@ -1,56 +1,24 @@
 name: image cves
-# Scans the images kx's pinned charts resolve to, and fails on CRITICAL.
+# Scans the images kx's pinned charts resolve to, and fails on a CRITICAL no
+# exception covers. kx's pins are its own, so no other repository vouches for
+# what they resolve to. Scheduled rather than in ci.yml, which holds the half
+# that is a fact about the commit: every image reference immutable
+# (ADR 0011). Runtime scanning in the cluster is the trivy-operator addon's.
 #
-# kx pins its own chart versions in its own stack/*/*/install.sh and records
-# them in its own stack/chart-provenance.json. Those pins are not derived from
-# the catalog and can diverge from it, so no other repository can vouch for what
-# they resolve to. `task up` pulls exactly these images into whichever
-# environment runs it, which makes them a surface this repository owns once per
-# adopter rather than once.
-#
-# Deliberately not part of ci.yml, for the reason chart-provenance and
-# mirror-freshness give: whether a vulnerability was published against a pinned
-# image overnight has a different answer every day and is not something a pull
-# request caused. Asking it on the blocking path reddens changes that are not at
-# fault. The half that IS a fact about the commit — whether every image
-# reference is immutable, and every hand-pinned tag on its chart's release —
-# runs there instead.
-#
-# In-cluster runtime scanning belongs to the trivy-operator addon and stays
-# there. This is the other half: the images a pin resolves to, checked where the
-# pin can actually be changed.
-#
-# A run ends in one of three states, each with its own exit status, and the job
-# summary names it, so a red run says which one it is before anyone opens the
-# log:
-#
-#   clean          Every image scanned; every CRITICAL is covered by an
-#                  unexpired exception in stack/image-cve-exceptions.json.
-#   findings       A CRITICAL nothing covers, or an exception that expired or
-#                  matches nothing the scan reports. Read what upstream has
-#                  published. Where the image publisher has rebuilt on a
-#                  patched base, move the chart pin — noting that moving ahead
-#                  of the catalog is a divergence mirror-check will report and
-#                  that stack/upstream.json is where it gets declared. Where
-#                  they have not, record a time-boxed exception with the reason.
-#   could not run  The scanner or a registry could not answer for an image.
-#                  That is about this run, not about the image, and it is never
-#                  folded into the findings.
-#
-# A red run opens one tracking issue, or comments on it when it is already open,
-# with the state and the scan's own report. A scheduled run has no pull request
-# to go red on and nobody reviewing it, so without the issue a red week reaches
-# no one. A person closes the issue once the pin has moved or the finding is
-# excepted; the next red run opens a new one.
+# A run ends clean, with findings, or unable to run, each with its own exit
+# status, and the job summary names which (ADR 0013). On findings, move
+# the chart pin where the publisher has rebuilt on a patched base, declaring
+# the divergence in stack/upstream.json when that moves ahead of the catalog;
+# otherwise record a time-boxed exception in stack/image-cve-exceptions.json.
+# A red run opens one tracking issue, or comments on the open one, and a
+# person closes it once the finding is dealt with.
 
 on:
   schedule:
     - cron: "0 16 * * 1"
   workflow_dispatch:
 
-# One run per ref. A push that lands on top of another leaves the first run
-# grading a tree nobody is proposing any more, and its verdict arrives against
-# the newer commit.
+# One run per ref: a new run supersedes one still running.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -79,13 +47,8 @@ jobs:
 
       - uses: ./.github/actions/helm
 
-      # Downloaded to a file and checked before it is unpacked onto PATH and run,
-      # the same way ci.yml treats kubeconform. Piping the response straight into
-      # tar executes whatever arrives: a truncated transfer, a proxy error page or
-      # a replaced asset all reach the next step as a binary. The digest is the one
-      # the release publishes alongside the archive, so it catches corruption and
-      # substitution of the asset; it does not attest the release itself, which
-      # would need the upstream signing key.
+      # Downloaded to a file and checked against the release's published digest
+      # before it reaches PATH, as the kubeconform action is.
       - name: Install trivy
         env:
           TRIVY_VERSION: v0.76.2
@@ -99,9 +62,8 @@ jobs:
           rm trivy.tar.gz
           trivy --version
 
-      # The scan needs the rendered stack, which is the same input the schema
-      # gate takes: the images a chart actually produces, not the ones a values
-      # file happens to name.
+      # The render, not the values files: the images a chart produces, not the
+      # ones a values file names.
       - name: Render every slice at its pinned version
         env:
           KX_EKS_AGENT_PLATFORM_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
@@ -110,9 +72,8 @@ jobs:
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
           ./scripts/render-check.sh
 
-      # Kept as well as shown: when the run is red, the scan's own report is
-      # what the tracking issue carries. check-images.py names its state in the
-      # step's outputs itself.
+      # Teed to a file, which the tracking issue carries when the run is red.
+      # check-images.py writes its state to the step's outputs.
       - name: Scan every image the pinned charts resolve to
         id: scan
         env:
@@ -122,10 +83,9 @@ jobs:
           set -o pipefail
           python3 scripts/check-images.py --cves "$RENDER_DIR" 2>&1 | tee "$REPORT"
 
-      # One open issue carries every red run. Found by its exact title among the
-      # open issues, so a closed one is left closed and the next red run starts
-      # a new one. A run that failed before the scan reported a state says so,
-      # rather than inventing one.
+      # One open issue carries every red run, found by its exact title, so a
+      # closed one stays closed. A run that failed before the scan named a state
+      # says so rather than inventing one.
       - name: Open or update the tracking issue
         if: failure()
         env:

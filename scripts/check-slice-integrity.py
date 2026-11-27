@@ -201,8 +201,8 @@ MINIMUM_EXAMINED = {
     # Sized to the corpus, not to the finding: every tracked shell script, which
     # the run prints as its denominator, under a floor only a collapse can breach.
     "no script hands a secret to a command on argv": 30,
-    # Three files both fetch and consume. Two is a floor a rename cannot pass
-    # through quietly while leaving the class unexamined.
+    # Every file that both fetches and consumes, which the run prints as its
+    # denominator, under a floor a rename cannot pass through quietly.
     "every fetched artifact is verified before it is used": 2,
     # Every tracked Python file, the gates and the helpers installers run, which
     # the run prints as its denominator.
@@ -1014,13 +1014,9 @@ def markdown_paths_resolve(root: pathlib.Path = ROOT) -> list[str]:
                     check(ref, doc, n, root)
 
     EXAMINED["every path named in markdown resolves"] = examined
-    # Printing the denominator is not gating on it. Markdown that names no path
-    # at all is a tree this rule cannot speak about, and saying "every path
-    # resolves" over nothing is the vacuous pass the whole suite exists to
-    # refuse. The earlier floor counted markdown FILES, which is not the
-    # quantity examined: this tree has three of them and, under the link-only
-    # rule it replaced, zero paths — so it reported success having checked
-    # nothing.
+    # Markdown that names no path is a tree this rule cannot speak about, so a
+    # clean verdict over it is refused. The quantity is paths examined, not
+    # markdown files.
     if not problems and examined == 0:
         return ["markdown is present but names no repo-relative path — refusing to report "
                 "every path resolved over an empty set."]
@@ -1241,15 +1237,10 @@ def require_git(root: pathlib.Path) -> str | None:
 def tracked_shell_scripts(root: pathlib.Path) -> list[pathlib.Path]:
     """The shell scripts THIS repository owns.
 
-    `git ls-files`, because a bare `**/*.sh` walk grades whatever else happens to
-    be in the working directory. In the render job that is a sibling repository
-    checked out into the workspace to render one slice against — so the gate
-    examined 47 files where the tree has 43, reported a real bash-4 construct in
-    somebody else's installer, and failed this repository's build for it.
-
-    A gate that grades a neighbour is wrong even when its finding is right: the
-    seat that can fix it is not the one being stopped. A fixture tree is a git
-    repository for the same reason, so this reads it the same way (see _tree).
+    `git ls-files`, because a bare `**/*.sh` walk grades whatever else is in the
+    working directory, such as the sibling repository the render job checks out,
+    and would fail this repository's build for another's file. A fixture tree is
+    a git repository for the same reason, so this reads it the same way.
     """
     return tracked_files(root, "*.sh")
 
@@ -1264,13 +1255,8 @@ def tracked_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
 def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
     """No tracked shell script uses a construct bash 3.2 lacks.
 
-    This class was described in prose in two files and enforced in none, and a
-    second instance shipped anyway — into a teardown script whose sibling, in
-    the same directory and the same change, carries the comment explaining why
-    the construct cannot be used. That teardown aborted before its first delete
-    on a stock mac, stranding the credential it exists to remove.
-
-    A comment naming a defect class is a memorial, not a control.
+    macOS ships bash 3.2, and a construct it lacks aborts the script there, a
+    teardown included, before it has removed what it exists to remove.
     """
     problems = []
     scripts = tracked_shell_scripts(root)

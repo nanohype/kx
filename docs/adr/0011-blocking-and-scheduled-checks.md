@@ -44,6 +44,9 @@ check that is often red for no fault of the change is soon ignored.
 
 - A red scheduled run is a task to pick up, not a broken build. Each workflow
   states what its red run means and what to do about it.
+- Where `ci.yml` reads another repository, it reads it at the ref
+  `stack/upstream.json` records, never at its default branch, so a merge there
+  cannot redden a pull request here.
 - A schedule-only job cannot live in `ci.yml`: the merge gate refuses a job it
   does not watch, and counts a skipped dependency as a failure.
 - The image scan's red run opens one tracking issue, or comments on it when it

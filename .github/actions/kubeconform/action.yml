@@ -3,24 +3,13 @@ description: >-
   Install the kubeconform release the schema gate validates with, pinned to one
   version and checked against its published digest before it reaches PATH.
 
-# One place for the version, because two jobs run the binary: the render job
-# validates every rendered resource with it, and the test job runs the schema
-# gate's self-test, which drives the same binary. Two copies of the pin would be
-# two digests to move on every bump, and a test job grading a different
-# validator from the one the render job uses.
+# One place for the version, so every job that runs kubeconform grades with the
+# same validator.
 #
-# Downloaded to a file and checked before it is unpacked onto PATH and run.
-# Piping the response straight into tar executes whatever arrives: a truncated
-# transfer, a proxy error page, or a replaced asset all reach the next step as a
-# binary. The digest is the one the release publishes alongside the archive, so
-# it catches corruption and substitution of the asset; it does not attest the
-# release itself, which would need the upstream signing key.
-#
-# --retry-all-errors alongside --retry, because the other two do not cover the
-# failure this download actually has. --retry covers transient HTTP and a
-# timeout; --retry-connrefused adds a refused connection. A reset partway
-# through the transfer is in neither set, so the first one ends the download —
-# on the blocking path, over a fetch no change here can affect.
+# Downloaded to a file and checked against the release's published digest before
+# it reaches PATH. --retry-all-errors as well: a reset partway through the
+# transfer is in neither --retry's set nor --retry-connrefused's, and would end
+# the download.
 runs:
   using: composite
   steps:

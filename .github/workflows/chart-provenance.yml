@@ -1,16 +1,7 @@
 name: chart provenance
-# Asks whether the charts this stack pins are still the charts they were pinned
-# for, upstream, right now.
-#
-# Separate from ci.yml for the same reason mirror freshness is. ci.yml checks
-# that every pin has a record, which is a fact about the commit under test.
-# Whether a maintainer deprecated a chart, or handed it to another organisation,
-# has a different answer every day and is not something a pull request caused.
-# Asking it on the blocking path reddens changes that are not at fault.
-#
-# It is also structurally impossible to put here: the merge gate refuses a
-# workflow containing a job it does not watch, and counts a skipped dependency
-# as a failure, so a schedule-only job cannot live in ci.yml.
+# Asks whether each chart this stack pins is still the chart it was pinned for,
+# upstream, now. Scheduled rather than in ci.yml, because the answer changes
+# without this repository changing (ADR 0011).
 #
 # A red run here means: read the upstream notes for whatever it names, decide
 # whether the chart is still the one you want, then either migrate the pin or
@@ -21,9 +12,7 @@ on:
     - cron: "0 14 * * 1"
   workflow_dispatch:
 
-# One run per ref. A push that lands on top of another leaves the first run
-# grading a tree nobody is proposing any more, and its verdict arrives against
-# the newer commit.
+# One run per ref: a new run supersedes one still running.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -44,11 +33,8 @@ jobs:
       - name: Install Helm
         uses: ./.github/actions/helm
 
-      # Fails on a `deprecated: true`, and on a chart whose description no longer
-      # matches its record. The second is the one worth having: a chart can be
-      # re-scoped to a different product, or forked away to a different
-      # maintainer, without anyone setting the deprecated flag — and then the pin
-      # keeps resolving while the thing behind it is no longer the same software.
+      # Fails on `deprecated: true`, and on a description that no longer matches
+      # its record: a chart can change hands or products with the flag unset.
       - name: Compare every pinned chart against its record
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
