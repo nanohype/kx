@@ -22,8 +22,9 @@ Every host port kx publishes binds to 127.0.0.1:
   `listenAddress: "127.0.0.1"`;
 - `cluster/registry.sh` publishes the registry on `127.0.0.1:5001`.
 
-`scripts/check-slice-integrity.py` fails a kind mapping, or a port a tracked
-script publishes with `docker run`, that does not bind loopback.
+`scripts/check-slice-integrity.py` fails a kind mapping, or a port a script
+or Taskfile publishes with `docker run` or `docker create`, that does not bind
+loopback.
 
 A service with a default credential and no host port, such as the data slice's
 object store or Druid, is reached in-cluster or through `kubectl port-forward`,

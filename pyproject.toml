@@ -54,8 +54,8 @@ minimum-branches = 60
 # past it until it is raised, so a gain cannot be given back without a diff that
 # lowers the number.
 ratchet = true
-lines = 84
-branches = 79
+lines = 85
+branches = 80
 
 [tool.kx.coverage-floors.library]
 # What the gates share, under scripts/gatelib/. Every gate's verdict passes

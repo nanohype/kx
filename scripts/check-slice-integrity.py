@@ -216,7 +216,7 @@ MINIMUM_EXAMINED = {
     # Unconditional: both ports, or the check did not look.
     "localhost:80 and :443 reach Cilium's Ingress": 2,
     # The Ingress ports at least, which the invariant above requires, and every
-    # port a script publishes.
+    # port a script or Taskfile publishes.
     "every port kx publishes binds to loopback": 2,
     # Counts every outbound command and subprocess call, which the run prints;
     # set well under it.
@@ -1255,6 +1255,18 @@ def tracked_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
     return sorted(root / f for f in out.stdout.split("\0") if f)
 
 
+def taskfile_commands(root: pathlib.Path) -> Iterator[tuple[pathlib.Path, str, str]]:
+    """(Taskfile, task, command) for each command a tracked Taskfile's tasks run,
+    read from the YAML, so a command is the text task hands its shell."""
+    for taskfile in tracked_files(root, "*Taskfile.yaml"):
+        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
+        for name, task in tasks.items():
+            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
+                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+                if isinstance(text, str):
+                    yield taskfile, name, text
+
+
 def shell_runs_on_bash_3(root: pathlib.Path = ROOT) -> list[str]:
     """No tracked shell script uses a construct bash 3.2 lacks.
 
@@ -1773,30 +1785,24 @@ def scripts_bind_their_kubeconfig(root: pathlib.Path = ROOT) -> list[str]:
                             f"the shell points at.")
     if not binding.is_file() and examined:
         problems.append(f"{KUBECONFIG_BINDING} does not exist, so no script can be bound by it.")
-    for taskfile in tracked_files(root, "*Taskfile.yaml"):
-        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
-        for name, task in tasks.items():
-            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
-                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
-                if not isinstance(text, str):
-                    continue
-                reaches = cluster_commands(text)
-                if not reaches:
-                    continue
-                examined += 1
-                exported = next((n for n, line in enumerate(text.splitlines(), 1)
-                                 if line.strip() == KUBECONFIG_EXPORT), None)
-                for n, at, folded in reaches:
-                    if exported is not None and exported < n:
-                        continue
-                    segment = COMMAND_SEP.split(folded[:at])[-1].split()
-                    if KUBECONFIG_PREFIX not in segment:
-                        problems.append(
-                            f"{taskfile.relative_to(root)} task `{name}`: "
-                            f"`{folded.strip()[:70]}` reaches a cluster without "
-                            f"{KUBECONFIG_PREFIX}, so it acts on whatever cluster the shell "
-                            f"points at."
-                        )
+    for taskfile, name, text in taskfile_commands(root):
+        reaches = cluster_commands(text)
+        if not reaches:
+            continue
+        examined += 1
+        exported = next((n for n, line in enumerate(text.splitlines(), 1)
+                         if line.strip() == KUBECONFIG_EXPORT), None)
+        for n, at, folded in reaches:
+            if exported is not None and exported < n:
+                continue
+            segment = COMMAND_SEP.split(folded[:at])[-1].split()
+            if KUBECONFIG_PREFIX not in segment:
+                problems.append(
+                    f"{taskfile.relative_to(root)} task `{name}`: "
+                    f"`{folded.strip()[:70]}` reaches a cluster without "
+                    f"{KUBECONFIG_PREFIX}, so it acts on whatever cluster the shell "
+                    f"points at."
+                )
     EXAMINED["nothing kx runs can reach a cluster other than kind-kx"] = examined
     if not examined:
         return ["found no script or Taskfile command that reaches a cluster — refusing to report "
@@ -2041,16 +2047,11 @@ def external_calls_are_bounded(root: pathlib.Path = ROOT) -> list[str]:
         found, unbounded = unbounded_in(path.read_text())
         examined += found
         problems.extend(f"{path.relative_to(root)}:{n}: {why}." for n, why in unbounded)
-    for taskfile in tracked_files(root, "*Taskfile.yaml"):
-        tasks = (yaml.safe_load(taskfile.read_text()) or {}).get("tasks") or {}
-        for name, task in tasks.items():
-            for cmd in (task or {}).get("cmds") or [] if isinstance(task, dict) else []:
-                text = cmd.get("cmd") if isinstance(cmd, dict) else cmd
-                if isinstance(text, str):
-                    found, unbounded = unbounded_in(text)
-                    examined += found
-                    problems.extend(f"{taskfile.relative_to(root)} task `{name}`: {why}."
-                                    for _, why in unbounded)
+    for taskfile, name, text in taskfile_commands(root):
+        found, unbounded = unbounded_in(text)
+        examined += found
+        problems.extend(f"{taskfile.relative_to(root)} task `{name}`: {why}."
+                        for _, why in unbounded)
     for path in tracked_files(root, "*.py"):
         try:
             tree = ast.parse(path.read_text(), str(path))
@@ -2145,42 +2146,155 @@ def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
 LOOPBACK = "127.0.0.1"
 
 
-# `docker run` (or `docker container run`) as a command word.
-DOCKER_RUN = re.compile(r"(?<![\w./-])docker\s+(?:container\s+)?run(?![\w-])")
+# docker as a word, which command_context then decides is a command or not.
+DOCKER = re.compile(r"(?<![\w./-])docker(?![\w.:-])")
 
-# Tokens that end one command and begin another on a logical line.
-COMMAND_ENDS = {";", "&&", "||", "|", "&", "(", ")"}
+# The docker commands that publish a container's ports, each mapped to its
+# one-letter flags that take no value, -P among them; and the one-letter flags
+# both take that take a value, -p among them. As `docker run --help` and
+# `docker create --help` list them.
+DOCKER_PUBLISHERS = {"run": set("diPqt"), "create": set("iPqt")}
+DOCKER_VALUED_LETTERS = set("acehlmpuvw")
+
+# docker's own options, which stand before its command: the long ones that
+# take a value, then the one-letter ones that take a value and those that take
+# none. As `docker --help` lists them.
+DOCKER_GLOBAL_VALUED = {"config", "context", "host", "log-level", "tlscacert", "tlscert", "tlskey"}
+DOCKER_GLOBAL_VALUED_LETTERS = set("cHl")
+DOCKER_GLOBAL_UNVALUED_LETTERS = set("Dv")
+
+# The spellings of false that turn off a flag taking no value after `=`, as
+# Go's strconv.ParseBool reads them: `-P=false` publishes nothing.
+FALSE = {"0", "f", "F", "false", "FALSE", "False"}
 
 
-def docker_publishes(line: str) -> list[str | None]:
-    """The ports each `docker run` on a logical line publishes, in order.
+def command_end(code: str) -> int:
+    """Where the command at the start of `code`, a code view, ends.
 
-    A `-p`, `--publish` or `--publish=` value is returned as written, and
-    `-P`/`--publish-all`, which publishes every exposed port on every
-    interface, as None. Raises ValueError for a line shlex cannot tokenize.
+    At its first separator outside the parentheses it opens itself, so a `$(…)`
+    in one of its arguments does not end it and the `)` that closes the
+    substitution it runs in does. The `&` of a redirection, as in `2>&1` or
+    `&>`, separates nothing.
     """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    tokens = list(lexer)
-    found: list[str | None] = []
-    running = False
-    for j, tok in enumerate(tokens):
-        if tok in COMMAND_ENDS:
-            running = False
-        elif tok == "run" and j and (tokens[j - 1] == "docker" or (
-                tokens[j - 1] == "container" and j > 1 and tokens[j - 2] == "docker")):
-            running = True
-        elif not running:
-            continue
-        elif tok in ("-p", "--publish") and j + 1 < len(tokens):
-            found.append(tokens[j + 1])
-        elif tok.startswith("--publish="):
-            found.append(tok.split("=", 1)[1])
-        elif tok in ("-P", "--publish-all"):
-            found.append(None)
-        elif tok.startswith("-p") and len(tok) > 2:
-            found.append(tok[2:])
+    depth = 0
+    for s in COMMAND_SEP.finditer(code):
+        sep = s.group()
+        if sep in ("$(", "("):
+            depth += 1
+        elif sep == ")" and depth:
+            depth -= 1
+        elif not depth and not (sep == "&" and ">" in code[max(s.start() - 1, 0):s.end() + 1]):
+            return s.start()
+    return len(code)
+
+
+def docker_letters(word: str, valued: set[str], unvalued: set[str],
+                   following: str | None) -> tuple[list[tuple[str, str | None]], int]:
+    """A cluster of one-letter flags as docker's flag parser reads it: each
+    (letter, value) it sets, and the number of words it occupies.
+
+    A letter in `unvalued` is a flag of its own, with no value unless an `=`
+    follows it, which hands it the rest of the cluster. The first letter in
+    `valued` takes the rest of the cluster, after any `=`, or else the next word,
+    `following`. A letter in neither ends the reading, as docker refuses the
+    command.
+    """
+    flags: list[tuple[str, str | None]] = []
+    for k, letter in enumerate(word[1:], 2):
+        rest = word[k:]
+        given = rest[1:] if rest.startswith("=") else None
+        if letter in valued:
+            flags.append((letter, given if given is not None else rest or following))
+            return flags, 1 if rest else 2
+        if letter not in unvalued:
+            break
+        flags.append((letter, given))
+        if given is not None:
+            break
+    return flags, 1
+
+
+def docker_publishes(segment: str) -> list[tuple[str, str | None]]:
+    """(command, port) for each port the docker command `segment` publishes.
+
+    `segment` is the command's text after the word docker, to the end of the
+    command. A port is -p's value as written, or None for -P, which publishes
+    every exposed port on every interface. Read as docker reads its flags: its
+    own options, then `container` if it is there, then the command, run or
+    create; then each `--publish VALUE` or `--publish=VALUE`, each `p` in a
+    cluster of one-letter flags (`-p VALUE`, `-pVALUE`, `-dp VALUE`,
+    `-dp=VALUE`), and each `-P` or `--publish-all` that `=false` does not turn
+    off, up to a `--`. Every word to the end of the command is read, the
+    container's own arguments included, which can only report a publish that is
+    not one. Raises ValueError for a segment shlex cannot tokenize.
+    """
+    lex = shlex.shlex(segment, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    words = list(lex)
+    i = 0
+    while i < len(words) and words[i].startswith("-"):
+        following = words[i + 1] if i + 1 < len(words) else None
+        if words[i].startswith("--"):
+            name, eq, _ = words[i][2:].partition("=")
+            i += 2 if name in DOCKER_GLOBAL_VALUED and not eq else 1
+        else:
+            i += docker_letters(words[i], DOCKER_GLOBAL_VALUED_LETTERS,
+                                DOCKER_GLOBAL_UNVALUED_LETTERS, following)[1]
+    if words[i:i + 1] == ["container"]:
+        i += 1
+    verb = words[i] if i < len(words) else ""
+    found: list[tuple[str, str | None]] = []
+    if verb not in DOCKER_PUBLISHERS:
+        return found
+    i += 1
+    while i < len(words) and words[i] != "--":
+        word, width = words[i], 1
+        following = words[i + 1] if i + 1 < len(words) else None
+        if word.startswith("--"):
+            name, eq, value = word[2:].partition("=")
+            if name == "publish" and not eq:
+                value, width = following, 2
+            if name == "publish" and value:
+                found.append((verb, value))
+            elif name == "publish-all" and value not in FALSE:
+                found.append((verb, None))
+        elif word.startswith("-"):
+            flags, width = docker_letters(word, DOCKER_VALUED_LETTERS, DOCKER_PUBLISHERS[verb],
+                                          following)
+            for letter, value in flags:
+                if letter == "p" and value:
+                    found.append((verb, value))
+                elif letter == "P" and value not in FALSE:
+                    found.append((verb, None))
+        i += width
     return found
+
+
+def docker_publishes_in(text: str) -> tuple[int, list[tuple[int, str]]]:
+    """(ports docker publishes, [(line, why)] for each that does not bind
+    loopback) in shell `text`."""
+    found, problems = 0, []
+    for n, cmd in logical_lines(strip_comments(text)):
+        code = code_view(cmd)
+        for m in DOCKER.finditer(code):
+            if not in_command_position(code[:m.start()], cmd[:m.start()]):
+                continue
+            end = m.end() + command_end(code[m.end():])
+            try:
+                ports = docker_publishes(cmd[m.end():end])
+            except ValueError:
+                problems.append((n, "runs docker in a form this check cannot tokenize, so the "
+                                    "ports it publishes cannot be read"))
+                continue
+            found += len(ports)
+            for verb, port in ports:
+                if port is None:
+                    problems.append((n, f"publishes every exposed port (-P) with docker {verb}, "
+                                        f"on every interface, not {LOOPBACK}"))
+                elif not port.startswith(LOOPBACK + ":"):
+                    problems.append((n, f"publishes {port} with docker {verb}, which binds an "
+                                        f"address other than {LOOPBACK}"))
+    return found, problems
 
 
 def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
@@ -2191,8 +2305,8 @@ def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
     other machine can reach it (docs/adr/0005-host-ports-bind-to-loopback.md).
     kind binds a mapping that names no listenAddress to every interface, and
     docker binds a published port that names no address the same way, so both
-    are read: every kind mapping, and every port a tracked script publishes with
-    `docker run`.
+    are read: every kind mapping, and every port a tracked script or Taskfile
+    command publishes with `docker run` or `docker create`.
     """
     label = "every port kx publishes binds to loopback"
     EXAMINED[label] = 0
@@ -2217,24 +2331,13 @@ def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
                             f"{node.get('role', '?')} node on {on}, not {LOOPBACK}.")
     published = 0
     for script in tracked_shell_scripts(root):
-        rel = script.relative_to(root)
-        for n, line in logical_lines(strip_comments(script.read_text())):
-            if not DOCKER_RUN.search(line):
-                continue
-            try:
-                ports = docker_publishes(line)
-            except ValueError:
-                problems.append(f"{rel}:{n} runs docker in a form this check cannot tokenize, "
-                                f"so the ports it publishes cannot be read.")
-                continue
-            for value in ports:
-                published += 1
-                if value is None:
-                    problems.append(f"{rel}:{n} publishes every exposed port (-P) with docker "
-                                    f"run, on every interface, not {LOOPBACK}.")
-                elif not value.startswith(LOOPBACK + ":"):
-                    problems.append(f"{rel}:{n} publishes {value} with docker run, which binds "
-                                    f"an address other than {LOOPBACK}.")
+        found, unbound = docker_publishes_in(script.read_text())
+        published += found
+        problems.extend(f"{script.relative_to(root)}:{n} {why}." for n, why in unbound)
+    for taskfile, name, text in taskfile_commands(root):
+        found, unbound = docker_publishes_in(text)
+        published += found
+        problems.extend(f"{taskfile.relative_to(root)} task `{name}` {why}." for _, why in unbound)
     EXAMINED[label] = len(mappings) + published
     return problems
 
@@ -2953,16 +3056,49 @@ CONTROLS["every port kx publishes binds to loopback"] = [
         "publishes 0.0.0.0:5001:5000",
     ),
     (
-        "a container that publishes every exposed port",
-        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker container run -d -P registry:2\n"},
+        "a publish in a cluster of one-letter flags, beside a p that is another's value",
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker run -dp 5001:5000 registry:2\n"},
         {KIND_CONFIG: BOUND,
-         "cluster/r.sh": "docker container run -d -p 127.0.0.1:5001:5000 registry:2\n"},
-        "publishes every exposed port (-P)",
+         "cluster/r.sh": "docker run -dp=127.0.0.1:5001:5000 -ep registry:2\n"},
+        "publishes 5001:5000",
     ),
     (
-        "a docker run in a comment publishes nothing",
+        "a created container that publishes every exposed port",
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker container create -tP registry:2\n"},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "docker container create -tP=false --publish-all=0 registry:2\n"},
+        "publishes every exposed port (-P) with docker create",
+    ),
+    (
+        "a publish in a quoted substitution, past a substitution and a redirection of its own",
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": 'ID="$(docker run -d -e "T=$(date)" 2>&1 -p 5001:5000 registry:2)"\n'},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": 'ID="$(docker run -d -e "T=$(date)" 2>&1 -p 127.0.0.1:5001:5000 '
+                         'registry:2)"\n'},
+        "publishes 5001:5000",
+    ),
+    (
+        "a Taskfile command that publishes, cited by its task",
+        {KIND_CONFIG: BOUND, "Taskfile.yaml": _taskfile("docker run -d -p 5001:5000 registry:2")},
+        {KIND_CONFIG: BOUND,
+         "Taskfile.yaml": _taskfile("docker run -d -p 127.0.0.1:5001:5000 registry:2")},
+        "Taskfile.yaml task `d` publishes 5001:5000 with docker run",
+    ),
+    (
+        "docker's own options before its command",
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "docker --context default -D run -p 5001:5000 registry:2\n"},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "docker --context default -D run -p 127.0.0.1:5001:5000 registry:2\n"},
+        "publishes 5001:5000",
+    ),
+    (
+        "a docker run in a comment or an argument publishes nothing",
         {KIND_CONFIG: BOUND, "cluster/r.sh": "docker run -d -p 5001:5000 registry:2\n"},
-        {KIND_CONFIG: BOUND, "cluster/r.sh": "# docker run -d -p 5001:5000 registry:2\n"},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "# docker run -d -p 5001:5000 registry:2\n"
+                         "echo docker run -p 5001:5000\n"},
     ),
     (
         "a docker run this check cannot tokenize",
