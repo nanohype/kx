@@ -39,10 +39,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # The operator slice renders the sibling eks-agent-platform chart, read at
+      # the ref stack/upstream.json records, so the scan covers the images kx
+      # pins. Whether that branch has moved on is sibling-freshness.yml's question.
+      - name: Read the sibling ref
+        id: sibling
+        run: |
+          ref="$(jq -r '.siblings["eks-agent-platform"].ref' stack/upstream.json)"
+          # Asserted before it becomes an output: actions/checkout reads an empty
+          # ref as the default branch.
+          if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL  siblings.eks-agent-platform.ref read as '$ref', which is not a commit sha."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: nanohype/eks-agent-platform
           path: .sibling/eks-agent-platform
+          ref: ${{ steps.sibling.outputs.ref }}
           persist-credentials: false
 
       - uses: ./.github/actions/helm
