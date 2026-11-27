@@ -50,7 +50,7 @@ jobs:
         env:
           SIBLING_DIR: ${{ github.workspace }}/.sibling/eks-agent-platform
         run: |
-          ref="$(python3 -c 'import json;print(json.load(open("stack/upstream.json"))["siblings"]["eks-agent-platform"]["ref"])')"
+          ref="$(jq -r '.siblings["eks-agent-platform"].ref' stack/upstream.json)"
           # Asserted before use, as ci.yml asserts the same field.
           if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
             echo "FAIL  siblings.eks-agent-platform.ref read as '$ref', which is not a commit sha."
