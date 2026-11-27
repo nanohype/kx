@@ -41,7 +41,8 @@ jobs:
 
       # The operator slice renders the sibling eks-agent-platform chart, read at
       # the ref stack/upstream.json records, so the scan covers the images kx
-      # pins. Whether that branch has moved on is sibling-freshness.yml's question.
+      # pins. Whether the default branch has moved past it is
+      # sibling-freshness.yml's question.
       - name: Read the sibling ref
         id: sibling
         run: |
