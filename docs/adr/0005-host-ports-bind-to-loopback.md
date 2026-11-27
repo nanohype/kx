@@ -22,7 +22,7 @@ Every host port kx publishes binds to 127.0.0.1:
   `listenAddress: "127.0.0.1"`;
 - `cluster/registry.sh` publishes the registry on `127.0.0.1:5001`.
 
-The lint job's host-ports step fails a kind mapping that does not bind
+`scripts/check-slice-integrity.py` fails a kind mapping that does not bind
 loopback.
 
 A service with a default credential and no host port, such as the data slice's
