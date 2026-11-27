@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # cilium — CNI, kube-proxy replacement, hubble observability, and the cluster's
 # Ingress and Gateway API controller.
+# On EKS, aws-load-balancer-controller provisions an ALB for each Ingress. kind
+# has no load balancer to provision, so here this chart, already the CNI on both
+# sides, serves Ingress and the Gateway API itself; values.yaml says how.
 # Must be installed first or nodes stay NotReady (kind default CNI is disabled in cluster/kind-config.yaml).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

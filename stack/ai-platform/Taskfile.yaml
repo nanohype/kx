@@ -69,8 +69,9 @@ tasks:
     desc: Uninstall ai-platform slice
     cmds:
       # Credentials first, and unconditionally: this task is the slice's only
-      # teardown entry point, and the two cluster-scoped objects the optional
-      # credentials task creates survive every namespace delete below.
+      # teardown entry point, and the ClusterRole, GeneratingPolicy and
+      # MutatingPolicy the optional credentials task creates are cluster-scoped,
+      # so no namespace delete below removes them.
       - task: 'credentials:disable'
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' helm uninstall -n eks-agent-platform eks-agent-platform-operator || true
       - KUBECONFIG='{{.ROOT_DIR}}/.kube/config' kubectl --request-timeout=60s --timeout=5m delete ns eks-agent-platform --ignore-not-found

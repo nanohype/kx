@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # grafana-operator — manage Grafana dashboards/datasources/folders via CRDs
+# The same chart as eks-gitops, which points it at Amazon Managed Grafana. Here
+# it reconciles into whatever instance a project's Grafana CR names, and this
+# slice installs none (values.yaml).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../cluster/kubeconfig.sh

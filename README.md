@@ -1,6 +1,6 @@
 # kx
 
-A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [eks-gitops](https://github.com/nanohype/eks-gitops). The chart shapes match production EKS so workloads developed against kx deploy unchanged.
+A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [eks-gitops](https://github.com/nanohype/eks-gitops), at the chart versions production EKS pins, so a workload meets the same chart shapes here that it meets in production.
 
 **AI clients / agents start here:** [`AGENTS.md`](AGENTS.md). For the stack-wide view, see the [Platform Reference](https://github.com/nanohype/nanohype/blob/main/docs/platform-reference.md).
 
@@ -87,10 +87,10 @@ Taskfile.yaml
 node's containerd at it, so `docker push localhost:5001/foo:tag` is pullable
 from inside the cluster without a remote registry. `task down` removes it.
 
-Each addon directory contains an `install.sh` (an explicit `helm upgrade --install`, chart version pinned,
-with an explicit `--timeout` and a deadline past it that bounds the chart fetch, and a bound on every other call that leaves the machine) and, for the charts that need one, a `values.yaml` of deltas from chart defaults.
-A few carry more or fewer: CRD-only installers take chart defaults whole and have no values, and `druid` and
-`bedrock-credentials` ship the extra manifests their install applies and the Python helpers it runs.
+Each addon directory holds an `install.sh` and, where the chart's defaults need changing, a `values.yaml` of the deltas.
+An `install.sh` installs a published chart at a pinned version, or a sibling repository's chart from its checkout,
+and bounds every call that leaves the machine. Anything else in the directory is applied or run by that
+`install.sh`, or, for an `uninstall.sh`, by the slice's disable.
 
 ## When something breaks
 

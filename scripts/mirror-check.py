@@ -6,10 +6,10 @@
     python3 scripts/mirror-check.py freshness   # has upstream moved past the pin? (scheduled)
 
 kx is the local kind workspace for the eks-gitops catalog. Nothing else holds
-the two sides equal: eks-gitops has Renovate watching every chart pin and kx
-has none, so one side advances on its own. A mirror where only one side can
-advance drifts by construction, silently, in the direction of the side that
-moves.
+the two sides equal: Renovate watches the chart pins on both sides, and each
+side merges its own updates when it merges them, so either can advance without
+the other. A mirror whose sides advance independently drifts by construction,
+silently, in the direction of whichever side moved.
 
 The comparison runs in both directions, because they catch different failures:
 

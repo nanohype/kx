@@ -4,7 +4,7 @@ You're an AI client (or the author of one) about to run a chart locally before d
 
 ## What this repo gives you
 
-A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [`eks-gitops`](https://github.com/nanohype/eks-gitops). Chart shapes match production EKS, so workloads developed against kx deploy unchanged to a real cluster.
+A local Kubernetes (kind) cluster preloaded with the Helm chart catalog from [`eks-gitops`](https://github.com/nanohype/eks-gitops), at the chart versions production EKS pins. A workload that renders and schedules here does so against the chart shapes it meets in production. What it needs from AWS is exercised nowhere here, as [Contract surface](#contract-surface) explains.
 
 Use it to:
 

@@ -203,9 +203,7 @@ jobs:
       - uses: ./.github/actions/kubeconform
 
       # The floor first, so every gate below, render-check.sh among them, has
-      # been seen to reject before its verdict is read (ADR 0014). In this
-      # job because the floor runs every gate, and the schema gate's controls
-      # need kubeconform.
+      # been seen to reject before its verdict is read (ADR 0014).
       - name: Slice invariants hold, and every gate still rejects
         run: |
           pip install --quiet --timeout 60 --retries 3 --require-hashes -r .github/gate-requirements.txt
