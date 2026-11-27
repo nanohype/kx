@@ -31,7 +31,8 @@ copies drifted apart:
   directories it writes. A gate imports it by name, because python3 puts a
   script's own directory first on `sys.path`.
 - The library is not a gate. `tests/gates/test_gatelib.py` holds each of its
-  functions to its contract, and its coverage counts with the gates'.
+  functions to its contract, and each of its files is held to every line and
+  branch on its own.
 - A scratch directory is removed when the block that made it ends, however it
   ends.
 - A command that outruns its bound is reported as a run that could not

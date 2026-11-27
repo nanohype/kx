@@ -4,11 +4,12 @@
     python3 -m coverage run -m pytest
     python3 tests/coverage_floors.py
 
-Each table under [tool.kx.coverage-floors] names files by glob and the line
-and branch coverage they are held to: each file on its own when `per-file` is
-true, the files together when it is false. Every file coverage measured falls
-under exactly one floor. A file under none is held to nothing, and a file under
-two is held to whichever a reader looks at, so either fails the run.
+Each table under [tool.kx.coverage-floors] names files by glob, those its
+`include` matches and its optional `exclude` does not, and the line and branch
+coverage they are held to: each file on its own when `per-file` is true, the
+files together when it is false. Every file coverage measured falls under
+exactly one floor. A file under none is held to nothing, and a file under two is
+held to whichever a reader looks at, so either fails the run.
 
 Lines and branches are read apart. coverage.py's own total folds the two into
 one number, where every line and half the branches read as a respectable figure
@@ -58,6 +59,9 @@ def unusable(floors: dict[str, dict]) -> list[str]:
         if not isinstance(include, list) or not include or not all(
                 isinstance(g, str) and g for g in include):
             problems.append(f"the {name} floor names no files to include.")
+        exclude = floor.get("exclude", [])
+        if not isinstance(exclude, list) or not all(isinstance(g, str) and g for g in exclude):
+            problems.append(f"the {name} floor's exclude is {exclude!r}, not a list of globs.")
         if not isinstance(floor.get("per-file"), bool):
             problems.append(f"the {name} floor does not say whether it is per-file.")
         if not isinstance(floor.get("ratchet", False), bool):
@@ -85,11 +89,15 @@ def percent(covered: int, total: int) -> float:
     return 100.0 if total == 0 else 100.0 * covered / total
 
 
+def holds(floor: dict, f: str) -> bool:
+    """Whether `floor` names `f`: an include glob matches it and no exclude glob does."""
+    return (any(fnmatch.fnmatch(f, glob) for glob in floor["include"])
+            and not any(fnmatch.fnmatch(f, glob) for glob in floor.get("exclude", [])))
+
+
 def verdict(files: dict[str, dict], floors: dict[str, dict]) -> tuple[list[str], list[str]]:
     """(the lines to report, the problems) for coverage.py's JSON `files` against `floors`."""
-    owners = {f: sorted(name for name, floor in floors.items()
-                        if any(fnmatch.fnmatch(f, glob) for glob in floor["include"]))
-              for f in files}
+    owners = {f: sorted(name for name, floor in floors.items() if holds(floor, f)) for f in files}
     problems = []
     for f, names in sorted(owners.items()):
         if not names:
