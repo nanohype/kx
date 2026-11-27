@@ -215,8 +215,9 @@ MINIMUM_EXAMINED = {
     "nothing kx runs can reach a cluster other than kind-kx": 70,
     # Unconditional: both ports, or the check did not look.
     "localhost:80 and :443 reach Cilium's Ingress": 2,
-    # The Ingress ports at least, which the invariant above requires.
-    "every port kind publishes binds to loopback": 2,
+    # The Ingress ports at least, which the invariant above requires, and every
+    # port a script publishes.
+    "every port kx publishes binds to loopback": 2,
     # Counts every outbound command and subprocess call, which the run prints;
     # set well under it.
     "every call that leaves this machine is bounded": 200,
@@ -2144,15 +2145,56 @@ def ingress_ports_reach_cilium(root: pathlib.Path = ROOT) -> list[str]:
 LOOPBACK = "127.0.0.1"
 
 
+# `docker run` (or `docker container run`) as a command word.
+DOCKER_RUN = re.compile(r"(?<![\w./-])docker\s+(?:container\s+)?run(?![\w-])")
+
+# Tokens that end one command and begin another on a logical line.
+COMMAND_ENDS = {";", "&&", "||", "|", "&", "(", ")"}
+
+
+def docker_publishes(line: str) -> list[str | None]:
+    """The ports each `docker run` on a logical line publishes, in order.
+
+    A `-p`, `--publish` or `--publish=` value is returned as written, and
+    `-P`/`--publish-all`, which publishes every exposed port on every
+    interface, as None. Raises ValueError for a line shlex cannot tokenize.
+    """
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+    found: list[str | None] = []
+    running = False
+    for j, tok in enumerate(tokens):
+        if tok in COMMAND_ENDS:
+            running = False
+        elif tok == "run" and j and (tokens[j - 1] == "docker" or (
+                tokens[j - 1] == "container" and j > 1 and tokens[j - 2] == "docker")):
+            running = True
+        elif not running:
+            continue
+        elif tok in ("-p", "--publish") and j + 1 < len(tokens):
+            found.append(tokens[j + 1])
+        elif tok.startswith("--publish="):
+            found.append(tok.split("=", 1)[1])
+        elif tok in ("-P", "--publish-all"):
+            found.append(None)
+        elif tok.startswith("-p") and len(tok) > 2:
+            found.append(tok[2:])
+    return found
+
+
 def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
-    """Every port kind publishes on the host binds to loopback.
+    """Every port kx publishes on the host binds to loopback.
 
     What sits behind those ports is configured for one person on one machine,
     with default or generated credentials, which is defensible only while no
     other machine can reach it (docs/adr/0005-host-ports-bind-to-loopback.md).
-    kind binds a mapping that names no listenAddress to every interface.
+    kind binds a mapping that names no listenAddress to every interface, and
+    docker binds a published port that names no address the same way, so both
+    are read: every kind mapping, and every port a tracked script publishes with
+    `docker run`.
     """
-    label = "every port kind publishes binds to loopback"
+    label = "every port kx publishes binds to loopback"
     EXAMINED[label] = 0
     try:
         kind = yaml.safe_load((root / KIND_CONFIG).read_text()) or {}
@@ -2173,7 +2215,27 @@ def host_ports_bind_loopback(root: pathlib.Path = ROOT) -> list[str]:
             on = bound if bound else "every interface, kind's default with no listenAddress"
             problems.append(f"{KIND_CONFIG} publishes host port {m.get('hostPort')} from the "
                             f"{node.get('role', '?')} node on {on}, not {LOOPBACK}.")
-    EXAMINED[label] = len(mappings)
+    published = 0
+    for script in tracked_shell_scripts(root):
+        rel = script.relative_to(root)
+        for n, line in logical_lines(strip_comments(script.read_text())):
+            if not DOCKER_RUN.search(line):
+                continue
+            try:
+                ports = docker_publishes(line)
+            except ValueError:
+                problems.append(f"{rel}:{n} runs docker in a form this check cannot tokenize, "
+                                f"so the ports it publishes cannot be read.")
+                continue
+            for value in ports:
+                published += 1
+                if value is None:
+                    problems.append(f"{rel}:{n} publishes every exposed port (-P) with docker "
+                                    f"run, on every interface, not {LOOPBACK}.")
+                elif not value.startswith(LOOPBACK + ":"):
+                    problems.append(f"{rel}:{n} publishes {value} with docker run, which binds "
+                                    f"an address other than {LOOPBACK}.")
+    EXAMINED[label] = len(mappings) + published
     return problems
 
 
@@ -2196,7 +2258,7 @@ CHECKS = [
     ("no shell script runs Python from a string or stdin", python_runs_from_files),
     ("nothing kx runs can reach a cluster other than kind-kx", scripts_bind_their_kubeconfig),
     ("localhost:80 and :443 reach Cilium's Ingress", ingress_ports_reach_cilium),
-    ("every port kind publishes binds to loopback", host_ports_bind_loopback),
+    ("every port kx publishes binds to loopback", host_ports_bind_loopback),
     ("every call that leaves this machine is bounded", external_calls_are_bounded),
 ]
 
@@ -2842,7 +2904,7 @@ BOUND = ("nodes:\n  - role: control-plane\n    extraPortMappings:\n"
          "      - {containerPort: 80, hostPort: 80, listenAddress: \"127.0.0.1\"}\n"
          "      - {containerPort: 30030, hostPort: 30030, listenAddress: \"127.0.0.1\"}\n")
 
-CONTROLS["every port kind publishes binds to loopback"] = [
+CONTROLS["every port kx publishes binds to loopback"] = [
     (
         "a mapping that names no listenAddress, cited by its port",
         {KIND_CONFIG: BOUND.replace(', hostPort: 30030, listenAddress: "127.0.0.1"',
@@ -2871,6 +2933,42 @@ CONTROLS["every port kind publishes binds to loopback"] = [
         "no kind config at all",
         {"cluster/other.yaml": BOUND},
         {KIND_CONFIG: BOUND},
+    ),
+    (
+        "a script that publishes a container on every interface, cited at its line",
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": 'set -e\ndocker run -d -p "5001:5000" registry:2\n'},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": 'set -e\ndocker run -d -p "127.0.0.1:5001:5000" registry:2\n'},
+        "cluster/r.sh:2 publishes 5001:5000 with docker run",
+    ),
+    (
+        "a publish under deadline, on a continued line, in its = form",
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "deadline 300 docker run -d \\\n  --publish=0.0.0.0:5001:5000 \\\n"
+                         "  registry:2\n"},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "deadline 300 docker run -d \\\n  --publish=127.0.0.1:5001:5000 \\\n"
+                         "  registry:2\n"},
+        "publishes 0.0.0.0:5001:5000",
+    ),
+    (
+        "a container that publishes every exposed port",
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker container run -d -P registry:2\n"},
+        {KIND_CONFIG: BOUND,
+         "cluster/r.sh": "docker container run -d -p 127.0.0.1:5001:5000 registry:2\n"},
+        "publishes every exposed port (-P)",
+    ),
+    (
+        "a docker run in a comment publishes nothing",
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker run -d -p 5001:5000 registry:2\n"},
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "# docker run -d -p 5001:5000 registry:2\n"},
+    ),
+    (
+        "a docker run this check cannot tokenize",
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker run -d -p '5001:5000 registry:2\n"},
+        {KIND_CONFIG: BOUND, "cluster/r.sh": "docker run -d -p '127.0.0.1:5001:5000' registry:2\n"},
+        "cannot tokenize",
     ),
 ]
 

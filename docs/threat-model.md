@@ -69,7 +69,7 @@ and publish nothing. Both are reached in-cluster or through
 
 | | Threat | Bound |
 |---|---|---|
-| Spoofing | Anyone who reaches Grafana signs in as its admin with the default password. Anyone who reaches the registry pushes an image under any name. | Every published port binds 127.0.0.1 ([0005](adr/0005-host-ports-bind-to-loopback.md)), and `scripts/check-slice-integrity.py` fails a kind mapping that does not. |
+| Spoofing | Anyone who reaches Grafana signs in as its admin with the default password. Anyone who reaches the registry pushes an image under any name. | Every published port binds 127.0.0.1 ([0005](adr/0005-host-ports-bind-to-loopback.md)), and `scripts/check-slice-integrity.py` fails a kind mapping, or a port a script publishes, that does not. |
 | Tampering | An image pushed to the registry replaces what a project pulls from `localhost:5001`. | Only the workstation can reach the registry. |
 | Information disclosure | The ArgoCD UI and Grafana serve plain HTTP, so their sessions and passwords cross the wire unencrypted. | That traffic never leaves the workstation's loopback interface. |
 | Elevation of privilege | ArgoCD's admin can create an Application that deploys anything into the cluster. Grafana's admin can change its datasources. | The loopback binding, and ArgoCD's generated password. ArgoCD manages nothing kx installs. |
