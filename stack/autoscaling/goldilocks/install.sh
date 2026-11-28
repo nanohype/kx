@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace vpa --dry-run=client -o yaml | ku
 
 deadline 900 helm upgrade --install goldilocks fairwinds-stable/goldilocks \
   --namespace vpa \
-  --version 11.2.1 \
+  --version 11.3.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

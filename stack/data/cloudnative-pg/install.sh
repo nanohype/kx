@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace cnpg-system --dry-run=client -o y
 
 deadline 900 helm upgrade --install cloudnative-pg cnpg/cloudnative-pg \
   --namespace cnpg-system \
-  --version 0.29.1 \
+  --version 0.29.2 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

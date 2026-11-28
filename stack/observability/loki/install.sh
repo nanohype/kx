@@ -21,6 +21,6 @@ kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o ya
 
 deadline 900 helm upgrade --install loki grafana-community/loki \
   --namespace monitoring \
-  --version 21.2.3 \
+  --version 21.6.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

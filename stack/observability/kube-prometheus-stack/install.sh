@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o ya
 
 deadline 900 helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
-  --version 93.1.0 \
+  --version 93.11.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
