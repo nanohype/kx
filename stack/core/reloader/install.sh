@@ -12,6 +12,6 @@ helm repo update stakater >/dev/null
 
 deadline 900 helm upgrade --install reloader stakater/reloader \
   --namespace kube-system \
-  --version 2.2.20 \
+  --version 2.2.21 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace monitoring --dry-run=client -o ya
 
 deadline 900 helm upgrade --install grafana-operator grafana/grafana-operator \
   --namespace monitoring \
-  --version 5.24.0 \
+  --version 5.26.0 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m

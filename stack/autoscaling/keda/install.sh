@@ -14,6 +14,6 @@ kubectl --request-timeout=60s create namespace keda --dry-run=client -o yaml | k
 
 deadline 900 helm upgrade --install keda kedacore/keda \
   --namespace keda \
-  --version 2.21.0 \
+  --version 2.21.1 \
   --values "${SCRIPT_DIR}/values.yaml" \
   --wait --timeout 10m
