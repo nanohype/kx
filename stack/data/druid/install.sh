@@ -77,6 +77,16 @@ if ! render_err="$(python3 "${SCRIPT_DIR}/post-renderer.py" </dev/null 2>&1 >/de
   exit 1
 fi
 
+# The runtime strings the chart reads, composed before anything is created. helm
+# would replace the catalog's string with values-local.yaml's rather than merge
+# them, so runtime-values.py writes each as the catalog's with kx's lines after
+# it, and step 5 layers that file last. A catalog that no longer sets one of the
+# strings kx adds to stops here, with the string named.
+RUNTIME_VALUES="$(mktemp)"
+trap 'rm -f "${RUNTIME_VALUES}"' EXIT
+python3 "${SCRIPT_DIR}/runtime-values.py" "${CHART_BASE_VALUES}" "${SCRIPT_DIR}/values-local.yaml" \
+  >"${RUNTIME_VALUES}"
+
 kubectl --request-timeout=60s create namespace druid --dry-run=client -o yaml | kubectl --request-timeout=60s apply -f -
 
 # ---- 1. Postgres for metadata (CNPG) ----
@@ -112,6 +122,7 @@ deadline 300 helm template ds "${CHART_DIR}" \
   --namespace druid \
   --values "${CHART_BASE_VALUES}" \
   --values "${SCRIPT_DIR}/values-local.yaml" \
+  --values "${RUNTIME_VALUES}" \
   | python3 "${SCRIPT_DIR}/post-renderer.py" \
   | kubectl --request-timeout=60s apply --server-side --field-manager kx-druid -n druid -f -
 
